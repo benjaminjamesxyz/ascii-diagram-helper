@@ -119,7 +119,7 @@ impl<'a> ArchitectureRenderer<'a> {
 
                 if u_right < v_left {
                     // Left to Right connection
-                    let mid_x = u_right + (v_left - u_right) / 2;
+                    let _mid_x = u_right + (v_left - u_right) / 2;
                     canvas.draw_arrow(v_left - 1, v_cy, Direction::Right, &self.theme);
 
                     if let Some(ref lbl) = conn.label {

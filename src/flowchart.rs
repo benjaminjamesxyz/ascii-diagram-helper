@@ -375,6 +375,64 @@ impl<'a> FlowchartRenderer<'a> {
         let mut loop_track_x = max_w + 3;
         let mut multi_jump_track_x = max_w + 3;
 
+        // Bend edges to the next rank share one band row (mid_y). When two
+        // parents' horizontal spans overlap there, their trunk lines merge and
+        // junction chars end up adjacent (`┴┬`). Detect overlapping spans and
+        // stagger the second band down a row.
+        let mut band_offsets: HashMap<String, usize> = HashMap::new();
+        {
+            let mut bands: Vec<(usize, usize, usize, String)> = Vec::new();
+            for (ui, node_u) in nodes.iter().enumerate() {
+                let u_bottom = node_u.y + node_u.height - 1;
+                let u_cx = node_u.x + node_u.width / 2;
+                let mut lo = u_cx;
+                let mut hi = u_cx;
+                let mut v_top = None;
+                let mut has_bend = false;
+                for (vi, node_v) in nodes.iter().enumerate() {
+                    if vi == ui || node_v.rank != node_u.rank + 1 {
+                        continue;
+                    }
+                    // Only spans actually connected by an edge
+                    let connected = self
+                        .spec
+                        .edges
+                        .iter()
+                        .any(|e| {
+                            idx.get(e.from.as_str()) == Some(&ui)
+                                && idx.get(e.to.as_str()) == Some(&vi)
+                        });
+                    if !connected {
+                        continue;
+                    }
+                    let cx = node_v.x + node_v.width / 2;
+                    if cx != u_cx {
+                        has_bend = true;
+                    }
+                    lo = lo.min(cx);
+                    hi = hi.max(cx);
+                    v_top = Some(node_v.y);
+                }
+                if has_bend && let Some(vt) = v_top {
+                    let mid_y = u_bottom + (vt - u_bottom) / 2;
+                    bands.push((mid_y, lo, hi, self.spec.nodes[ui].id.clone()));
+                }
+            }
+            bands.sort_by_key(|(_, lo, hi, _)| (*lo, *hi));
+            let mut placed: Vec<(usize, usize, usize)> = Vec::new();
+            for (mid_y, lo, hi, id) in bands {
+                let mut y = mid_y;
+                while placed
+                    .iter()
+                    .any(|&(py, plo, phi)| y == py && lo <= phi && hi >= plo)
+                {
+                    y += 1;
+                }
+                band_offsets.insert(id, y - mid_y);
+                placed.push((y, lo, hi));
+            }
+        }
+
         // Draw edges FIRST so boxes can render over or cleanly merge with them
         for edge in &self.spec.edges {
             if let (Some(&ui), Some(&vi)) = (idx.get(edge.from.as_str()), idx.get(edge.to.as_str()))
@@ -438,7 +496,10 @@ impl<'a> FlowchartRenderer<'a> {
                             }
                         } else {
                             // Orthogonal bend (Manhattan)
-                            let mid_y = u_bottom + (v_top - u_bottom) / 2;
+                            let mut mid_y = u_bottom + (v_top - u_bottom) / 2;
+                            if let Some(&off) = band_offsets.get(&edge.from) {
+                                mid_y = (mid_y + off).min(v_top.saturating_sub(1));
+                            }
                             edge_vline(&mut canvas, edge, u_cx, u_bottom + 1, mid_y, &self.theme);
                             edge_hline(&mut canvas, edge, u_cx, v_cx, mid_y, &self.theme);
                             edge_vline(&mut canvas, edge, v_cx, mid_y, v_top - 1, &self.theme);

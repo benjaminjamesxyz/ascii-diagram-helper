@@ -101,6 +101,22 @@ pub struct SeqNoteSpec {
     pub at_step: usize,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SeqFrameSpec {
+    /// Frame keyword: `alt`, `opt`, `loop`, `par`, `critical`, or `break`
+    pub label: String,
+    /// Branch condition texts in order (first = the frame's own condition)
+    #[serde(default)]
+    pub branches: Vec<String>,
+    /// Message index at which each branch starts (parallel to `branches`)
+    #[serde(default)]
+    pub branch_steps: Vec<usize>,
+    /// Index of the first message inside the frame
+    pub start_step: usize,
+    /// Index one past the last message inside the frame
+    pub end_step: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct SequenceSpec {
     #[serde(default)]
@@ -111,6 +127,8 @@ pub struct SequenceSpec {
     pub messages: Vec<SeqMessageSpec>,
     #[serde(default)]
     pub notes: Vec<SeqNoteSpec>,
+    #[serde(default)]
+    pub frames: Vec<SeqFrameSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

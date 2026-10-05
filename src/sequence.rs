@@ -1,6 +1,6 @@
 use crate::canvas::{Canvas, Direction};
 use crate::schema::{SeqMessageType, SequenceSpec};
-use crate::theme::Theme;
+use crate::theme::{BoxStyle, Theme};
 use unicode_width::UnicodeWidthStr;
 
 pub struct SequenceRenderer<'a> {
@@ -112,11 +112,45 @@ impl<'a> SequenceRenderer<'a> {
         let p_top_y = start_y;
         let p_bottom_y = p_top_y + box_h - 1;
 
-        // Calculate vertical positions of messages
+        // Calculate vertical positions of messages, reserving rows for frame
+        // borders and branch dividers so frames never collide with messages
+        let n_msgs = self.spec.messages.len();
+        let mut open_ids: Vec<Vec<usize>> = vec![Vec::new(); n_msgs + 1];
+        let mut close_ids: Vec<Vec<usize>> = vec![Vec::new(); n_msgs + 1];
+        let mut divider_ids: Vec<Vec<(usize, usize)>> = vec![Vec::new(); n_msgs + 1];
+        for (fi, f) in self.spec.frames.iter().enumerate() {
+            let start = f.start_step.min(n_msgs);
+            let end = f.end_step.clamp(start, n_msgs);
+            open_ids[start].push(fi);
+            close_ids[end].push(fi);
+            for (bi, &bs) in f.branch_steps.iter().enumerate().skip(1) {
+                divider_ids[bs.min(n_msgs)].push((fi, bi));
+            }
+        }
+
         let mut msg_y = Vec::new();
+        let mut frame_tops = vec![0usize; self.spec.frames.len()];
+        let mut frame_bottoms = vec![0usize; self.spec.frames.len()];
+        let mut divider_ys: Vec<Vec<(usize, usize)>> = vec![Vec::new(); self.spec.frames.len()];
         let mut cur_y = p_bottom_y + 2;
 
-        for msg in &self.spec.messages {
+        for i in 0..n_msgs {
+            // Frames closing after the previous message
+            for &fi in &close_ids[i] {
+                frame_bottoms[fi] = cur_y;
+                cur_y += 1;
+            }
+            // Frames opening at this message
+            for &fi in &open_ids[i] {
+                frame_tops[fi] = cur_y;
+                cur_y += 1;
+            }
+            // Branch dividers (else / and) starting at this message
+            for &(fi, bi) in &divider_ids[i] {
+                divider_ys[fi].push((bi, cur_y));
+                cur_y += 1;
+            }
+            let msg = &self.spec.messages[i];
             let is_self = msg.from == msg.to;
             msg_y.push(cur_y);
             if is_self {
@@ -124,6 +158,11 @@ impl<'a> SequenceRenderer<'a> {
             } else {
                 cur_y += 2; // label row + line row
             }
+        }
+        // Frames closing at the very end
+        for &fi in &close_ids[n_msgs] {
+            frame_bottoms[fi] = cur_y;
+            cur_y += 1;
         }
 
         let lifeline_end_y = cur_y + 1;
@@ -144,6 +183,67 @@ impl<'a> SequenceRenderer<'a> {
         // Draw lifelines
         for &cx in &p_cx {
             canvas.draw_vline(cx, p_bottom_y, bottom_box_y);
+        }
+
+        // Draw control-flow frames (alt/opt/loop/par) behind messages
+        if !self.spec.frames.is_empty() {
+            let fx = p_cx[0].saturating_sub(p_widths[0] / 2);
+            let fr = p_cx[num_p - 1] + p_widths[num_p - 1] / 2;
+            let fw = fr.saturating_sub(fx) + 1;
+            let is_ascii = self.theme.box_style == BoxStyle::Ascii;
+            let (c_tl, c_tr, c_bl, c_br, c_tee_l, c_tee_r, _hz, vt) = if is_ascii {
+                ('+', '+', '+', '+', '+', '+', '-', '|')
+            } else {
+                ('┌', '┐', '└', '┘', '├', '┤', '─', '│')
+            };
+            for (fi, frame) in self.spec.frames.iter().enumerate() {
+                let top = frame_tops[fi];
+                let bottom = frame_bottoms[fi];
+                if bottom <= top || fw < 6 {
+                    continue;
+                }
+                // Top border with label tab
+                canvas.put_char(fx, top, c_tl);
+                canvas.put_char(fx + fw - 1, top, c_tr);
+                canvas.draw_hline(fx + 1, fx + fw - 2, top);
+                let head = match frame.branches.first() {
+                    Some(c) if c.is_empty() => frame.label.clone(),
+                    Some(c) => format!("{} {}", frame.label, c),
+                    None => frame.label.clone(),
+                };
+                let head_w = UnicodeWidthStr::width(head.as_str());
+                if head_w + 4 < fw {
+                    canvas.put_char(fx + 1, top, ' ');
+                    canvas.draw_text(fx + 2, top, &head);
+                    canvas.put_char(fx + 2 + head_w, top, ' ');
+                }
+                // Bottom border
+                canvas.put_char(fx, bottom, c_bl);
+                canvas.put_char(fx + fw - 1, bottom, c_br);
+                canvas.draw_hline(fx + 1, fx + fw - 2, bottom);
+                // Side borders
+                for y in (top + 1)..bottom {
+                    canvas.put_char(fx, y, vt);
+                    canvas.put_char(fx + fw - 1, y, vt);
+                }
+                // Branch dividers
+                for (bi, dy) in &divider_ys[fi] {
+                    canvas.put_char(fx, *dy, c_tee_l);
+                    canvas.put_char(fx + fw - 1, *dy, c_tee_r);
+                    canvas.draw_hline(fx + 1, fx + fw - 2, *dy);
+                    let dhead = format!(
+                        "{} {}",
+                        if frame.label == "par" { "and" } else { "else" },
+                        frame.branches[*bi]
+                    );
+                    let dw = UnicodeWidthStr::width(dhead.as_str());
+                    if dw + 4 < fw {
+                        canvas.put_char(fx + 1, *dy, ' ');
+                        canvas.draw_text(fx + 2, *dy, &dhead);
+                        canvas.put_char(fx + 2 + dw, *dy, ' ');
+                    }
+                }
+            }
         }
 
         // Draw top participant boxes
@@ -300,6 +400,7 @@ mod tests {
                 },
             ],
             notes: vec![],
+            frames: vec![],
         };
 
         let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
@@ -335,6 +436,7 @@ mod tests {
                 message_type: SeqMessageType::Sync,
             }],
             notes: vec![],
+            frames: vec![],
         };
 
         let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
@@ -343,5 +445,59 @@ mod tests {
         assert!(out.contains("Half"));
         assert!(out.contains("dispatch"));
         assert!(out.contains("►"));
+    }
+
+    #[test]
+    fn test_sequence_alt_and_loop_frames() {
+        let spec = SequenceSpec {
+            style: BoxStyle::Rounded,
+            title: None,
+            participants: vec![
+                ParticipantSpec {
+                    id: "A".to_string(),
+                    label: Some("Client".to_string()),
+                },
+                ParticipantSpec {
+                    id: "B".to_string(),
+                    label: Some("Server".to_string()),
+                },
+            ],
+            messages: vec![
+                SeqMessageSpec {
+                    from: "A".to_string(),
+                    to: "B".to_string(),
+                    label: "req".to_string(),
+                    message_type: SeqMessageType::Sync,
+                },
+                SeqMessageSpec {
+                    from: "B".to_string(),
+                    to: "A".to_string(),
+                    label: "ok".to_string(),
+                    message_type: SeqMessageType::Reply,
+                },
+                SeqMessageSpec {
+                    from: "B".to_string(),
+                    to: "A".to_string(),
+                    label: "err".to_string(),
+                    message_type: SeqMessageType::Reply,
+                },
+            ],
+            notes: vec![],
+            frames: vec![SeqFrameSpec {
+                label: "alt".to_string(),
+                branches: vec!["valid".to_string(), "invalid".to_string()],
+                branch_steps: vec![1, 2],
+                start_step: 1,
+                end_step: 3,
+            }],
+        };
+
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render();
+        assert!(out.contains("alt valid"));
+        assert!(out.contains("else invalid"));
+        assert!(out.contains('┌'));
+        assert!(out.contains('├'));
+        assert!(out.contains('└'));
     }
 }

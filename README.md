@@ -34,6 +34,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - **Sequence Diagrams (`sequenceDiagram`)**:
   - Synchronous calls (`->`, `->>`), asynchronous messages (`-->`, `-->>`), bidirectional (`<->`)
   - Self loops (`A -> A: msg`)
+  - Control-flow frames: `alt`/`else`, `opt`, `loop`, `par`/`and`, `critical`, `break` — rendered as labeled group boxes with branch dividers
   - Dynamic lifeline column spacing preventing label overflow
 - **Architecture & Container Diagrams**:
   - Hierarchical nesting, `row` and `column` layouts

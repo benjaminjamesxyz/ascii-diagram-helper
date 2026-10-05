@@ -1,7 +1,7 @@
 use crate::schema::{
     ArrowDirection, DiagramSpec, EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, NodeSpec,
-    ParticipantSpec, SeqMessageSpec, SeqMessageType, SequenceSpec, StackLayerSpec, StackSpec,
-    TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
+    ParticipantSpec, SeqFrameSpec, SeqMessageSpec, SeqMessageType, SequenceSpec, StackLayerSpec,
+    StackSpec, TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
 };
 use crate::theme::BoxStyle;
 
@@ -349,6 +349,9 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
     let mut participants = Vec::new();
     let mut p_set = std::collections::HashSet::new();
     let mut messages = Vec::new();
+    let mut frames = Vec::new();
+    // Stack of in-progress frames; `end` pops and commits them (supports nesting)
+    let mut open_frames: Vec<SeqFrameSpec> = Vec::new();
 
     let add_participant = |id: &str,
                            label: Option<String>,
@@ -386,6 +389,41 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
             } else {
                 let id = rest.trim();
                 add_participant(id, None, &mut participants, &mut p_set);
+            }
+            continue;
+        }
+
+        // Control-flow frames: alt/opt/loop/par/critical/break + else/and branches + end
+        let frame_keywords = ["alt", "opt", "loop", "par", "critical", "break"];
+        if let Some(kw) = frame_keywords.iter().find(|kw| {
+            trimmed
+                .strip_prefix(**kw)
+                .is_some_and(|r| r.is_empty() || r.starts_with(' '))
+        }) {
+            let cond = trimmed[kw.len()..].trim();
+            open_frames.push(SeqFrameSpec {
+                label: (*kw).to_string(),
+                branches: vec![cond.to_string()],
+                branch_steps: vec![messages.len()],
+                start_step: messages.len(),
+                end_step: messages.len(),
+            });
+            continue;
+        }
+        if trimmed == "end" || trimmed == "end(" || trimmed.starts_with("end ") {
+            if let Some(mut frame) = open_frames.pop() {
+                frame.end_step = messages.len();
+                frames.push(frame);
+            }
+            continue;
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("else ")
+            .or_else(|| trimmed.strip_prefix("and "))
+        {
+            if let Some(frame) = open_frames.last_mut() {
+                frame.branches.push(rest.trim().to_string());
+                frame.branch_steps.push(messages.len());
             }
             continue;
         }
@@ -436,6 +474,7 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
         participants,
         messages,
         notes: vec![],
+        frames,
     }))
 }
 
@@ -719,5 +758,40 @@ mod tests {
             }
             _ => panic!("Expected sequence"),
         }
+    }
+
+    #[test]
+    fn test_parse_sequence_frames() {
+        let dsl = r"
+        sequenceDiagram
+          A->>B: ping
+          alt ok
+            B-->>A: pong
+          else bad
+            B-->>A: error
+          end
+          loop every 1s
+            A->>B: tick
+          end
+        ";
+        let spec = match parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.messages.len(), 4);
+        assert_eq!(spec.frames.len(), 2);
+
+        let alt = &spec.frames[0];
+        assert_eq!(alt.label, "alt");
+        assert_eq!(alt.branches, vec!["ok", "bad"]);
+        assert_eq!(alt.start_step, 1);
+        assert_eq!(alt.branch_steps, vec![1, 2]);
+        assert_eq!(alt.end_step, 3);
+
+        let lp = &spec.frames[1];
+        assert_eq!(lp.label, "loop");
+        assert_eq!(lp.branches, vec!["every 1s"]);
+        assert_eq!(lp.start_step, 3);
+        assert_eq!(lp.end_step, 4);
     }
 }

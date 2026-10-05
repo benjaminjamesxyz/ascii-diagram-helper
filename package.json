@@ -1,0 +1,26 @@
+{
+  "name": "asii-diagram-helper",
+  "version": "0.1.0",
+  "description": "Rust-based ASCII and Unicode diagram tool for Pi AI agent harness",
+  "license": "MIT",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "main": "extensions/ascii-diagram.ts",
+  "pi": {
+    "extensions": ["./extensions/ascii-diagram.ts"],
+    "skills": ["./skills"]
+  },
+  "bin": {
+    "ascii-diagram": "bin/ascii-diagram"
+  },
+  "scripts": {
+    "build": "cargo build --release && mkdir -p bin && cp target/release/ascii-diagram bin/ascii-diagram",
+    "test": "cargo test && node --experimental-strip-types tests/extension.test.js"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  }
+}

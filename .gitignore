@@ -1,0 +1,19 @@
+# Rust
+/target
+
+# Node
+node_modules/
+
+# Build artifacts (regenerate with: npm run build)
+/bin
+
+# Generated knowledge-graph / index caches
+/codegraph-out/
+/graphify-out/
+.codegraph/
+
+# Pi local project config (dev copy of extensions/)
+.pi/
+
+# Example render output
+examples/diagrams/

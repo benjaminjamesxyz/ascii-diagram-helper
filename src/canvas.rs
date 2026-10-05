@@ -261,10 +261,33 @@ impl Canvas {
                 {
                     return false;
                 }
+                // Do not place labels inside horizontal line or dash runs — a label
+                // drawn mid-run reads as merged with the crossing edge
+                if cell.is_line || matches!(cell.ch, '─' | '-' | '╌' | '┄' | '━' | '═') {
+                    return false;
+                }
                 // Do not overwrite existing non-space text
                 if cell.role == CellRole::Text && cell.ch != ' ' {
                     return false;
                 }
+            }
+        }
+        // Require at least one blank cell between the label and any neighbouring
+        // text so parallel sibling edge labels never render back-to-back
+        if y < self.height && text_w > 0 {
+            let base = y * self.width;
+            if let Some(x) = start_x.checked_sub(1)
+                && let Some(cell) = self.cells.get(base + x)
+                && cell.role == CellRole::Text
+                && cell.ch != ' '
+            {
+                return false;
+            }
+            if let Some(cell) = self.cells.get(base + start_x + text_w)
+                && cell.role == CellRole::Text
+                && cell.ch != ' '
+            {
+                return false;
             }
         }
         // Obstacle interiors and borders: prevent placing text over nodes (including borders)
@@ -374,11 +397,18 @@ impl Canvas {
         let base = y * self.width;
 
         for x in x1..=x2 {
-            let cell = &mut self.cells[base + x];
-            // Collision protection: don't overwrite text with a line
-            if cell.role == CellRole::Text && cell.ch != ' ' {
+            // Collision protection: don't overwrite text with a line; keep a
+            // one-cell gap on each side so the text never reads as merged
+            if self.cells[base + x].role == CellRole::Text && self.cells[base + x].ch != ' ' {
                 continue;
             }
+            if x > x1 && self.cells[base + x - 1].role == CellRole::Text {
+                continue; // pre-gap after text
+            }
+            if x < x2 && self.cells[base + x + 1].role == CellRole::Text {
+                continue; // pre-gap before text
+            }
+            let cell = &mut self.cells[base + x];
             cell.is_line = true;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
@@ -406,10 +436,16 @@ impl Canvas {
         };
 
         for x in x1..=x2 {
-            let cell = &mut self.cells[base + x];
-            if cell.role == CellRole::Text && cell.ch != ' ' {
+            if self.cells[base + x].role == CellRole::Text && self.cells[base + x].ch != ' ' {
                 continue;
             }
+            if x > x1 && self.cells[base + x - 1].role == CellRole::Text {
+                continue; // pre-gap after text
+            }
+            if x < x2 && self.cells[base + x + 1].role == CellRole::Text {
+                continue; // pre-gap before text
+            }
+            let cell = &mut self.cells[base + x];
             cell.ch = dash_char;
             cell.is_line = false;
         }

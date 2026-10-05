@@ -55,8 +55,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes and sub-directions are not rendered
 - Thick edges (`==>` / `<==>`) render with normal line weight
 - `classDef` / `class` / `style` directives are ignored
-- Flowcharts: edge **labels can collide** when a long-span edge (e.g. a power rail) crosses another edge's label row; labels of parallel sibling edges may sit adjacent without separation
-- Architecture diagrams: connections crossing container walls route through whatever column is available and may pass through unrelated containers; in rare cases an edge between containers in different branches can be dropped
+- Architecture diagrams: connections crossing container walls route through whatever column is available and may pass through unrelated containers (crossings get junction chars, but the line still cuts through)
 
 ---
 

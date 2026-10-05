@@ -28,7 +28,7 @@ impl From<CliStyle> for BoxStyle {
 #[derive(Parser, Debug)]
 #[command(name = "ascii-diagram")]
 #[command(about = "High-precision terminal ASCII and Unicode diagram generator for Pi AI agent")]
-#[command(version = "0.1.0")]
+#[command(version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

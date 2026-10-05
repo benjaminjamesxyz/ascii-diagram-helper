@@ -65,13 +65,13 @@ impl<'a> ArchitectureRenderer<'a> {
             canvas.draw_text(tx, 0, title);
         }
 
-        // Draw containers
+        // Draw containers first: fills comp_bounds and lays down walls
         for (i, c) in self.spec.containers.iter().enumerate() {
             let (_, y, w, h) = top_layouts[i];
             self.render_container(&mut canvas, c, Rect::new(0, y, w, h), &mut comp_bounds);
         }
 
-        // Draw inter-component connections
+        // Draw inter-component connection lines
         for conn in &self.spec.connections {
             if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to)) {
                 let u_right = u.x + u.width - 1;
@@ -85,16 +85,14 @@ impl<'a> ArchitectureRenderer<'a> {
                     canvas.draw_hline(u_right + 1, mid_x, u_cy);
                     canvas.draw_vline(mid_x, u_cy, v_cy);
                     canvas.draw_hline(mid_x, v_left - 1, v_cy);
-                    canvas.draw_arrow(v_left - 1, v_cy, Direction::Right, &self.theme);
-
-                    if let Some(ref lbl) = conn.label {
-                        let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-                        let channel = v_left.saturating_sub(u_right + 1);
-                        if channel >= lbl_w {
-                            let lx = u_right + 1 + (channel - lbl_w) / 2;
-                            canvas.draw_text_safe(lx, u_cy.saturating_sub(1), lbl);
-                        }
-                    }
+                } else if u.x > v.x + v.width - 1 && u_cy == v_cy {
+                    // Right to Left, same row: route below both components
+                    let u_cx = u.x + u.width / 2;
+                    let v_cx = v.x + v.width / 2;
+                    let route_y = u.y + u.height + 1;
+                    canvas.draw_vline(u_cx, u.y + u.height, route_y);
+                    canvas.draw_hline(v_cx.min(u_cx), v_cx.max(u_cx), route_y);
+                    canvas.draw_vline(v_cx, route_y, v.y + v.height);
                 } else if u.y + u.height <= v.y {
                     // Top to Bottom connection
                     let u_cx = u.x + u.width / 2;
@@ -106,6 +104,53 @@ impl<'a> ArchitectureRenderer<'a> {
                     canvas.draw_vline(u_cx, u_bottom + 1, mid_y);
                     canvas.draw_hline(u_cx, v_cx, mid_y);
                     canvas.draw_vline(v_cx, mid_y, v_top - 1);
+                }
+            }
+        }
+
+        // Draw arrowheads and labels on top of everything so callouts are
+        // never buried by lines or container walls
+        for conn in &self.spec.connections {
+            if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to)) {
+                let u_right = u.x + u.width - 1;
+                let u_cy = u.y + u.height / 2;
+                let v_left = v.x;
+                let v_cy = v.y + v.height / 2;
+
+                if u_right < v_left {
+                    // Left to Right connection
+                    let mid_x = u_right + (v_left - u_right) / 2;
+                    canvas.draw_arrow(v_left - 1, v_cy, Direction::Right, &self.theme);
+
+                    if let Some(ref lbl) = conn.label {
+                        let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                        let channel = v_left.saturating_sub(u_right + 1);
+                        if channel >= lbl_w {
+                            let lx = u_right + 1 + (channel - lbl_w) / 2;
+                            canvas.draw_text_safe(lx, u_cy.saturating_sub(1), lbl);
+                        }
+                    }
+                } else if u.x > v.x + v.width - 1 && u_cy == v_cy {
+                    // Right to Left, same row (routed below)
+                    let u_cx = u.x + u.width / 2;
+                    let v_cx = v.x + v.width / 2;
+                    let route_y = u.y + u.height + 1;
+                    canvas.draw_arrow(v_cx, v.y + v.height, Direction::Up, &self.theme);
+
+                    if let Some(ref lbl) = conn.label {
+                        let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                        let mid = usize::midpoint(v_cx, u_cx);
+                        if lbl_w + 2 < u_cx.saturating_sub(v_cx) {
+                            canvas.draw_text_safe(mid - lbl_w / 2, route_y + 1, lbl);
+                        }
+                    }
+                } else if u.y + u.height <= v.y {
+                    // Top to Bottom connection
+                    let u_cx = u.x + u.width / 2;
+                    let v_cx = v.x + v.width / 2;
+                    let v_top = v.y;
+                    let u_bottom = u.y + u.height - 1;
+                    let mid_y = u_bottom + (v_top - u_bottom) / 2;
                     canvas.draw_arrow(v_cx, v_top - 1, Direction::Down, &self.theme);
 
                     if let Some(ref lbl) = conn.label {

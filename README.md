@@ -57,6 +57,46 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 ---
 
+## Installation
+
+The extension and skill are pure TypeScript/markdown, but the diagram engine is a compiled Rust binary. Install order matters: **build the binary first**, then install the Pi package so the extension can find it.
+
+### 1. Build the binary
+
+Requires [Rust](https://rustup.rs) and Node.js 20+:
+
+```bash
+git clone https://github.com/benjaminjamesxyz/ascii-diagram-helper.git
+cd ascii-diagram-helper
+npm install
+npm run build
+```
+
+Then put the binary on the extension's search path — `~/.local/bin` is the standard choice:
+
+```bash
+mkdir -p ~/.local/bin
+cp bin/ascii-diagram ~/.local/bin/
+```
+
+(Ensure `~/.local/bin` is on your `PATH`. Alternatively, set `ASCII_DIAGRAM_BIN=/full/path/to/ascii-diagram` in your environment.)
+
+### 2. Install the Pi package
+
+```bash
+pi install git:github.com/benjaminjamesxyz/ascii-diagram-helper
+```
+
+Verify with `pi list`. The extension auto-discovers the binary in this order:
+
+1. `ASCII_DIAGRAM_BIN` environment variable
+2. `bin/` or `target/{release,debug}/` inside the installed package
+3. `~/.local/bin/ascii-diagram`
+4. `bin/` or `target/{release,debug}/` relative to the current working directory
+5. `ascii-diagram` on `PATH`
+
+---
+
 ## Pi AI Agent Integration
 
 ### 1. `draw_diagram` Tool

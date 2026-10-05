@@ -46,8 +46,6 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			resolve(cwd, "bin", "ascii-diagram"),
 			resolve(cwd, "target", "release", "ascii-diagram"),
 			resolve(cwd, "target", "debug", "ascii-diagram"),
-			"/home/simson/pi-projects/asii-diagram-helper/bin/ascii-diagram",
-			"/home/simson/pi-projects/asii-diagram-helper/target/release/ascii-diagram",
 			"ascii-diagram",
 		];
 

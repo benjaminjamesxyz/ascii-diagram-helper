@@ -1,0 +1,33 @@
+ ╭─ HANDHELD TRANSMITTER (TX) ───────────────────────────────────────────────────────────╮
+ │ RP2040 @ 125 MHz │ 150 Hz Control Loop │ 4× ADC Stick Oversampling (12-bit)           │
+ │ Telemetry Receiver (30 Hz) │ Host PC USB-UART Virtual COM Link (115200 baud)          │
+ ╰───────────────────────────────────────────┬───────────────────────────────────────────╯
+                                             │ Ra-02 (SX1278) SPI1 Bus
+                                             │ 433.5 MHz GFSK @ 150 kbps
+                                             │ 12-Byte Control Frame (150 Hz)
+                                             │ 14-Byte Telemetry Downlink (30 Hz)
+                                             ▼
+ ╭─ FLIGHT CONTROLLER (FC) ──────────────────┴───────────────────────────────────────────╮
+ │ RP2040 Dual Cortex-M0+ @ 125 MHz │ 264 KB SRAM │ 8 MB QSPI Flash (XM25QH64AHIG)       │
+ │                                                                                       │
+ │  ╭─ MPU-6050 (I2C0) ───────╮  ╭─ Control Pipeline ──────╮  ╭─ Safety & Logging ──────╮│
+ │  │ • 1 kHz Gyro, 31 Hz Acc │  │ • Mahony 6DOF AHRS (1k) │  │ • 3-Stage Failsafe Link ││
+ │  │ • 400 kHz Fast-Mode     │  │ • Cascaded PID (1 kHz)  │  │ • 60° Vehicle Tilt Kill ││
+ │  │ • Boot Bias Calibration │  │ • Quad-X Mixer (1 kHz)  │  │ • Ground I-Term Inhibit ││
+ │  │ • Bus Auto-Clear (9clk) │  │ • Dynamic RPM Clamping  │  │ • 28B Blackbox SRAM Ring││
+ │  │ • Polled/DMA (~120µs)   │  │ • PIO DShot Frame TX    │  │ • Disarm Flash Commit   ││
+ │  ╰─────────────────────────╯  ╰─────────────────────────╯  ╰─────────────────────────╯│
+ │                                                                                       │
+ ╰───────┬───────────────────────┬───────────────────────┬───────────────────────┬───────╯
+         │ PIO0: SM0             │ PIO0: SM1             │ PIO0: SM2   PIO0: SM3 │
+         │ GP0 (CW)              │ GP1 (CCW)             │ GP2 (CCW)    GP3 (CW) │
+         ▼                       ▼                       ▼                       ▼
+ ╭───────┴───────╮       ╭───────┴───────╮       ╭───────┴───────╮       ╭───────┴───────╮
+ │  ESC 1 (M1)   │       │  ESC 2 (M2)   │       │  ESC 3 (M3)   │       │  ESC 4 (M4)   │
+ │ Puya PY32F003 │       │ Puya PY32F003 │       │ Puya PY32F003 │       │ Puya PY32F003 │
+ │ Cortex-M0+ 32M│       │ Cortex-M0+ 32M│       │ Cortex-M0+ 32M│       │ Cortex-M0+ 32M│
+ │  CW Rotation  │       │ CCW Rotation  │       │ CCW Rotation  │       │  CW Rotation  │
+ │ TIM14 Capture │       │ TIM14 Capture │       │ TIM14 Capture │       │ TIM14 Capture │
+ │  24 kHz PWM   │       │  24 kHz PWM   │       │  24 kHz PWM   │       │  24 kHz PWM   │
+ │ Strap Addr: 00│       │ Strap Addr: 01│       │ Strap Addr: 10│       │ Strap Addr: 11│
+ ╰───────────────╯       ╰───────────────╯       ╰───────────────╯       ╰───────────────╯

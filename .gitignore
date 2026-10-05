@@ -16,4 +16,4 @@ node_modules/
 .pi/
 
 # Example render output
-examples/diagrams/
+examples/diagrams/*.png

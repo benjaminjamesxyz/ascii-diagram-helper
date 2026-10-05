@@ -1,0 +1,79 @@
+==================================================================================================
+                         MICRO-DRONE 65mm SYSTEM ARCHITECTURE & TOPOLOGY
+==================================================================================================
+
+ ╭─ GROUND STATION & BENCH SEGMENT ─────────────────────────────────────────────────────────────╮
+ │ • Handheld TX Controller (RP2040 @ 125 MHz)    │ • ST-Link v2 Debug Probe (pyOCD Flasher)    │
+ │ • 4× ADC Stick Channels (12-bit Oversampled)   │ • Host PC CLI & Telemetry Visualizer        │
+ │ • Ra-02 SX1278 RF Module (433 MHz SPI1)        │ • USB-UART Virtual COM Port (115200 baud)   │
+ │ • 150 Hz Control Frames (12B Compact Form)     │ • Emergency Recovery & Bootloader Trigger   │
+ ╰──────────────────────┬───────────────────────────────────────────────┬───────────────────────╯
+                        │ 433.5 MHz GFSK RF Link (150 kbps, Air)        │ SWD Bench Debug Link
+                        │ 12-Byte Control Packets @ 150 Hz              │ SWCLK, SWDIO, GND
+                        │                                               │
+ ╭──────────────────────┬── [ FLIGHT CONTROLLER (26×26 mm AIO — NO USB PORT) ] ─────────────────╮
+ │                      │                                               │                       │
+ │            ╭─────────┴─────────╮                           ╭─────────┴─────────╮             │
+ │            │   Ra-02 SX1278    │                           │  SWD 4-Pad Port   │             │
+ │            │ 433 MHz GFSK/LoRa │                           │ SWCLK, SWDIO Pads │             │
+ │            │ SPI1 Bus @ 8 MHz  │                           │  pyOCD / OpenOCD  │             │
+ │            ╰─────────┬─────────╯                           ╰─────────┬─────────╯             │
+ │                      │                                               │                       │
+ │ ╭─ MPU-6050 ────╮  ╭─┴─── RP2040 MCU (Dual-Core @ 125 MHz) ──────────┴╮  ╭─ Power & Flash ─╮ │
+ │ │  6-DOF IMU    │  │ • Core 0: 1 kHz Flight Loop (Mahony AHRS + PID)  │  │ AP2112K-3.0 LDO │ │
+ │ │ 1 kHz Gyro    │  │ • Core 1: Ra-02 Packet Decode & Telemetry Link   │  │   +3.0 V Rail   │ │
+ │ │ 31 Hz Accel   │─►│ • PIO0: 4-Channel DShot600 TX Raster (GP0..GP3)  │◄─│ 1.1 V Core DVDD │ │
+ │ │ I2C0 @ 400k   │  │ • PIO1: 1-Wire Shared Telemetry RX (Motor Poll)  │  │ 33k/10k Divider │ │
+ │ │ Boot BiasCal  │  │ • Safety: 3-Stage Failsafe Link + 60° Tilt Kill  │  │ 8 MB QSPI Flash │ │
+ │ ╰───────────────╯  ╰──────────────────────────┬───────────────────────╯  ╰────────┬────────╯ │
+ │                                               │                                   │          │
+ ╰───────────────────────────────────────────────┬───────────────────────────────────┴──────────╯
+                   M1..M4 DShot600 (GP0..GP3)    │    VBATT_S 1S Feed (Up to LDO)    ▲
+                       1-Wire Telemetry Input    │   Feeds FC LDO & Sense Divider    │
+                                                 ▼                                   │
+ ╔═ 10-PIN INTER-BOARD CONNECTOR CONTRACT ═══════╩═══════════════════════════════════╩══════════╗
+ ║ [Pin 1]  VBATT_S ──► Feeds FC 3.0 V LDO & Battery Sense Divider (33k/10k)                    ║
+ ║ [Pin 2]  GND     ──► Power Return (High-Current Commutation Ground Return)                   ║
+ ║ [Pin 3]  GND     ──► High-Frequency Shielding & Logic Signal Return                          ║
+ ║ [Pin 4]  M1      ──► Motor 1 DShot600 Command (3.0 V Logic)                                  ║
+ ║ [Pin 5]  M2      ──► Motor 2 DShot600 Command (3.0 V Logic)                                  ║
+ ║ [Pin 6]  M3      ──► Motor 3 DShot600 Command (3.0 V Logic)                                  ║
+ ║ [Pin 7]  M4      ──► Motor 4 DShot600 Command (3.0 V Logic)                                  ║
+ ║ [Pin 8]  TELEM   ◄── 1-Wire Shared Open-Drain Telemetry (Polled by Motor ID)                 ║
+ ║ [Pin 9]  SP1     ─── Reserved (Buzzer / Hardware Reset)                                      ║
+ ║ [Pin 10] SP2     ─── Reserved (Expansion / Debug Trigger)                                    ║
+ ║                                                                                              ║
+ ╚═══════════════════════════════════════════════╦═══════════════════════════════════╦══════════╝
+                  M1..M4 DShot600 Pulse Streams  │        VBATT Filtered Rail        ▲
+                    PF0 Edge-IRQ Capture (TIM14) │      Feeds 10-Pin Bus (Up)        │
+                                                 ▼                                   │
+ ╭─ 4-IN-1 ESC (26×26 mm) ───────────────────────┴───────────────────────────────────┴──────────╮
+ │ • Power Entry: BT2.0 Female Pigtail (1S LiHV) │ • Bulk: 330–470 µF Low-ESR + 4× 10 µF MLCC   │
+ │ • Logic Supply: AP2112K-3.0 LDO (+3V0 Rail)   │ • Power: 16 A Peak Bus to Power Stage        │
+ │ ╭─ 4× Autonomous Commutation Channels ─────────────────────────────────────────────────────╮ │
+ │ │ • MCUs: 4× Puya PY32F003F16U6TR (Cortex-M0+ @ 32 MHz, 32 KB Flash / 4 KB RAM, QFN-20)    │ │
+ │ │ • Input Capture: PF0 (TIM14_CH1) Edge-IRQ DShot600 Hardware Frame Capture                │ │
+ │ │ • Gate Timing:   TIM1 (U), TIM16 (V), TIM17 (W) @ 24 kHz Edge-Aligned (300 ns Dead)      │ │
+ │ ╰─────────────────────────────────────────────┬────────────────────────────────────────────╯ │
+ │                                               │                                              │
+ │ ╭─ 3-Phase Complementary Power Stage ─────────┴────────────────────────────────────────────╮ │
+ │ │ • High-Side: AO3415 P-FET + MMBT3904 Inverter + 470 pF Speed-Up Cap (<100 ns Turn-Off)   │ │
+ │ │ • Low-Side:  AO3400A N-FET + 10 Ω Gate Damping Resistor + 100 kΩ Pulldown                │ │
+ │ ╰─────────┬──────────────────────┬────────────┬────────────┬──────────────────────┬────────╯ │
+ ╰───────────┬──────────────────────┬────────────┼────────────┬──────────────────────┬──────────╯
+             │ U,V,W                │ U,V,W      ▲ VBATT      │ U,V,W                │ U,V,W
+             │                      │            │            │                      │
+             ▼                      ▼            │            ▼                      ▼
+   ╭─────────┴─────────╮  ╭─────────┴─────────╮  │  ╭─────────┴─────────╮  ╭─────────┴─────────╮
+   │      MOTOR 1      │  │      MOTOR 2      │  │  │      MOTOR 3      │  │      MOTOR 4      │
+   │  Rear-Right (CW)  │  │ Front-Right (CCW) │  │  │  Rear-Left (CCW)  │  │  Front-Left (CW)  │
+   │  0702SE 25000KV   │  │  0702SE 25000KV   │  │  │  0702SE 25000KV   │  │  0702SE 25000KV   │
+   │ HQ 31 mm 4-Blade  │  │ HQ 31 mm 4-Blade  │  │  │ HQ 31 mm 4-Blade  │  │ HQ 31 mm 4-Blade  │
+   │ Max Thrust: ~28 g │  │ Max Thrust: ~28 g │  │  │ Max Thrust: ~28 g │  │ Max Thrust: ~28 g │
+   ╰───────────────────╯  ╰───────────────────╯  │  ╰───────────────────╯  ╰───────────────────╯
+ ╭─ BATTERY & POWER ENTRY ───────────────────────┴──────────────────────────────────────────────╮
+ │ • BetaFPV LAVA II 1S 480 mAh 95C LiHV (3.0 V – 4.35 V, 12.6 g, BT2.0 Connector)              │
+ │ • Discharge: 95C Continuous (45.6 A) / 190C Burst (91.2 A) │ Full Throttle Draw: ~16 A Peak  │
+ ╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+
+==================================================================================================

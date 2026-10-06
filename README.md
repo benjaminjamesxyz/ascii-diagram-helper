@@ -41,6 +41,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - **Architecture & Container Diagrams**:
   - Hierarchical nesting, `row` and `column` layouts
   - Component property badges (`Port: 8080`, `Protocol: gRPC`)
+  - Corridor routing: connections spanning multiple containers route through the right-margin corridor instead of slicing through unrelated containers
 - **Hierarchy & Directory Trees**:
   - Classic `├──`, `└──`, `│` formatting with annotations
 - **Memory & Protocol Stacks**:
@@ -57,7 +58,6 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes and sub-directions are not rendered
 - Thick edges (`==>` / `<==>`) render with normal line weight
 - `classDef` / `class` / `style` directives are ignored
-- Architecture diagrams: connections crossing container walls route through whatever column is available and may pass through unrelated containers (crossings get junction chars, but the line still cuts through)
 
 ---
 

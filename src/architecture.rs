@@ -3,7 +3,7 @@ use crate::schema::{
     ArchitectureSpec, ContainerItem, ContainerLayout, ContainerSpec, LeafComponent,
 };
 use crate::theme::Theme;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Debug)]
@@ -71,6 +71,36 @@ impl<'a> ArchitectureRenderer<'a> {
             self.render_container(&mut canvas, c, Rect::new(0, y, w, h), &mut comp_bounds);
         }
 
+        // Classify top-to-bottom connections that cross intermediate containers
+        // (source and target containers separated by at least one other). These
+        // route via a shared right-margin corridor track per source instead of
+        // slicing straight through the containers in between.
+        let container_of = |b: &BoxBounds| -> Option<usize> {
+            let cx = b.x + b.width / 2;
+            let cy = b.y + b.height / 2;
+            top_layouts
+                .iter()
+                .position(|&(_, ly, lw, lh)| cx < lw && cy >= ly && cy < ly + lh)
+        };
+        let mut arch_tracks: HashMap<String, (usize, usize)> = HashMap::new();
+        let mut next_track = max_w + 2;
+        for conn in &self.spec.connections {
+            if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to))
+                && u.y + u.height <= v.y
+                && let (Some(uct), Some(vct)) = (container_of(u), container_of(v))
+                && vct >= uct + 2
+            {
+                let entry_y = top_layouts[vct].1 - 1;
+                let entry = arch_tracks.entry(conn.from.clone()).or_insert_with(|| {
+                    let t = (next_track, entry_y);
+                    next_track += 4;
+                    t
+                });
+                entry.1 = entry.1.max(entry_y);
+            }
+        }
+        let mut arch_led: HashSet<String> = HashSet::new();
+
         // Draw inter-component connection lines
         for conn in &self.spec.connections {
             if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to)) {
@@ -100,10 +130,34 @@ impl<'a> ArchitectureRenderer<'a> {
                     let v_cx = v.x + v.width / 2;
                     let v_top = v.y;
 
-                    let mid_y = u_bottom + (v_top - u_bottom) / 2;
-                    canvas.draw_vline(u_cx, u_bottom + 1, mid_y);
-                    canvas.draw_hline(u_cx, v_cx, mid_y);
-                    canvas.draw_vline(v_cx, mid_y, v_top - 1);
+                    let uct = container_of(u);
+                    let vct = container_of(v);
+                    let crosses = matches!((uct, vct), (Some(a), Some(b)) if b >= a + 2);
+                    if crosses
+                        && let Some(&(track_x, depth_y)) = arch_tracks.get(conn.from.as_str())
+                    {
+                        let uct = uct.unwrap_or(0);
+                        let exit_y = top_layouts[uct].1 + top_layouts[uct].3;
+                        let entry_y = vct.map_or(0, |k| top_layouts[k].1 - 1);
+
+                        let lead = arch_led.insert(conn.from.clone());
+                        if lead {
+                            // One shared corridor run per source
+                            canvas.draw_vline(u_cx, u_bottom + 1, exit_y);
+                            canvas.draw_hline(u_cx, track_x, exit_y);
+                            canvas.draw_vline(track_x, exit_y, depth_y);
+                        }
+                        // Drop into the target container's corridor
+                        canvas.draw_hline(track_x, v_cx, entry_y);
+                        if entry_y < v_top - 1 {
+                            canvas.draw_vline(v_cx, entry_y, v_top - 1);
+                        }
+                    } else {
+                        let mid_y = u_bottom + (v_top - u_bottom) / 2;
+                        canvas.draw_vline(u_cx, u_bottom + 1, mid_y);
+                        canvas.draw_hline(u_cx, v_cx, mid_y);
+                        canvas.draw_vline(v_cx, mid_y, v_top - 1);
+                    }
                 }
             }
         }
@@ -153,7 +207,19 @@ impl<'a> ArchitectureRenderer<'a> {
                     let mid_y = u_bottom + (v_top - u_bottom) / 2;
                     canvas.draw_arrow(v_cx, v_top - 1, Direction::Down, &self.theme);
 
-                    if let Some(ref lbl) = conn.label {
+                    let uct = container_of(u);
+                    let vct = container_of(v);
+                    let crosses = matches!((uct, vct), (Some(a), Some(b)) if b >= a + 2);
+                    if crosses && let Some(&(track_x, _)) = arch_tracks.get(conn.from.as_str()) {
+                        let entry_y = vct.map_or(0, |k| top_layouts[k].1 - 1);
+                        if let Some(ref lbl) = conn.label {
+                            let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                            let lx = usize::midpoint(track_x, v_cx)
+                                .saturating_sub(lbl_w / 2)
+                                .max(v_cx.min(track_x) + 1);
+                            canvas.draw_text_safe(lx, entry_y.saturating_sub(1), lbl);
+                        }
+                    } else if let Some(ref lbl) = conn.label {
                         canvas.draw_text_safe(u_cx + 2, mid_y.saturating_sub(1), lbl);
                     }
                 }

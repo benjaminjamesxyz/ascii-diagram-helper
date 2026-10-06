@@ -136,8 +136,8 @@ To ensure diagrams always display cleanly in any terminal:
 
 ## Supported Syntax & Limitations
 
-- **Edges**: solid `-->`, dashed `-.->`, no arrow `---`, bidirectional `<-->` / `<==>`, reverse `<--`; labels via `-->|label|` or `-- "label" -->`
+- **Edges**: solid `-->`, dashed `-.->`, no arrow `---`, bidirectional `<-->` / `<==>`, reverse `<--`, thick `==>` / `<==>` (heavy line weight); labels via `-->|label|` or `-- "label" -->`
 - **Shapes**: `[box]`, `(rounded)`, `((circle))`, `[[subprocess]]`, `{diamond}`, `([stadium])`, `[(database)]`
 - Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes are not rendered
-- Thick edges (`==>`) render with normal line weight; `classDef` / `style` directives are ignored
+- `classDef` / `style` directives are ignored
 - **Tips**: prefer `TB` for cascades with multiple feedback loops; declare same-rank branch targets left-to-right in escape order so loop-back channels stay clear.

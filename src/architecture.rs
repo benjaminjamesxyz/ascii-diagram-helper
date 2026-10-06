@@ -456,6 +456,7 @@ mod tests {
                 label: Some("HTTP".to_string()),
                 arrow: crate::schema::ArrowDirection::Forward,
                 dashed: false,
+                thick: false,
             }],
         };
 

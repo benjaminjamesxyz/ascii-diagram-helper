@@ -25,6 +25,11 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         }
     }
 
+    // Mermaid allows `;` as a statement separator; normalize to newlines so
+    // single-line inputs (CLI `dsl` mode) parse like multi-line input.
+    let normalized = normalize_semicolons(trimmed);
+    let trimmed = normalized.as_str();
+
     let first_line = trimmed.lines().next().unwrap_or("").trim();
 
     if first_line.starts_with("sequenceDiagram") {
@@ -136,6 +141,37 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         nodes,
         edges,
     }))
+}
+
+/// Replaces statement-separating `;` with newlines, skipping `;` inside
+/// brackets or quotes so labels like `[a; b]` survive untouched.
+fn normalize_semicolons(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut depth = 0usize;
+    let mut in_quote: Option<char> = None;
+    for ch in input.chars() {
+        match ch {
+            q @ ('"' | '\'') if in_quote.is_none() => {
+                in_quote = Some(q);
+                out.push(q);
+            }
+            q if Some(q) == in_quote => {
+                in_quote = None;
+                out.push(q);
+            }
+            '[' | '{' | '(' if in_quote.is_none() => {
+                depth += 1;
+                out.push(ch);
+            }
+            ']' | '}' | ')' if in_quote.is_none() && depth > 0 => {
+                depth -= 1;
+                out.push(ch);
+            }
+            ';' if in_quote.is_none() && depth == 0 => out.push('\n'),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 fn clean_label(raw: &str) -> String {
@@ -310,6 +346,7 @@ where
             _ => ArrowDirection::Forward,
         };
         let is_dashed = delim == "-.->";
+        let is_thick = delim == "==>" || delim == "<==>";
 
         let sources = split_bracket_aware(left_part, '&');
         let targets = split_bracket_aware(target_part, '&');
@@ -328,6 +365,7 @@ where
                     label: edge_label.clone(),
                     arrow,
                     dashed: is_dashed,
+                    thick: is_thick,
                 });
             }
         }
@@ -734,6 +772,52 @@ mod tests {
                 assert_eq!(f.nodes.len(), 4);
                 assert_eq!(f.edges.len(), 3);
                 assert_eq!(f.edges[0].label, Some("GET /users".to_string()));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_thick_edges() {
+        let dsl = "graph TB; A ==> B; B <==> C";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 2);
+                assert!(f.edges[0].thick, "==> must set thick");
+                assert_eq!(f.edges[0].arrow, ArrowDirection::Forward);
+                assert!(f.edges[1].thick, "<==> must set thick");
+                assert_eq!(f.edges[1].arrow, ArrowDirection::Both);
+                assert!(!f.edges[0].dashed && !f.edges[1].dashed);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_semicolon_separators() {
+        // Single-line CLI-style input: statements split on `;`, direction
+        // suffix must not keep its trailing `;`
+        let dsl = "graph LR; A[Start] --> B[End]";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.direction, LayoutDirection::LR);
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.nodes.len(), 2);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_semicolon_inside_label_preserved() {
+        let dsl = "graph TD; A[Foo; Bar] --> B";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                assert_eq!(a.label, "Foo; Bar");
             }
             _ => panic!("Expected flowchart"),
         }

@@ -30,6 +30,7 @@ mod tests {
                 label: Some("HTTP".to_string()),
                 arrow: ArrowDirection::Forward,
                 dashed: false,
+                thick: false,
             }],
         };
 
@@ -65,6 +66,7 @@ mod tests {
                 label: None,
                 arrow: ArrowDirection::Forward,
                 dashed: false,
+                thick: false,
             }],
         };
 
@@ -105,6 +107,7 @@ mod tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "B".to_string(),
@@ -112,6 +115,7 @@ mod tests {
                     label: Some("Yes".to_string()),
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
             ],
         };
@@ -160,6 +164,7 @@ mod tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "Sum".to_string(),
@@ -167,6 +172,7 @@ mod tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "PID".to_string(),
@@ -174,6 +180,7 @@ mod tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "Plant".to_string(),
@@ -181,6 +188,7 @@ mod tests {
                     label: Some("Feedback".to_string()),
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
             ],
         };
@@ -228,6 +236,7 @@ mod self_loop_tests {
                 label: Some("retry".to_string()),
                 arrow: ArrowDirection::Forward,
                 dashed: false,
+                thick: false,
             }],
         }
     }
@@ -306,6 +315,7 @@ mod jump_group_tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: true,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "W".into(),
@@ -313,6 +323,7 @@ mod jump_group_tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: true,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "W".into(),
@@ -320,6 +331,7 @@ mod jump_group_tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: true,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "A".into(),
@@ -327,6 +339,7 @@ mod jump_group_tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "B".into(),
@@ -334,6 +347,7 @@ mod jump_group_tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
                 EdgeSpec {
                     from: "C".into(),
@@ -341,6 +355,7 @@ mod jump_group_tests {
                     label: None,
                     arrow: ArrowDirection::Forward,
                     dashed: false,
+                    thick: false,
                 },
             ],
         };
@@ -351,5 +366,73 @@ mod jump_group_tests {
         let arrow_row = lines.iter().find(|l| l.contains('▼')).expect("arrow row");
         let count = arrow_row.matches('▼').count();
         assert_eq!(count, 3, "expected 3 drops, row: {arrow_row}");
+    }
+
+    #[test]
+    fn test_thick_edge_renders_heavy_glyphs() {
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Rounded,
+            title: None,
+            nodes: vec![
+                NodeSpec {
+                    id: "A".into(),
+                    label: "Start".into(),
+                    shape: NodeShape::Box,
+                },
+                NodeSpec {
+                    id: "B".into(),
+                    label: "End".into(),
+                    shape: NodeShape::Box,
+                },
+            ],
+            edges: vec![EdgeSpec {
+                from: "A".into(),
+                to: "B".into(),
+                label: None,
+                arrow: ArrowDirection::Forward,
+                dashed: false,
+                thick: true,
+            }],
+        };
+        let out = FlowchartRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render();
+        assert!(out.contains('┃'), "thick vertical run: {out}");
+        // The edge drop itself must be heavy; node borders are sharp by design
+        let drop_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.trim().chars().all(|c| c == '┃'))
+            .collect();
+        assert!(!drop_lines.is_empty(), "pure heavy drop line expected: {out}");
+    }
+
+    #[test]
+    fn test_thick_edge_ascii_style() {
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::LR,
+            style: BoxStyle::Ascii,
+            title: None,
+            nodes: vec![
+                NodeSpec {
+                    id: "A".into(),
+                    label: "Start".into(),
+                    shape: NodeShape::Box,
+                },
+                NodeSpec {
+                    id: "B".into(),
+                    label: "End".into(),
+                    shape: NodeShape::Box,
+                },
+            ],
+            edges: vec![EdgeSpec {
+                from: "A".into(),
+                to: "B".into(),
+                label: None,
+                arrow: ArrowDirection::Forward,
+                dashed: false,
+                thick: true,
+            }],
+        };
+        let out = FlowchartRenderer::new(&spec, Theme::ascii()).render();
+        assert!(out.contains('='), "ascii thick horizontal run: {out}");
     }
 }

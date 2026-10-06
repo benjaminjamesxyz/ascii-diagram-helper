@@ -85,6 +85,9 @@ pub struct Cell {
     pub is_continuation: bool,
     pub conn: LineConn,
     pub is_line: bool,
+    /// Set on cells belonging to a thick (`==>`-style) edge run; picks heavy
+    /// glyphs at render time.
+    pub thick: bool,
     pub custom_corner: Option<char>,
     pub role: CellRole,
 }
@@ -96,6 +99,7 @@ impl Default for Cell {
             is_continuation: false,
             conn: LineConn::default(),
             is_line: false,
+            thick: false,
             custom_corner: None,
             role: CellRole::Empty,
         }
@@ -390,8 +394,17 @@ impl Canvas {
     }
 
     pub fn draw_hline(&mut self, x1: usize, x2: usize, y: usize) {
+        self.draw_hline_thick(x1, x2, y, false);
+    }
+
+    /// Thick horizontal line (heavy glyphs at render time).
+    pub fn draw_thick_hline(&mut self, x1: usize, x2: usize, y: usize) {
+        self.draw_hline_thick(x1, x2, y, true);
+    }
+
+    fn draw_hline_thick(&mut self, x1: usize, x2: usize, y: usize, thick: bool) {
         if x1 > x2 {
-            return self.draw_hline(x2, x1, y);
+            return self.draw_hline_thick(x2, x1, y, thick);
         }
         self.ensure_capacity(x2, y);
         let base = y * self.width;
@@ -410,6 +423,7 @@ impl Canvas {
             }
             let cell = &mut self.cells[base + x];
             cell.is_line = true;
+            cell.thick = thick;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
             }
@@ -475,8 +489,17 @@ impl Canvas {
     }
 
     pub fn draw_vline(&mut self, x: usize, y1: usize, y2: usize) {
+        self.draw_vline_thick(x, y1, y2, false);
+    }
+
+    /// Thick vertical line (heavy glyphs at render time).
+    pub fn draw_thick_vline(&mut self, x: usize, y1: usize, y2: usize) {
+        self.draw_vline_thick(x, y1, y2, true);
+    }
+
+    fn draw_vline_thick(&mut self, x: usize, y1: usize, y2: usize, thick: bool) {
         if y1 > y2 {
-            return self.draw_vline(x, y2, y1);
+            return self.draw_vline_thick(x, y2, y1, thick);
         }
         self.ensure_capacity(x, y2);
 
@@ -487,6 +510,7 @@ impl Canvas {
                 continue;
             }
             cell.is_line = true;
+            cell.thick = thick;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
             }
@@ -899,7 +923,7 @@ impl Canvas {
                     continue;
                 }
                 if cell.is_line && cell.ch == ' ' {
-                    out.push(resolve_line_glyph(cell.conn, theme));
+                    out.push(resolve_line_glyph(cell.conn, theme, cell.thick));
                 } else {
                     out.push(cell.ch);
                 }
@@ -926,33 +950,65 @@ fn offset_pos(base: usize, off: isize) -> Option<usize> {
     }
 }
 
-fn resolve_line_glyph(conn: LineConn, theme: &Theme) -> char {
+fn resolve_line_glyph(conn: LineConn, theme: &Theme, thick: bool) -> char {
     let (n, s, e, w) = (conn.north, conn.south, conn.east, conn.west);
 
-    match (n, s, e, w) {
-        // 4-way cross
-        (true, true, true, true) => theme.cross(),
+    if thick {
+        match (n, s, e, w) {
+            // 4-way cross
+            (true, true, true, true) => theme.thick_cross(),
 
-        // 3-way tees
-        (false, true, true, true) => theme.tee_down(),
-        (true, false, true, true) => theme.tee_up(),
-        (true, true, true, false) => theme.tee_right(),
-        (true, true, false, true) => theme.tee_left(),
+            // 3-way tees
+            (false, true, true, true) => theme.thick_tee_down(),
+            (true, false, true, true) => theme.thick_tee_up(),
+            (true, true, true, false) => theme.thick_tee_right(),
+            (true, true, false, true) => theme.thick_tee_left(),
 
-        // 2-way corners
-        (false, true, true, false) => theme.top_left_corner(),
-        (false, true, false, true) => theme.top_right_corner(),
-        (true, false, true, false) => theme.bottom_left_corner(),
-        (true, false, false, true) => theme.bottom_right_corner(),
+            // 2-way corners
+            (false, true, true, false) => theme.thick_top_left_corner(),
+            (false, true, false, true) => theme.thick_top_right_corner(),
+            (true, false, true, false) => theme.thick_bottom_left_corner(),
+            (true, false, false, true) => theme.thick_bottom_right_corner(),
 
-        // Vertical line and stubs
-        (true, true | false, false, false) | (false, true, false, false) => theme.vertical_line(),
+            // Vertical line and stubs
+            (true, true | false, false, false) | (false, true, false, false) => {
+                theme.thick_vertical_line()
+            }
 
-        // Horizontal line and stubs
-        (false, false, true, true | false) | (false, false, false, true) => theme.horizontal_line(),
+            // Horizontal line and stubs
+            (false, false, true, true | false) | (false, false, false, true) => {
+                theme.thick_horizontal_line()
+            }
 
-        // Empty / none
-        (false, false, false, false) => ' ',
+            // Empty / none
+            (false, false, false, false) => ' ',
+        }
+    } else {
+        match (n, s, e, w) {
+            // 4-way cross
+            (true, true, true, true) => theme.cross(),
+
+            // 3-way tees
+            (false, true, true, true) => theme.tee_down(),
+            (true, false, true, true) => theme.tee_up(),
+            (true, true, true, false) => theme.tee_right(),
+            (true, true, false, true) => theme.tee_left(),
+
+            // 2-way corners
+            (false, true, true, false) => theme.top_left_corner(),
+            (false, true, false, true) => theme.top_right_corner(),
+            (true, false, true, false) => theme.bottom_left_corner(),
+            (true, false, false, true) => theme.bottom_right_corner(),
+
+            // Vertical line and stubs
+            (true, true | false, false, false) | (false, true, false, false) => theme.vertical_line(),
+
+            // Horizontal line and stubs
+            (false, false, true, true | false) | (false, false, false, true) => theme.horizontal_line(),
+
+            // Empty / none
+            (false, false, false, false) => ' ',
+        }
     }
 }
 

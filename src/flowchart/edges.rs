@@ -36,6 +36,8 @@ pub(super) fn edge_hline(
 ) {
     if edge.dashed {
         canvas.draw_dashed_hline(x1, x2, y, theme);
+    } else if edge.thick {
+        canvas.draw_thick_hline(x1, x2, y);
     } else {
         canvas.draw_hline(x1, x2, y);
     }
@@ -51,6 +53,8 @@ pub(super) fn edge_vline(
 ) {
     if edge.dashed {
         canvas.draw_dashed_vline(x, y1, y2, theme);
+    } else if edge.thick {
+        canvas.draw_thick_vline(x, y1, y2);
     } else {
         canvas.draw_vline(x, y1, y2);
     }

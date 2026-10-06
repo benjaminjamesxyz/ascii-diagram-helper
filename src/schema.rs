@@ -53,6 +53,8 @@ pub struct EdgeSpec {
     pub arrow: ArrowDirection,
     #[serde(default)]
     pub dashed: bool,
+    #[serde(default)]
+    pub thick: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

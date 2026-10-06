@@ -32,7 +32,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs
   - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
   - Chained edges (`A --> B --> C`), edge labels (`-->|label|`), dotted lines (`-.->`), loops
-  - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`)
+  - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`), thick (`==>`, `<==>` — heavy glyphs `━ ┃` in Unicode styles, `=` in ASCII style)
 - **Sequence Diagrams (`sequenceDiagram`)**:
   - Synchronous calls (`->`, `->>`), asynchronous messages (`-->`, `-->>`), bidirectional (`<->`)
   - Self loops (`A -> A: msg`)
@@ -56,7 +56,6 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 ### Known Limitations
 
 - Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes and sub-directions are not rendered
-- Thick edges (`==>` / `<==>`) render with normal line weight
 - `classDef` / `class` / `style` directives are ignored
 
 ### Tips for Dense Graphs

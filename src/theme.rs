@@ -215,4 +215,87 @@ impl Theme {
             ArrowStyle::Open | ArrowStyle::Ascii => '^',
         }
     }
+
+    // ---- Thick-edge glyphs (`==>` / `<==>` flowchart edges) ----
+
+    #[must_use]
+    pub fn thick_horizontal_line(&self) -> char {
+        match self.box_style {
+            BoxStyle::Ascii => '=',
+            BoxStyle::Double => '═',
+            _ => '━',
+        }
+    }
+
+    #[must_use]
+    pub fn thick_vertical_line(&self) -> char {
+        match self.box_style {
+            BoxStyle::Ascii => '|',
+            BoxStyle::Double => '║',
+            _ => '┃',
+        }
+    }
+
+    #[must_use]
+    pub fn thick_top_left_corner(&self) -> char {
+        self.thick_corner('╔', '┏')
+    }
+
+    #[must_use]
+    pub fn thick_top_right_corner(&self) -> char {
+        self.thick_corner('╗', '┓')
+    }
+
+    #[must_use]
+    pub fn thick_bottom_left_corner(&self) -> char {
+        self.thick_corner('╚', '┗')
+    }
+
+    #[must_use]
+    pub fn thick_bottom_right_corner(&self) -> char {
+        self.thick_corner('╝', '┛')
+    }
+
+    #[must_use]
+    pub fn thick_tee_down(&self) -> char {
+        self.thick_junction('╦', '┳')
+    }
+
+    #[must_use]
+    pub fn thick_tee_up(&self) -> char {
+        self.thick_junction('╩', '┻')
+    }
+
+    #[must_use]
+    pub fn thick_tee_right(&self) -> char {
+        self.thick_junction('╠', '┣')
+    }
+
+    #[must_use]
+    pub fn thick_tee_left(&self) -> char {
+        self.thick_junction('╣', '┫')
+    }
+
+    #[must_use]
+    pub fn thick_cross(&self) -> char {
+        self.thick_junction('╬', '╋')
+    }
+
+    /// Double style is already the heaviest weight — keep its own glyphs there.
+    /// Ascii stays 7-bit. Everything else goes heavy.
+    fn thick_corner(&self, double: char, heavy: char) -> char {
+        match self.box_style {
+            BoxStyle::Ascii => '+',
+            BoxStyle::Double => double,
+            _ => heavy,
+        }
+    }
+
+    fn thick_junction(&self, double: char, heavy: char) -> char {
+        match self.box_style {
+            BoxStyle::Ascii => '+',
+            BoxStyle::Double => double,
+            _ => heavy,
+        }
+    }
 }

@@ -90,7 +90,16 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        let mut canvas = Canvas::new(current_x + 6, max_h + 4);
+        // Leave room for subgraph group padding at the diagram edge
+        let sg_margin = if self.spec.subgraphs.is_empty() { 0 } else { 3 };
+        if sg_margin > 0 {
+            for node in &mut nodes {
+                node.x += sg_margin;
+                node.y += sg_margin;
+            }
+        }
+
+        let mut canvas = Canvas::new(current_x + 6 + sg_margin, max_h + 4 + sg_margin);
 
         if let Some(ref title) = self.spec.title {
             canvas.draw_text(0, 0, title);
@@ -106,7 +115,7 @@ impl<'a> FlowchartRenderer<'a> {
             ));
         }
 
-        let mut loop_track_y = max_h + 2;
+        let mut loop_track_y = max_h + 2 + sg_margin;
 
         // Draw edges
         for edge in &self.spec.edges {
@@ -219,6 +228,9 @@ impl<'a> FlowchartRenderer<'a> {
         for node in &nodes {
             self.draw_node(&mut canvas, node);
         }
+
+        // Draw subgraph grouping boxes on top of empty cells
+        self.draw_subgraphs(&mut canvas, &nodes, &idx);
 
         canvas.render(&self.theme)
     }

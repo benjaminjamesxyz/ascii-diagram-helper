@@ -12,6 +12,7 @@ mod tests {
             direction: LayoutDirection::TB,
             style: BoxStyle::Rounded,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![
                 NodeSpec {
                     id: "A".to_string(),
@@ -50,6 +51,7 @@ mod tests {
             direction: LayoutDirection::LR,
             style: BoxStyle::Ascii,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![
                 NodeSpec {
                     id: "A".to_string(),
@@ -87,6 +89,7 @@ mod tests {
             direction: LayoutDirection::TB,
             style: BoxStyle::Rounded,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![
                 NodeSpec {
                     id: "A".to_string(),
@@ -142,6 +145,7 @@ mod tests {
             direction: LayoutDirection::TB,
             style: BoxStyle::Rounded,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![
                 NodeSpec {
                     id: "Ref".to_string(),
@@ -236,6 +240,7 @@ mod self_loop_tests {
             direction,
             style: BoxStyle::Rounded,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![NodeSpec {
                 id: "A".to_string(),
                 label: "Box".to_string(),
@@ -292,6 +297,7 @@ mod jump_group_tests {
         let spec = FlowchartSpec {
             style: BoxStyle::Rounded,
             title: None,
+            subgraphs: Vec::new(),
             direction: LayoutDirection::TB,
             nodes: vec![
                 NodeSpec {
@@ -386,11 +392,38 @@ mod jump_group_tests {
     }
 
     #[test]
+    fn test_subgraph_group_boxes_rendered() {
+        let dsl = "graph TB
+            subgraph front [Front End]
+              A[Web] --> B[API]
+            end
+            subgraph back [Back End]
+              C[Auth]
+            end
+            B --> C";
+        let spec = crate::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        let DiagramSpec::Flowchart(f) = spec else {
+            panic!("Expected flowchart")
+        };
+        let out = FlowchartRenderer::new(&f, Theme::new(BoxStyle::Rounded)).render();
+        assert!(out.contains("Front End"), "group title on border: {out}");
+        assert!(out.contains("Back End"), "second group title: {out}");
+        // Group borders enclose member nodes: the Web box must sit right of a
+        // group side border
+        let web_row = out.lines().find(|l| l.contains("│ Web │")).expect("web row");
+        assert!(
+            web_row.trim_start().starts_with('│'),
+            "group border left of member: {web_row}"
+        );
+    }
+
+    #[test]
     fn test_thick_edge_renders_heavy_glyphs() {
         let spec = FlowchartSpec {
             direction: LayoutDirection::TB,
             style: BoxStyle::Rounded,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![
                 NodeSpec {
                     id: "A".into(),
@@ -430,6 +463,7 @@ mod jump_group_tests {
             direction: LayoutDirection::LR,
             style: BoxStyle::Ascii,
             title: None,
+            subgraphs: Vec::new(),
             nodes: vec![
                 NodeSpec {
                     id: "A".into(),

@@ -61,6 +61,19 @@ pub struct EdgeSpec {
     pub thick: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SubgraphSpec {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Direct member node ids
+    #[serde(default)]
+    pub nodes: Vec<String>,
+    /// Nested subgraphs
+    #[serde(default)]
+    pub subgraphs: Vec<SubgraphSpec>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct FlowchartSpec {
     #[serde(default)]
@@ -71,6 +84,8 @@ pub struct FlowchartSpec {
     pub title: Option<String>,
     pub nodes: Vec<NodeSpec>,
     pub edges: Vec<EdgeSpec>,
+    #[serde(default)]
+    pub subgraphs: Vec<SubgraphSpec>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,7 +1,7 @@
 use crate::schema::{
     ArrowDirection, DiagramSpec, EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, NodeSpec,
     ParticipantSpec, SeqFrameSpec, SeqMessageSpec, SeqMessageType, SequenceSpec, StackLayerSpec,
-    StackSpec, TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
+    StackSpec, SubgraphSpec, TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
 };
 use crate::theme::BoxStyle;
 
@@ -73,6 +73,18 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         std::collections::HashMap::new();
     let mut dashed_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut dashed_links: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    // Subgraph blocks: flat storage + open-stack, assembled into a tree below.
+    // RefCell because `ensure_node` (a long-lived closure) records membership
+    // while the main loop pushes/pops open blocks.
+    struct SubgraphFlat {
+        id: String,
+        title: Option<String>,
+        parent: Option<usize>,
+        members: Vec<String>,
+        seen: std::collections::HashSet<String>,
+    }
+    let subgraphs_flat: std::cell::RefCell<Vec<SubgraphFlat>> = std::cell::RefCell::new(Vec::new());
+    let sg_stack: std::cell::RefCell<Vec<usize>> = std::cell::RefCell::new(Vec::new());
 
     let mut lines = input.lines();
     let first_line = lines.next().unwrap_or("").trim();
@@ -110,6 +122,14 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 shape,
                 dashed_border: false,
             });
+            // Nodes first declared while a subgraph is open become members
+            if let Some(&cur) = sg_stack.borrow().last() {
+                let mut flats = subgraphs_flat.borrow_mut();
+                let sg = &mut flats[cur];
+                if sg.seen.insert(id.to_string()) {
+                    sg.members.push(id.to_string());
+                }
+            }
         }
     };
 
@@ -119,10 +139,44 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             || trimmed.starts_with("```")
             || trimmed.starts_with("%%")
             || trimmed.starts_with("//")
-            || trimmed.starts_with("subgraph")
-            || trimmed == "end"
             || trimmed.starts_with("direction")
         {
+            continue;
+        }
+
+        // subgraph id[title] | subgraph id | subgraph title — opens a group box
+        if let Some(rest) = trimmed.strip_prefix("subgraph") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                continue;
+            }
+            let (id, title) = if let Some(start) = rest.find('[')
+                && let Some(end) = rest.rfind(']')
+                && start < end
+            {
+                (
+                    rest[..start].trim().to_string(),
+                    Some(clean_label(&rest[start + 1..end])),
+                )
+            } else {
+                (rest.to_string(), Some(rest.to_string()))
+            };
+            subgraphs_flat.borrow_mut().push(SubgraphFlat {
+                id,
+                title,
+                parent: sg_stack.borrow().last().copied(),
+                members: Vec::new(),
+                seen: std::collections::HashSet::new(),
+            });
+            let new_idx = subgraphs_flat.borrow().len() - 1;
+            sg_stack.borrow_mut().push(new_idx);
+            continue;
+        }
+
+        // end — closes the innermost open subgraph (plain `end` outside any
+        // subgraph is ignored)
+        if trimmed == "end" || trimmed.starts_with("end ") {
+            sg_stack.borrow_mut().pop();
             continue;
         }
 
@@ -187,6 +241,31 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         }
     }
 
+    // Assemble the flat subgraph list into a nested tree (roots first)
+    fn build_subgraph_tree(
+        flat: &[(String, Option<String>, Option<usize>, Vec<String>)],
+        parent: Option<usize>,
+    ) -> Vec<SubgraphSpec> {
+        let mut out = Vec::new();
+        for (i, (id, title, p, members)) in flat.iter().enumerate() {
+            if *p == parent {
+                out.push(SubgraphSpec {
+                    id: id.clone(),
+                    title: title.clone(),
+                    nodes: members.clone(),
+                    subgraphs: build_subgraph_tree(flat, Some(i)),
+                });
+            }
+        }
+        out
+    }
+    let flat_tuples: Vec<(String, Option<String>, Option<usize>, Vec<String>)> = subgraphs_flat
+        .into_inner()
+        .into_iter()
+        .map(|sg| (sg.id, sg.title, sg.parent, sg.members))
+        .collect();
+    let subgraphs = build_subgraph_tree(&flat_tuples, None);
+
     // Apply deferred style marks (class/style lines may precede node defs)
     for node in &mut nodes {
         if dashed_nodes.contains(&node.id) {
@@ -205,6 +284,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         title: None,
         nodes,
         edges,
+        subgraphs,
     }))
 }
 
@@ -931,6 +1011,48 @@ mod tests {
             DiagramSpec::Flowchart(f) => {
                 assert!(!f.edges[0].dashed, "edge 0 untouched");
                 assert!(f.edges[1].dashed, "linkStyle 1 marks edge 1");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_subgraphs() {
+        let dsl = "graph TB
+            subgraph outer [Outer Group]
+              A --> B
+              subgraph inner
+                C
+              end
+            end
+            B --> D";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes.len(), 4);
+                assert_eq!(f.edges.len(), 2, "A-->B inside, B-->D outside");
+                assert_eq!(f.subgraphs.len(), 1, "one root subgraph");
+                let outer = &f.subgraphs[0];
+                assert_eq!(outer.title.as_deref(), Some("Outer Group"));
+                assert_eq!(outer.nodes, vec!["A", "B"], "declared-inside members in order");
+                assert_eq!(outer.subgraphs.len(), 1, "nested subgraph kept");
+                let inner = &outer.subgraphs[0];
+                assert_eq!(inner.title.as_deref(), Some("inner"));
+                assert_eq!(inner.nodes, vec!["C"]);
+                assert!(inner.subgraphs.is_empty());
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_subgraph_preexisting_node_not_member() {
+        let dsl = "graph TB; A --> B; subgraph g; B --> C; end";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let g = &f.subgraphs[0];
+                assert_eq!(g.nodes, vec!["C"], "B existed before the block");
             }
             _ => panic!("Expected flowchart"),
         }

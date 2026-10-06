@@ -28,6 +28,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - **Flowcharts & Graphs (`flowchart` / `graph`)**:
   - Directions: `TB` (Top to Bottom) and `LR` (Left to Right)
   - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`
+  - Subgraphs: `subgraph id [Title]` ... `end` render as labeled group boxes (nesting supported); members are nodes first declared inside the block; per-subgraph `direction` is not applied (global direction wins)
   - Orthogonal routing with smart junction merging (`┬`, `┴`, `┼`, `├`, `┤`)
   - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs
   - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
@@ -56,8 +57,8 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 ### Known Limitations
 
-- Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes and sub-directions are not rendered
 - `classDef` / `class` / `style` / `linkStyle` color properties (`fill`, `stroke` colors) are ignored — a character grid has no color channel; only `stroke-dasharray` is applied (dashed borders/edges)
+- Subgraphs render as group boxes, but per-subgraph `direction` directives are ignored (whole diagram uses the global direction)
 
 ### Tips for Dense Graphs
 

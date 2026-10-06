@@ -72,7 +72,16 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        let mut canvas = Canvas::new(max_w + 10, current_y + 4);
+        // Leave room for subgraph group padding at the diagram edge
+        let sg_margin = if self.spec.subgraphs.is_empty() { 0 } else { 3 };
+        if sg_margin > 0 {
+            for node in &mut nodes {
+                node.x += sg_margin;
+                node.y += sg_margin;
+            }
+        }
+
+        let mut canvas = Canvas::new(max_w + 10 + sg_margin, current_y + 4 + sg_margin);
 
         // Draw title if present
         if let Some(ref title) = self.spec.title {
@@ -103,8 +112,8 @@ impl<'a> FlowchartRenderer<'a> {
             *incoming_counts.entry(edge.to.clone()).or_insert(0) += 1;
         }
 
-        let mut loop_track_x = max_w + 3;
-        let mut multi_jump_track_x = max_w + 3;
+        let mut loop_track_x = max_w + 3 + sg_margin;
+        let mut multi_jump_track_x = max_w + 3 + sg_margin;
 
         // Bend edges to the next rank share one band row (mid_y). When two
         // parents' horizontal spans overlap there, their trunk lines merge and
@@ -542,6 +551,9 @@ impl<'a> FlowchartRenderer<'a> {
         for node in &nodes {
             self.draw_node(&mut canvas, node);
         }
+
+        // Draw subgraph grouping boxes on top of empty cells
+        self.draw_subgraphs(&mut canvas, &nodes, &idx);
 
         canvas.render(&self.theme)
     }

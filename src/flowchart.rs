@@ -1,5 +1,5 @@
-use crate::canvas::{Canvas, Direction};
-use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape};
+use crate::canvas::{Canvas, Direction, Rect};
+use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, SubgraphSpec};
 use crate::theme::{BoxStyle, Theme};
 use std::collections::{HashMap, HashSet, VecDeque};
 use unicode_width::UnicodeWidthStr;
@@ -137,6 +137,112 @@ impl<'a> FlowchartRenderer<'a> {
             .enumerate()
             .map(|(i, n)| (n.id.as_str(), i))
             .collect()
+    }
+
+    /// Draws subgraph grouping boxes: bounding box of member nodes (and nested
+    /// group rects) expanded by padding, with the title embedded in the top
+    /// border. Drawn after nodes so borders land on empty cells; edges crossing
+    /// a border render as junctions.
+    pub(super) fn draw_subgraphs(&self, canvas: &mut Canvas, nodes: &[LayoutNode], idx: &HashMap<&str, usize>) {
+        let (pad_x, pad_top, pad_bottom) = (2usize, 2usize, 1usize);
+
+        fn group_rect(
+            sg: &SubgraphSpec,
+            nodes: &[LayoutNode],
+            idx: &HashMap<&str, usize>,
+            pad: (usize, usize, usize),
+        ) -> Option<Rect> {
+            let (pad_x, pad_top, pad_bottom) = pad;
+            let mut x0 = usize::MAX;
+            let mut y0 = usize::MAX;
+            let mut x1 = 0usize;
+            let mut y1 = 0usize;
+            for id in &sg.nodes {
+                if let Some(&i) = idx.get(id.as_str()) {
+                    let n = &nodes[i];
+                    x0 = x0.min(n.x);
+                    y0 = y0.min(n.y);
+                    x1 = x1.max(n.x + n.width - 1);
+                    y1 = y1.max(n.y + n.height - 1);
+                }
+            }
+            for child in &sg.subgraphs {
+                if let Some(r) = group_rect(child, nodes, idx, pad) {
+                    x0 = x0.min(r.x);
+                    y0 = y0.min(r.y);
+                    x1 = x1.max(r.x + r.width - 1);
+                    y1 = y1.max(r.y + r.height - 1);
+                }
+            }
+            if x0 == usize::MAX {
+                return None;
+            }
+            let bx = x0.saturating_sub(pad_x);
+            let by = y0.saturating_sub(pad_top);
+            let mut br = x1.saturating_add(pad_x);
+            let bb = y1.saturating_add(pad_bottom);
+            // Widen the box so the title fits on the top border
+            let title = sg.title.clone().unwrap_or_else(|| sg.id.clone());
+            let min_w = UnicodeWidthStr::width(format!(" {title} ").as_str()) + 4;
+            if br - bx + 1 < min_w {
+                br = bx + min_w - 1;
+            }
+            Some(Rect::new(bx, by, br - bx + 1, bb - by + 1))
+        }
+
+        fn collect(
+            sgs: &[SubgraphSpec],
+            nodes: &[LayoutNode],
+            idx: &HashMap<&str, usize>,
+            pad: (usize, usize, usize),
+            out: &mut Vec<(Rect, String)>,
+        ) {
+            for sg in sgs {
+                if let Some(r) = group_rect(sg, nodes, idx, pad) {
+                    out.push((r, sg.title.clone().unwrap_or_else(|| sg.id.clone())));
+                }
+                collect(&sg.subgraphs, nodes, idx, pad, out);
+            }
+        }
+
+        let mut groups: Vec<(Rect, String)> = Vec::new();
+        collect(&self.spec.subgraphs, nodes, idx, (pad_x, pad_top, pad_bottom), &mut groups);
+        // Outer boxes first so nested borders layer cleanly
+        groups.sort_by_key(|(r, _)| std::cmp::Reverse(r.width * r.height));
+
+        for (r, title) in groups {
+            let right = r.x + r.width - 1;
+            let bottom = r.y + r.height - 1;
+            canvas.draw_hline(r.x, right, r.y);
+            canvas.draw_hline(r.x, right, bottom);
+            canvas.draw_vline(r.x, r.y, bottom);
+            canvas.draw_vline(right, r.y, bottom);
+            canvas.draw_corner(r.x, r.y, crate::canvas::LineConn {
+                south: true,
+                east: true,
+                ..Default::default()
+            });
+            canvas.draw_corner(right, r.y, crate::canvas::LineConn {
+                south: true,
+                west: true,
+                ..Default::default()
+            });
+            canvas.draw_corner(r.x, bottom, crate::canvas::LineConn {
+                north: true,
+                east: true,
+                ..Default::default()
+            });
+            canvas.draw_corner(right, bottom, crate::canvas::LineConn {
+                north: true,
+                west: true,
+                ..Default::default()
+            });
+            let label = format!(" {title} ");
+            let label_w = UnicodeWidthStr::width(label.as_str());
+            if r.width > label_w + 2 {
+                canvas.draw_text(r.x + 2, r.y, &label);
+            }
+        }
     }
 
     fn assign_ranks(

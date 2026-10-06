@@ -394,14 +394,9 @@ impl<'a> FlowchartRenderer<'a> {
                         continue;
                     }
                     // Only spans actually connected by an edge
-                    let connected = self
-                        .spec
-                        .edges
-                        .iter()
-                        .any(|e| {
-                            idx.get(e.from.as_str()) == Some(&ui)
-                                && idx.get(e.to.as_str()) == Some(&vi)
-                        });
+                    let connected = self.spec.edges.iter().any(|e| {
+                        idx.get(e.from.as_str()) == Some(&ui) && idx.get(e.to.as_str()) == Some(&vi)
+                    });
                     if !connected {
                         continue;
                     }
@@ -430,6 +425,53 @@ impl<'a> FlowchartRenderer<'a> {
                 }
                 band_offsets.insert(id, y - mid_y);
                 placed.push((y, lo, hi));
+            }
+        }
+
+        // Group multi-rank jumps that share a source (watchdog feeds, debug
+        // taps). Each group gets ONE shared vertical track and ONE top run
+        // instead of N overlapping full-width horizontal runs.
+        let mut jump_tracks: HashMap<String, (usize, usize)> = HashMap::new();
+        let mut jump_led: HashSet<String> = HashSet::new();
+        {
+            let mut members_by_src: HashMap<String, Vec<usize>> = HashMap::new();
+            for (ei, edge) in self.spec.edges.iter().enumerate() {
+                if let (Some(&ui), Some(&vi)) =
+                    (idx.get(edge.from.as_str()), idx.get(edge.to.as_str()))
+                    && nodes[vi].rank > nodes[ui].rank + 1
+                {
+                    members_by_src
+                        .entry(edge.from.clone())
+                        .or_default()
+                        .push(ei);
+                }
+            }
+            for (src, members) in members_by_src {
+                if members.len() < 2 {
+                    continue;
+                }
+                let Some(&sui) = idx.get(src.as_str()) else {
+                    continue;
+                };
+                let su = &nodes[sui];
+                let mut max_bound_x = su.x + su.width;
+                let mut depth_y = 0;
+                for &ei in &members {
+                    let edge = &self.spec.edges[ei];
+                    let Some(&vi) = idx.get(edge.to.as_str()) else {
+                        continue;
+                    };
+                    let v = &nodes[vi];
+                    for layer in &layers[(su.rank + 1)..v.rank] {
+                        for &ni in layer {
+                            max_bound_x = max_bound_x.max(nodes[ni].x + nodes[ni].width);
+                        }
+                    }
+                    depth_y = depth_y.max(v.y.saturating_sub(2));
+                }
+                let track = (max_bound_x + 3).max(multi_jump_track_x);
+                multi_jump_track_x = track + 4;
+                jump_tracks.insert(src, (track, depth_y));
             }
         }
 
@@ -532,62 +574,126 @@ impl<'a> FlowchartRenderer<'a> {
                             }
                         }
                     } else {
-                        // Multi-rank jump: route around intermediate layers through gaps
+                        // Multi-rank jump: route around intermediate layers through gaps.
+                        // When several jumps share a source, the lead edge draws one
+                        // shared track + top run; members only add their drop.
                         let top_gap_y = u_bottom + 2;
                         let bottom_gap_y = v_top.saturating_sub(2);
-
-                        let mut max_bound_x = u.x + u.width;
-                        for layer in &layers[(u.rank + 1)..v.rank] {
-                            for &ni in layer {
-                                max_bound_x = max_bound_x.max(nodes[ni].x + nodes[ni].width);
+                        if let Some(&(track_x, depth_y)) = jump_tracks.get(edge.from.as_str()) {
+                            let lead = jump_led.insert(edge.from.clone());
+                            if lead {
+                                edge_vline(
+                                    &mut canvas,
+                                    edge,
+                                    u_cx,
+                                    u_bottom + 1,
+                                    top_gap_y,
+                                    &self.theme,
+                                );
+                                edge_hline(
+                                    &mut canvas,
+                                    edge,
+                                    u_cx,
+                                    track_x,
+                                    top_gap_y,
+                                    &self.theme,
+                                );
+                                edge_vline(
+                                    &mut canvas,
+                                    edge,
+                                    track_x,
+                                    top_gap_y,
+                                    depth_y,
+                                    &self.theme,
+                                );
+                                edge_arrow_heads(
+                                    &mut canvas,
+                                    edge,
+                                    (v_cx, v_top - 1, Direction::Down),
+                                    (u_cx, u_bottom + 1, Direction::Up),
+                                    &self.theme,
+                                );
                             }
-                        }
-                        let route_x = (max_bound_x + 3).max(multi_jump_track_x);
-                        multi_jump_track_x = route_x + 4;
+                            // Per-target drop from the shared track
+                            edge_hline(&mut canvas, edge, track_x, v_cx, bottom_gap_y, &self.theme);
+                            if bottom_gap_y < v_top - 1 {
+                                edge_vline(
+                                    &mut canvas,
+                                    edge,
+                                    v_cx,
+                                    bottom_gap_y,
+                                    v_top - 1,
+                                    &self.theme,
+                                );
+                            }
+                            edge_arrow_heads(
+                                &mut canvas,
+                                edge,
+                                (v_cx, v_top - 1, Direction::Down),
+                                (v_cx, bottom_gap_y, Direction::Up),
+                                &self.theme,
+                            );
+                            if let Some(ref lbl) = edge.label {
+                                let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                                let label_x = usize::midpoint(track_x, v_cx)
+                                    .saturating_sub(lbl_w / 2)
+                                    .max(v_cx.min(track_x) + 1);
+                                canvas.draw_text_safe(label_x, bottom_gap_y.saturating_sub(1), lbl);
+                            }
+                        } else {
+                            let mut max_bound_x = u.x + u.width;
+                            for layer in &layers[(u.rank + 1)..v.rank] {
+                                for &ni in layer {
+                                    max_bound_x = max_bound_x.max(nodes[ni].x + nodes[ni].width);
+                                }
+                            }
+                            let route_x = (max_bound_x + 3).max(multi_jump_track_x);
+                            multi_jump_track_x = route_x + 4;
 
-                        edge_vline(
-                            &mut canvas,
-                            edge,
-                            u_cx,
-                            u_bottom + 1,
-                            top_gap_y,
-                            &self.theme,
-                        );
-                        edge_hline(&mut canvas, edge, u_cx, route_x, top_gap_y, &self.theme);
-                        edge_vline(
-                            &mut canvas,
-                            edge,
-                            route_x,
-                            top_gap_y,
-                            bottom_gap_y,
-                            &self.theme,
-                        );
-                        edge_hline(&mut canvas, edge, route_x, v_cx, bottom_gap_y, &self.theme);
-                        edge_vline(
-                            &mut canvas,
-                            edge,
-                            v_cx,
-                            bottom_gap_y,
-                            v_top - 1,
-                            &self.theme,
-                        );
-                        edge_arrow_heads(
-                            &mut canvas,
-                            edge,
-                            (v_cx, v_top - 1, Direction::Down),
-                            (u_cx, u_bottom + 1, Direction::Up),
-                            &self.theme,
-                        );
+                            edge_vline(
+                                &mut canvas,
+                                edge,
+                                u_cx,
+                                u_bottom + 1,
+                                top_gap_y,
+                                &self.theme,
+                            );
+                            edge_hline(&mut canvas, edge, u_cx, route_x, top_gap_y, &self.theme);
+                            edge_vline(
+                                &mut canvas,
+                                edge,
+                                route_x,
+                                top_gap_y,
+                                bottom_gap_y,
+                                &self.theme,
+                            );
+                            edge_hline(&mut canvas, edge, route_x, v_cx, bottom_gap_y, &self.theme);
+                            edge_vline(
+                                &mut canvas,
+                                edge,
+                                v_cx,
+                                bottom_gap_y,
+                                v_top - 1,
+                                &self.theme,
+                            );
+                            edge_arrow_heads(
+                                &mut canvas,
+                                edge,
+                                (v_cx, v_top - 1, Direction::Down),
+                                (u_cx, u_bottom + 1, Direction::Up),
+                                &self.theme,
+                            );
 
-                        if let Some(ref lbl) = edge.label {
-                            let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-                            let label_x = if route_x > u_cx {
-                                // Center along the horizontal segment between u_cx and route_x
-                                u_cx + 2 + (route_x - u_cx - 2).saturating_sub(lbl_w) / 2
-                            } else {
-                                route_x + 1 + (u_cx - route_x - 1).saturating_sub(lbl_w) / 2
-                            };
-                            canvas.draw_text_safe(label_x, top_gap_y.saturating_sub(1), lbl);
+                            if let Some(ref lbl) = edge.label {
+                                let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                                let label_x = if route_x > u_cx {
+                                    // Center along the horizontal segment between u_cx and route_x
+                                    u_cx + 2 + (route_x - u_cx - 2).saturating_sub(lbl_w) / 2
+                                } else {
+                                    route_x + 1 + (u_cx - route_x - 1).saturating_sub(lbl_w) / 2
+                                };
+                                canvas.draw_text_safe(label_x, top_gap_y.saturating_sub(1), lbl);
+                            }
                         }
                     }
                 } else if u.rank == v.rank {
@@ -1405,5 +1511,99 @@ mod self_loop_tests {
         let spec = spec(LayoutDirection::TB);
         let out = FlowchartRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render();
         assert!(out.contains("Box"));
+    }
+}
+
+#[cfg(test)]
+mod jump_group_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn test_multi_jump_shared_track() {
+        let spec = FlowchartSpec {
+            style: BoxStyle::Rounded,
+            title: None,
+            direction: LayoutDirection::TB,
+            nodes: vec![
+                NodeSpec {
+                    id: "W".into(),
+                    label: "Watchdog".into(),
+                    shape: NodeShape::Box,
+                },
+                NodeSpec {
+                    id: "A".into(),
+                    label: "Task A".into(),
+                    shape: NodeShape::Box,
+                },
+                NodeSpec {
+                    id: "B".into(),
+                    label: "Task B".into(),
+                    shape: NodeShape::Box,
+                },
+                NodeSpec {
+                    id: "C".into(),
+                    label: "Task C".into(),
+                    shape: NodeShape::Box,
+                },
+                NodeSpec {
+                    id: "Z".into(),
+                    label: "Done".into(),
+                    shape: NodeShape::Box,
+                },
+            ],
+            edges: vec![
+                EdgeSpec {
+                    from: "W".into(),
+                    to: "A".into(),
+                    label: None,
+                    arrow: ArrowDirection::Forward,
+                    dashed: true,
+                },
+                EdgeSpec {
+                    from: "W".into(),
+                    to: "B".into(),
+                    label: None,
+                    arrow: ArrowDirection::Forward,
+                    dashed: true,
+                },
+                EdgeSpec {
+                    from: "W".into(),
+                    to: "C".into(),
+                    label: None,
+                    arrow: ArrowDirection::Forward,
+                    dashed: true,
+                },
+                EdgeSpec {
+                    from: "A".into(),
+                    to: "Z".into(),
+                    label: None,
+                    arrow: ArrowDirection::Forward,
+                    dashed: false,
+                },
+                EdgeSpec {
+                    from: "B".into(),
+                    to: "Z".into(),
+                    label: None,
+                    arrow: ArrowDirection::Forward,
+                    dashed: false,
+                },
+                EdgeSpec {
+                    from: "C".into(),
+                    to: "Z".into(),
+                    label: None,
+                    arrow: ArrowDirection::Forward,
+                    dashed: false,
+                },
+            ],
+        };
+        let r = FlowchartRenderer::new(&spec, crate::theme::Theme::new(BoxStyle::Rounded));
+        let out = r.render();
+        // Every target must have an arrowhead directly above its box
+        let lines: Vec<&str> = out.lines().collect();
+        let arrow_row = lines.iter().find(|l| l.contains('▼')).expect("arrow row");
+        let count = arrow_row.matches('▼').count();
+        assert_eq!(count, 3, "expected 3 drops, row: {arrow_row}");
     }
 }

@@ -29,6 +29,8 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Directions: `TB` (Top to Bottom) and `LR` (Left to Right)
   - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`
   - Orthogonal routing with smart junction merging (`┬`, `┴`, `┼`, `├`, `┤`)
+  - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs
+  - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
   - Chained edges (`A --> B --> C`), edge labels (`-->|label|`), dotted lines (`-.->`), loops
   - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`)
 - **Sequence Diagrams (`sequenceDiagram`)**:

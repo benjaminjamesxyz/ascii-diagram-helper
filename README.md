@@ -59,6 +59,15 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - Thick edges (`==>` / `<==>`) render with normal line weight
 - `classDef` / `class` / `style` directives are ignored
 
+### Tips for Dense Graphs
+
+Cross-branch edges (watchdog kicks, config broadcasts, debug taps) work correctly at any density but get visually busy past a threshold. Keeping them rare keeps diagrams crisp:
+
+- **Limit cross-branch edges per source to ≤ 2.** Beyond that, every edge still renders (shared corridor track per source), but dash runs cross more bands and gain `┼` crossings
+- **Prefer one fan-out over many hops**: `WDG -.-> A` + `WDG -.-> B` renders cleaner than routing a kick through intermediate tasks
+- **Split by concern**: put watchdog/telemetry/config wiring in a companion diagram instead of overlaying it on the main dataflow — the task graph stays readable and the cross-branch view gets its own clear picture
+- **Use dashed style (`-.->`) for supervisory edges** — visually separates control-plane from data-plane at a glance
+
 ---
 
 ## Installation

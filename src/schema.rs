@@ -31,6 +31,10 @@ pub struct NodeSpec {
     pub label: String,
     #[serde(default)]
     pub shape: NodeShape,
+    /// Dashed border, set via Mermaid `class`/`style` `stroke-dasharray`.
+    /// Colors have no channel in a monochrome grid; dash patterns do.
+    #[serde(default)]
+    pub dashed_border: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

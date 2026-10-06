@@ -139,5 +139,6 @@ To ensure diagrams always display cleanly in any terminal:
 - **Edges**: solid `-->`, dashed `-.->`, no arrow `---`, bidirectional `<-->` / `<==>`, reverse `<--`, thick `==>` / `<==>` (heavy line weight); labels via `-->|label|` or `-- "label" -->`
 - **Shapes**: `[box]`, `(rounded)`, `((circle))`, `[[subprocess]]`, `{diamond}`, `([stadium])`, `[(database)]`
 - Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes are not rendered
-- `classDef` / `style` directives are ignored
+- Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes are not rendered
+- `classDef` / `class` / `style` / `linkStyle`: only `stroke-dasharray` is applied (dashed borders/edges); colors ignored (no color channel in a character grid)
 - **Tips**: prefer `TB` for cascades with multiple feedback loops; declare same-rank branch targets left-to-right in escape order so loop-back channels stay clear.

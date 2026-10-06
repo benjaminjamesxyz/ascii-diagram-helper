@@ -68,6 +68,11 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     let mut node_indices: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
     let mut edges: Vec<EdgeSpec> = Vec::new();
+    // Mermaid style directives, deferred until all nodes/edges exist
+    let mut class_dashed: std::collections::HashMap<String, bool> =
+        std::collections::HashMap::new();
+    let mut dashed_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut dashed_links: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     let mut lines = input.lines();
     let first_line = lines.next().unwrap_or("").trim();
@@ -103,6 +108,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                     label.to_string()
                 },
                 shape,
+                dashed_border: false,
             });
         }
     };
@@ -116,10 +122,57 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             || trimmed.starts_with("subgraph")
             || trimmed == "end"
             || trimmed.starts_with("direction")
-            || trimmed.starts_with("classDef")
-            || trimmed.starts_with("class ")
-            || trimmed.starts_with("style ")
         {
+            continue;
+        }
+
+        // classDef name prop:value,... — only stroke-dasharray is mappable to
+        // a monochrome character grid (dashed border); colors are ignored.
+        if let Some(rest) = trimmed.strip_prefix("classDef ") {
+            if let Some((names, props)) = rest.split_once(char::is_whitespace) {
+                let dashed = props.contains("stroke-dasharray");
+                for name in names.split(',') {
+                    if !name.trim().is_empty() {
+                        class_dashed.insert(name.trim().to_string(), dashed);
+                    }
+                }
+            }
+            continue;
+        }
+
+        // class id1,id2 className
+        if let Some(rest) = trimmed.strip_prefix("class ") {
+            if let Some((ids, class_name)) = rest.rsplit_once(char::is_whitespace)
+                && class_dashed.get(class_name.trim()).copied().unwrap_or(false)
+            {
+                for id in ids.split(',') {
+                    dashed_nodes.insert(id.trim().to_string());
+                }
+            }
+            continue;
+        }
+
+        // style id prop:value,...
+        if let Some(rest) = trimmed.strip_prefix("style ") {
+            if let Some((id, props)) = rest.split_once(char::is_whitespace)
+                && props.contains("stroke-dasharray")
+            {
+                dashed_nodes.insert(id.trim().to_string());
+            }
+            continue;
+        }
+
+        // linkStyle 0,2 prop:value,... — dashed edges
+        if let Some(rest) = trimmed.strip_prefix("linkStyle ") {
+            if let Some((idxs, props)) = rest.split_once(char::is_whitespace)
+                && props.contains("stroke-dasharray")
+            {
+                for idx in idxs.split(',') {
+                    if let Ok(i) = idx.trim().parse::<usize>() {
+                        dashed_links.insert(i);
+                    }
+                }
+            }
             continue;
         }
 
@@ -131,6 +184,18 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             if !id.is_empty() {
                 ensure_node(&id, &label, shape);
             }
+        }
+    }
+
+    // Apply deferred style marks (class/style lines may precede node defs)
+    for node in &mut nodes {
+        if dashed_nodes.contains(&node.id) {
+            node.dashed_border = true;
+        }
+    }
+    for (i, edge) in edges.iter_mut().enumerate() {
+        if dashed_links.contains(&i) {
+            edge.dashed = true;
         }
     }
 
@@ -818,6 +883,54 @@ mod tests {
             DiagramSpec::Flowchart(f) => {
                 let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
                 assert_eq!(a.label, "Foo; Bar");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_and_style_directives() {
+        let dsl = "graph TB
+            A[Entry] --> B[Core]
+            classDef ghost stroke-dasharray: 5 5,fill:#eee
+            classDef solid fill:#f9f
+            class A ghost
+            style B stroke-dasharray: 4";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes.len(), 2);
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                let b = f.nodes.iter().find(|n| n.id == "B").unwrap();
+                assert!(a.dashed_border, "class with dasharray");
+                assert!(b.dashed_border, "style with dasharray");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_class_without_dasharray_ignored() {
+        let dsl = "graph TB; A --> B; classDef hot fill:#f00; class A hot";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes.len(), 2, "class lines must not create nodes");
+                assert_eq!(f.edges.len(), 1);
+                assert!(!f.nodes.iter().any(|n| n.dashed_border));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_link_style_dasharray() {
+        let dsl = "graph TB; A --> B; B --> C; linkStyle 1 stroke-dasharray: 5";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert!(!f.edges[0].dashed, "edge 0 untouched");
+                assert!(f.edges[1].dashed, "linkStyle 1 marks edge 1");
             }
             _ => panic!("Expected flowchart"),
         }

@@ -15,6 +15,8 @@ use edges::{dfs_find_cycles, edge_arrow_heads, edge_hline, edge_vline};
 pub(super) struct LayoutNode {
     label_lines: Vec<String>,
     shape: NodeShape,
+    /// Propagated from `NodeSpec::dashed_border` (Mermaid `stroke-dasharray`)
+    dashed_border: bool,
     width: usize,
     height: usize,
     x: usize,
@@ -115,6 +117,7 @@ impl<'a> FlowchartRenderer<'a> {
             nodes.push(LayoutNode {
                 label_lines: lines,
                 shape: node.shape,
+                dashed_border: node.dashed_border,
                 width,
                 height,
                 x: 0,
@@ -240,6 +243,14 @@ impl<'a> FlowchartRenderer<'a> {
     #[allow(clippy::too_many_lines, reason = "one branch per node shape")]
     fn draw_node(&self, canvas: &mut Canvas, node: &LayoutNode) {
         let is_ascii = self.theme.box_style == BoxStyle::Ascii;
+        // Mermaid `class`/`style` `stroke-dasharray` → dashed border
+        let node_box = |canvas: &mut Canvas, theme: &Theme, title: Option<&str>| {
+            if node.dashed_border {
+                canvas.draw_dashed_box(node.x, node.y, node.width, node.height, theme, title);
+            } else {
+                canvas.draw_box(node.x, node.y, node.width, node.height, theme, title);
+            }
+        };
         match node.shape {
             NodeShape::Diamond => {
                 canvas.draw_decision_box(
@@ -249,6 +260,7 @@ impl<'a> FlowchartRenderer<'a> {
                     node.height,
                     &self.theme,
                     Some("◇"),
+                    node.dashed_border,
                 );
                 let text_start_y = node.y + 1;
                 for (i, line) in node.label_lines.iter().enumerate() {
@@ -269,14 +281,7 @@ impl<'a> FlowchartRenderer<'a> {
                     Theme::new(BoxStyle::Rounded)
                 };
                 let badge = if is_ascii { "(o)" } else { "○" };
-                canvas.draw_box(
-                    node.x,
-                    node.y,
-                    node.width,
-                    node.height,
-                    &circle_theme,
-                    Some(badge),
-                );
+                node_box(canvas, &circle_theme, Some(badge));
                 let text_start_y = node.y + 1;
                 for (i, line) in node.label_lines.iter().enumerate() {
                     let line_w = UnicodeWidthStr::width(line.as_str());
@@ -295,7 +300,7 @@ impl<'a> FlowchartRenderer<'a> {
                 } else {
                     Theme::new(BoxStyle::Sharp)
                 };
-                canvas.draw_box(node.x, node.y, node.width, node.height, &sub_theme, None);
+                node_box(canvas, &sub_theme, None);
                 let right = node.x + node.width - 1;
                 let bottom = node.y + node.height - 1;
 
@@ -337,7 +342,7 @@ impl<'a> FlowchartRenderer<'a> {
                 }
             }
             NodeShape::Database => {
-                canvas.draw_box(node.x, node.y, node.width, node.height, &self.theme, None);
+                node_box(canvas, &self.theme, None);
                 // Cylinder separator line
                 if node.height >= 3 {
                     canvas.draw_hline(node.x, node.x + node.width - 1, node.y + 1);
@@ -380,7 +385,7 @@ impl<'a> FlowchartRenderer<'a> {
                 } else {
                     Theme::new(BoxStyle::Sharp)
                 };
-                canvas.draw_box(node.x, node.y, node.width, node.height, &box_theme, None);
+                node_box(canvas, &box_theme, None);
                 if !is_ascii {
                     let right = node.x + node.width - 1;
                     let bottom = node.y + node.height - 1;
@@ -407,14 +412,7 @@ impl<'a> FlowchartRenderer<'a> {
                 } else {
                     Theme::new(BoxStyle::Rounded)
                 };
-                canvas.draw_box(
-                    node.x,
-                    node.y,
-                    node.width,
-                    node.height,
-                    &rounded_theme,
-                    None,
-                );
+                node_box(canvas, &rounded_theme, None);
                 let text_start_y = node.y + 1;
                 for (i, line) in node.label_lines.iter().enumerate() {
                     let line_w = UnicodeWidthStr::width(line.as_str());

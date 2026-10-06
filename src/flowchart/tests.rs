@@ -17,11 +17,13 @@ mod tests {
                     id: "A".to_string(),
                     label: "Client".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "B".to_string(),
                     label: "Server".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![EdgeSpec {
@@ -53,11 +55,13 @@ mod tests {
                     id: "A".to_string(),
                     label: "Start".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "B".to_string(),
                     label: "End".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![EdgeSpec {
@@ -88,16 +92,19 @@ mod tests {
                     id: "A".to_string(),
                     label: "Start".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "B".to_string(),
                     label: "Is Valid?".to_string(),
                     shape: NodeShape::Diamond,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "C".to_string(),
                     label: "Proceed".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![
@@ -140,21 +147,25 @@ mod tests {
                     id: "Ref".to_string(),
                     label: "Target".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "Sum".to_string(),
                     label: "Error".to_string(),
                     shape: NodeShape::Circle,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "PID".to_string(),
                     label: "Controller".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "Plant".to_string(),
                     label: "Motor".to_string(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![
@@ -229,6 +240,7 @@ mod self_loop_tests {
                 id: "A".to_string(),
                 label: "Box".to_string(),
                 shape: NodeShape::Box,
+                dashed_border: false,
             }],
             edges: vec![EdgeSpec {
                 from: "A".to_string(),
@@ -286,26 +298,31 @@ mod jump_group_tests {
                     id: "W".into(),
                     label: "Watchdog".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "A".into(),
                     label: "Task A".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "B".into(),
                     label: "Task B".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "C".into(),
                     label: "Task C".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "Z".into(),
                     label: "Done".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![
@@ -379,11 +396,13 @@ mod jump_group_tests {
                     id: "A".into(),
                     label: "Start".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "B".into(),
                     label: "End".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![EdgeSpec {
@@ -416,11 +435,13 @@ mod jump_group_tests {
                     id: "A".into(),
                     label: "Start".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
                 NodeSpec {
                     id: "B".into(),
                     label: "End".into(),
                     shape: NodeShape::Box,
+                    dashed_border: false,
                 },
             ],
             edges: vec![EdgeSpec {

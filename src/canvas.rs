@@ -544,20 +544,46 @@ impl Canvas {
         self.put_char_with_role(x, y, ch, CellRole::Arrow);
     }
 
-    /// Draws a styled rectangle box with optional title and content
-    ///
-    /// # Panics
-    ///
-    /// Panics if the box coordinates overflow `usize`, or on allocation failure
-    /// when the canvas must grow to fit the box.
     pub fn draw_box(
         &mut self,
         x: usize,
         y: usize,
         width: usize,
         height: usize,
-        _theme: &Theme,
+        theme: &Theme,
         title: Option<&str>,
+    ) {
+        self.draw_box_inner(x, y, width, height, theme, title, false);
+    }
+
+    /// Dashed-border box (Mermaid `class`/`style` with `stroke-dasharray`).
+    pub fn draw_dashed_box(
+        &mut self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        theme: &Theme,
+        title: Option<&str>,
+    ) {
+        self.draw_box_inner(x, y, width, height, theme, title, true);
+    }
+
+    /// Draws a styled rectangle box with optional title and content
+    ///
+    /// # Panics
+    ///
+    /// Panics if the box coordinates overflow `usize`, or on allocation failure
+    /// when the canvas must grow to fit the box.
+    fn draw_box_inner(
+        &mut self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        theme: &Theme,
+        title: Option<&str>,
+        dashed: bool,
     ) {
         if width < 2 || height < 2 {
             return;
@@ -580,12 +606,22 @@ impl Canvas {
         }
 
         // Draw horizontal edges
-        self.draw_hline(x, right, y);
-        self.draw_hline(x, right, bottom);
+        if dashed {
+            self.draw_dashed_hline(x, right, y, theme);
+            self.draw_dashed_hline(x, right, bottom, theme);
+        } else {
+            self.draw_hline(x, right, y);
+            self.draw_hline(x, right, bottom);
+        }
 
         // Draw vertical edges
-        self.draw_vline(x, y, bottom);
-        self.draw_vline(right, y, bottom);
+        if dashed {
+            self.draw_dashed_vline(x, y, bottom, theme);
+            self.draw_dashed_vline(right, y, bottom, theme);
+        } else {
+            self.draw_vline(x, y, bottom);
+            self.draw_vline(right, y, bottom);
+        }
 
         // Corners
         self.draw_corner(
@@ -771,6 +807,7 @@ impl Canvas {
         height: usize,
         theme: &Theme,
         badge: Option<&str>,
+        dashed: bool,
     ) {
         if width < 4 || height < 2 {
             return;
@@ -793,10 +830,11 @@ impl Canvas {
         }
 
         let is_ascii = theme.box_style == crate::theme::BoxStyle::Ascii;
-        let (tl, tr, bl, br, h_char, v_char) = if is_ascii {
-            ('+', '+', '+', '+', '=', '#')
-        } else {
-            ('╔', '╗', '╚', '╝', '═', '║')
+        let (tl, tr, bl, br, h_char, v_char) = match (is_ascii, dashed) {
+            (true, true) => ('+', '+', '+', '+', '-', '|'),
+            (true, false) => ('+', '+', '+', '+', '=', '#'),
+            (false, true) => ('╌', '╌', '╌', '╌', '╌', '┆'),
+            (false, false) => ('╔', '╗', '╚', '╝', '═', '║'),
         };
 
         // Draw horizontal edges

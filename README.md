@@ -33,6 +33,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
   - Chained edges (`A --> B --> C`), edge labels (`-->|label|`), dotted lines (`-.->`), loops
   - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`), thick (`==>`, `<==>` — heavy glyphs `━ ┃` in Unicode styles, `=` in ASCII style)
+  - Style directives: `classDef`, `class`, `style` and `linkStyle` are parsed — `stroke-dasharray` maps to dashed node borders / dashed edges. Fill and stroke *colors* have no channel in a monochrome character grid and are ignored
 - **Sequence Diagrams (`sequenceDiagram`)**:
   - Synchronous calls (`->`, `->>`), asynchronous messages (`-->`, `-->>`), bidirectional (`<->`)
   - Self loops (`A -> A: msg`)
@@ -56,7 +57,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 ### Known Limitations
 
 - Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes and sub-directions are not rendered
-- `classDef` / `class` / `style` directives are ignored
+- `classDef` / `class` / `style` / `linkStyle` color properties (`fill`, `stroke` colors) are ignored — a character grid has no color channel; only `stroke-dasharray` is applied (dashed borders/edges)
 
 ### Tips for Dense Graphs
 

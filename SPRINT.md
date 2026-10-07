@@ -80,3 +80,18 @@ orientation; README boundary documented.
 - Global crossing minimization in router (full dense-graph solution)
 - Mixed-direction cluster layout (supernode approach)
 - Horizontal-band `┼` between two dashed runs (both-dashed crossing glyph)
+
+---
+
+# Sprint v0.7.0 — Backlog Sprint
+
+**Goal:** clear the v0.6.0 post-sprint backlog (scoped versions).
+**Integration branch:** `sprint/v0.7.0` — merge order A → B → C → bump → `master`, tag `v0.7.0`.
+
+| Branch | Files owned | Scope |
+|---|---|---|
+| `feat/dashed-crossing-glyph` | `src/canvas.rs` | Dash × dash crossing: single crossing cell becomes a solid cross (pattern sacrificed at one cell, both strokes continuous). Small. |
+| `feat/barycenter-reorder` | `src/flowchart.rs`, `src/flowchart/tb.rs`, `src/flowchart/lr.rs` | Sugiyama crossing reduction: reorder nodes within layers by neighbor barycenter, 2 down/up sweeps, deterministic tiebreak. Medium — biggest visual win for dense graphs. |
+| `feat/supernode-clusters` | `src/flowchart.rs`, `src/flowchart/tb.rs` | Non-isolated subgraph with own `direction` → cluster block + phantom node in layout, external edges re-target to phantom. Timeboxed: fallback = current isolation behavior. High risk. |
+
+Acceptance: `cargo test` + `npm test` green per branch; before/after visual check for B and C.

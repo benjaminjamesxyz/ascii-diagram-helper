@@ -59,7 +59,10 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 - `classDef` / `class` / `style` / `linkStyle` `fill` colors and `stroke-width` are ignored — label text stays terminal-default by design (readability); only `stroke-dasharray` (dashed) and `stroke:<color>` (border/line color) are applied
 - Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` applies only to edge-isolated subgraphs — subgraphs with edges crossing their border use the global direction)
-- Tree / table / stack colors are JSON-only (their DSL has no color syntax): `root/child.color` on tree nodes (branch glyphs, inherited by subtree), `color` on table (grid lines), `color` per stack layer (layer borders)
+- Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
+  - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched
+  - Table: `color: <name|#hex>` directive line before the rows (whole-table grid color)
+  - Stack: trailing `@<name|#hex>` tag on a layer line — `0xFFFF: ISR vector @red`
 
 ### Tips for Dense Graphs
 

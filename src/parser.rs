@@ -805,6 +805,18 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
 ///
 /// Not expected in practice: the root sentinel keeps the indent stack
 /// non-empty, so every `unwrap()` is guarded by a `stack.len() > 1` check.
+/// Splits a trailing `@<name|#hex>` color tag off `s`. The tag must parse
+/// as a color name or `#hex`, so labels containing literal `@` (`user@host`)
+/// pass through untouched. Returns the trimmed rest and the parsed color.
+fn split_trailing_color(s: &str) -> (&str, Option<Color>) {
+    if let Some(idx) = s.rfind('@')
+        && let Some(c) = Color::parse(s[idx + 1..].trim())
+    {
+        return (s[..idx].trim_end(), Some(c));
+    }
+    (s, None)
+}
+
 pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
     let mut lines = input.lines().filter(|l| !l.trim().is_empty());
     let Some(first) = lines.next() else {
@@ -838,6 +850,9 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
         let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
         let content = trimmed_line.trim_start_matches("- ").trim();
 
+        // Trailing `@<color>` tag applies before annotation extraction so
+        // `API (port 8080) @blue` keeps both annotation and color
+        let (content, node_color) = split_trailing_color(content);
         let (name, ann) = if let Some(start) = content.find('(') {
             if let Some(end) = content.rfind(')') {
                 let n = content[..start].trim().to_string();
@@ -854,7 +869,7 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
             name,
             annotation: ann,
             children: Vec::new(),
-            color: None,
+            color: node_color,
         };
 
         while stack.len() > 1 && stack.last().unwrap().0 >= indent {
@@ -931,6 +946,8 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             continue;
         }
 
+        // Trailing `@<color>` tag (before annotation extraction)
+        let (clean_rest, layer_color) = split_trailing_color(clean_rest);
         let (label, desc) = if let Some(start) = clean_rest.find('(') {
             if let Some(end) = clean_rest.rfind(')') {
                 let l = clean_rest[..start].trim().to_string();
@@ -947,7 +964,7 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             label,
             address_or_id: addr,
             description: desc,
-            color: None,
+            color: layer_color,
         });
     }
 
@@ -969,12 +986,22 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
     let mut headers = Vec::new();
     let mut rows = Vec::new();
     let mut alignments = Vec::new();
+    let mut table_color = None;
 
     for line in input.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with("table") {
             continue;
         }
+
+        // `color: <name|#hex>` — grid/border color for the whole table
+        if let Some(rest) = trimmed.strip_prefix("color:") {
+            if let Some(c) = Color::parse(rest.trim()) {
+                table_color = Some(c);
+            }
+            continue;
+        }
+
         if !trimmed.contains('|') {
             continue;
         }
@@ -1029,7 +1056,7 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
 
     Ok(DiagramSpec::Table(TableSpec {
         style: default_style,
-        color: None,
+        color: table_color,
         headers,
         rows,
         alignments,
@@ -1354,6 +1381,58 @@ mod tests {
                 assert_eq!(g.nodes, vec!["C"], "B existed before the block");
             }
             _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_tree_node_color() {
+        let dsl = "Root\n    Server @red\n    API (port 8080) @#3498db\n    user@host";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.name, "Root");
+                let kids = &t.root.children;
+                assert_eq!(kids[0].name, "Server");
+                assert_eq!(kids[0].color, Some(Color::Red));
+                assert_eq!(kids[1].name, "API");
+                assert_eq!(kids[1].annotation.as_deref(), Some("port 8080"));
+                assert_eq!(kids[1].color, Some(Color::parse("#3498db").unwrap()));
+                // `user@host` is not a color tag — label stays intact
+                assert_eq!(kids[2].name, "user@host");
+                assert!(kids[2].color.is_none());
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stack_layer_color() {
+        let dsl = "memory-map Firmware\n    0xFFFF: ISR vector @red\n    0x8000: App (main) @blue\n    0x0000:";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Stack(s) => {
+                assert_eq!(s.layers[0].label, "ISR vector");
+                assert_eq!(s.layers[0].color, Some(Color::Red));
+                assert_eq!(s.layers[1].label, "App");
+                assert_eq!(s.layers[1].description.as_deref(), Some("main"));
+                assert_eq!(s.layers[1].color, Some(Color::Blue));
+                assert_eq!(s.bottom_address.as_deref(), Some("0x0000"));
+            }
+            _ => panic!("Expected stack"),
+        }
+    }
+
+    #[test]
+    fn test_parse_table_color_directive() {
+        let dsl = "table\ncolor: #e74c3c\n| A | B |\n|---|---|\n| 1 | 2 |";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Table(t) => {
+                assert_eq!(t.color, Some(Color::parse("#e74c3c").unwrap()));
+                assert_eq!(t.headers, vec!["A", "B"]);
+                assert_eq!(t.rows, vec![vec!["1", "2"]]);
+            }
+            _ => panic!("Expected table"),
         }
     }
 

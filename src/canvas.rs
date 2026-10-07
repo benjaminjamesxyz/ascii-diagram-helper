@@ -925,7 +925,8 @@ impl Canvas {
                 .get_cell(mid_x, bottom + 1)
                 .is_some_and(|c| c.is_line || c.ch == '│')
             {
-                self.put_char(mid_x, bottom, '╧');
+                // Border role so the pen color stamps these junction glyphs
+                self.put_char_with_role(mid_x, bottom, '╧', CellRole::Border);
             }
             // Left connector if horizontal line touches
             if x > 0
@@ -933,14 +934,14 @@ impl Canvas {
                     .get_cell(x - 1, mid_y)
                     .is_some_and(|c| c.is_line || c.ch == '─' || c.ch == '►')
             {
-                self.put_char(x, mid_y, '╟');
+                self.put_char_with_role(x, mid_y, '╟', CellRole::Border);
             }
             // Right connector if horizontal line touches
             if self
                 .get_cell(right + 1, mid_y)
                 .is_some_and(|c| c.is_line || c.ch == '─')
             {
-                self.put_char(right, mid_y, '╢');
+                self.put_char_with_role(right, mid_y, '╢', CellRole::Border);
             }
         }
 

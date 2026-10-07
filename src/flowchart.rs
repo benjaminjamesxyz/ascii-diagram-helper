@@ -1,4 +1,4 @@
-use crate::canvas::{Canvas, Direction, Rect};
+use crate::canvas::{Canvas, CellRole, Direction, Rect};
 use crate::color::Color;
 use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, SubgraphSpec};
 use crate::theme::{BoxStyle, Theme};
@@ -538,10 +538,11 @@ impl<'a> FlowchartRenderer<'a> {
                 if !is_ascii {
                     let right = node.x + node.width - 1;
                     let bottom = node.y + node.height - 1;
-                    canvas.put_char(node.x, node.y, '┌');
-                    canvas.put_char(right, node.y, '┐');
-                    canvas.put_char(node.x, bottom, '└');
-                    canvas.put_char(right, bottom, '┘');
+                    // Border role so the pen color stamps the corners
+                    canvas.put_char_with_role(node.x, node.y, '┌', CellRole::Border);
+                    canvas.put_char_with_role(right, node.y, '┐', CellRole::Border);
+                    canvas.put_char_with_role(node.x, bottom, '└', CellRole::Border);
+                    canvas.put_char_with_role(right, bottom, '┘', CellRole::Border);
                 }
                 let text_start_y = node.y + 1;
                 for (i, line) in node.label_lines.iter().enumerate() {

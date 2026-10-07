@@ -84,6 +84,12 @@ impl<'a> FlowchartRenderer<'a> {
                     if edge.label.is_some() {
                         band_gap[ur] = band_gap[ur].max(4);
                     }
+                    if edge.thick || edge.dashed {
+                        // Weighted/dashed strokes need a full trunk row to stay
+                        // visible when the trunk jogs (vline → hline → vline);
+                        // a 2-row band erases the vertical stroke entirely
+                        band_gap[ur] = band_gap[ur].max(3);
+                    }
                 }
             }
         }

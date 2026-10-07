@@ -1,3 +1,81 @@
+# Sprint v0.8.0 — Data-Structure Diagrams Expansion
+
+**Goal:** round out the `type:"datastructure"` family (tree/btree landed in
+v0.7.x): classic linear structures, low-friction DSL shorthand, node emphasis
+colors.
+**Integration branch:** `sprint/v0.8.0` (from `master`)
+**Merge order:** A → C → B → version bump → `master`, tag `v0.8.0`
+**Test gate per branch:** `cargo test` + `cargo clippy --all-targets` clean.
+
+## Parallel-work contract
+
+One `git worktree` per branch (`git worktree add ../asii-ds-<x> feat/<branch>
+master`). A branch may only edit files it owns. README edits are append-one-
+bullet at the end of the datastructure Features section; the integrator
+resolves trivial adjacent-line conflicts. An integration reviewer performs a
+merge dry-run on `sprint/v0.8.0` before anything touches `master`.
+
+| Branch | Files owned | Conflict risk |
+|---|---|---|
+| `feat/ds-list-array` | `src/schema.rs` (DsKind + new spec fields), `src/datastructure.rs` (new render fns + dispatch arms), tests | schema.rs/datastructure.rs overlap with C — A is additive; rebase on C if hunks collide |
+| `feat/ds-dsl-shorthand` | `src/parser.rs` (`ds` dispatch + `parse_datastructure_dsl`), tests | low |
+| `feat/ds-node-colors` | `src/schema.rs` (DsNode.color), `src/datastructure.rs` (paint threading), tests | schema.rs/datastructure.rs overlap with A |
+
+## Branch A — `feat/ds-list-array` — linked list + array kinds
+**Problem:** datastructure covers only tree/btree. Classic linear structures
+need the same textbook rendering.
+**Fix:** add `DsKind::LinkedList` and `DsKind::Array`:
+- `linkedlist`: new spec field `nodes: Vec<String>` + optional `head_label`
+  (default `"head"`). Single-row left→right layout: head label, arrow into the
+  first node box (two cells: value │ pointer `●`), theme arrow glyph between
+  boxes, last pointer cell shows `∅` (ASCII fallback `X` or `NULL`).
+- `array`: render `values: Vec<String>` as cells in one boxed row with
+  separators; centered index ruler row (`0 1 2 …`) above the cells.
+**Accept:** `{"type":"datastructure","kind":"linkedlist","nodes":["10","20","30"]}`
+renders head→chain→NULL; `{"kind":"array","values":["a","b","c"]}` renders
+ruler + cells. Unit tests for both kinds incl. ascii fallback. Gate green.
+**Files:** `src/schema.rs`, `src/datastructure.rs`, tests.
+
+## Branch B — `feat/ds-dsl-shorthand` — `ds` DSL for datastructure
+**Problem:** datastructure diagrams are JSON-only; quick sketches need less
+friction (`ds tree 8 3 10` currently errors with a JSON hint).
+**Fix:** `parse_datastructure_dsl` in parser.rs, dispatched on first token
+`ds` (replace the current JSON-only error path):
+- `ds tree <v...>` → kind tree, `values` (BST build) — `ds tree 8 3 10 1 6`
+- `ds btree <rootkeys> | <next-level cells> | ...` — pipe-separated levels,
+  comma-separated keys/cells, children assigned level-order (BFS). Example:
+  `ds btree 10,20 | 3,5 12,15 25,30`. Permissive arity: fewer children than
+  keys+1 renders as-is (same as JSON path).
+Malformed input → actionable error naming the expected syntax.
+**Accept:** `ascii-diagram dsl 'ds tree 8 3 10 1'` output byte-identical to
+the equivalent JSON spec render; `ds btree 10,20 | 3,5 12,15 25,30` renders
+the 3-node btree. Parser tests incl. malformed inputs. Gate green.
+**Files:** `src/parser.rs`, tests.
+
+## Branch C — `feat/ds-node-colors` — per-node color support
+**Problem:** other diagram types support node colors; datastructure nodes are
+mono, so path/route highlighting in dense trees is impossible.
+**Fix:** `DsNode.color: Option<Color>` (JSON). Thread `colored: bool` through
+`DataStructureRenderer::render(colored)`; paint a node's border glyphs (and
+the connector glyphs its subtree owns) with the nearest colored ancestor,
+overridable per node — same semantics as `TreeRenderer`'s `paint` + color
+inheritance. Label text stays default.
+**Accept:** colored render emits SGR around colored node glyphs; plain render
+is byte-identical to current output (zero ANSI). Tests both modes. Gate green.
+**Files:** `src/schema.rs`, `src/datastructure.rs`, tests.
+
+## Integration
+1. Reviewer merge dry-run: `sprint/v0.8.0` ← A → C → B (`--no-ff`), gate run
+2. Apply review findings, then merge `sprint/v0.8.0` → `master` (--no-ff)
+3. Bump `Cargo.toml` + `package.json` → `0.8.0`, `npm run sync:pi`, tag `v0.8.0`
+
+## Post-sprint backlog (not this sprint)
+- `ds linkedlist` / `ds array` shorthand (needs Branch A kinds first)
+- Queue/deque kind (front/rear markers), heap kind (array-as-tree dual view)
+- Graph (adjacency) kind: bucket row + neighbor chains
+
+---
+
 # Sprint v0.6.0 — Clear the 5 Remaining Minor Items
 
 **Goal:** zero undocumented limitations in README Known Limitations.

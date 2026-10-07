@@ -325,11 +325,13 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             continue;
         }
 
-        // linkStyle 0,2 prop:value,... — dashed / colored edges
+        // linkStyle 0,2 prop:value,... — dashed / colored edges. `fill` is
+        // aliased to the edge color (Mermaid links have no fill; the terminal
+        // edge color IS the line color)
         if let Some(rest) = trimmed.strip_prefix("linkStyle ") {
             if let Some((idxs, props)) = rest.split_once(char::is_whitespace) {
                 let dashed = prop_flag(props, "stroke-dasharray");
-                let color = prop_color(props, "stroke");
+                let color = prop_color(props, "stroke").or_else(|| prop_color(props, "fill"));
                 for idx in idxs.split(',') {
                     if let Ok(i) = idx.trim().parse::<usize>() {
                         if dashed {
@@ -1164,7 +1166,8 @@ mod tests {
 
     #[test]
     fn test_parse_existing_shapes_unchanged() {
-        let dsl = "graph TB; A[Box]; B(Rounded); C{Diamond}; D[(Db)]; E[[Sub]]; F([Stad]); G((Circle))";
+        let dsl =
+            "graph TB; A[Box]; B(Rounded); C{Diamond}; D[(Db)]; E[[Sub]]; F([Stad]); G((Circle))";
         let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
         match spec {
             DiagramSpec::Flowchart(f) => {
@@ -1331,6 +1334,17 @@ mod tests {
                 assert_eq!(f.nodes.len(), 2, "class lines must not create nodes");
                 assert_eq!(f.edges.len(), 1);
                 assert!(!f.nodes.iter().any(|n| n.dashed_border));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_link_style_fill_alias() {
+        let dsl = "graph TB; A --> B; B --> C; linkStyle 1 fill:red";
+        match parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges[1].color, Some(Color::Red), "fill aliases to edge color");
             }
             _ => panic!("Expected flowchart"),
         }

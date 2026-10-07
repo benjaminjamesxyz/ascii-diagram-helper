@@ -102,19 +102,9 @@ impl<'a> FlowchartRenderer<'a> {
             b.origin_y = cursor_y + 2;
             cursor_y = b.origin_y + b.height + 4;
         }
-        let blocks_extent = if blocks.is_empty() {
-            0
-        } else {
-            cursor_y
-        };
-        let canvas_w = (max_w + 10 + sg_margin).max(
-            blocks
-                .items
-                .iter()
-                .map(|b| b.width + 6)
-                .max()
-                .unwrap_or(0),
-        );
+        let blocks_extent = if blocks.is_empty() { 0 } else { cursor_y };
+        let canvas_w = (max_w + 10 + sg_margin)
+            .max(blocks.items.iter().map(|b| b.width + 6).max().unwrap_or(0));
         let canvas_h = (current_y + 4 + sg_margin).max(blocks_extent);
 
         let mut canvas = Canvas::new(canvas_w, canvas_h);
@@ -413,7 +403,14 @@ impl<'a> FlowchartRenderer<'a> {
                             // nearby arrowhead column when one already lands
                             // at the target top (dense supervisory feeds)
                             let drop_x = self.drop_x_for(&canvas, v_cx, v_top - 1);
-                            edge_hline(&mut canvas, edge, track_x, drop_x, bottom_gap_y, &self.theme);
+                            edge_hline(
+                                &mut canvas,
+                                edge,
+                                track_x,
+                                drop_x,
+                                bottom_gap_y,
+                                &self.theme,
+                            );
                             if bottom_gap_y < v_top - 1 {
                                 edge_vline(
                                     &mut canvas,

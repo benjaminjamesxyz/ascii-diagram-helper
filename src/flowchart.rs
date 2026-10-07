@@ -404,11 +404,7 @@ impl<'a> FlowchartRenderer<'a> {
                     if br - bx + 1 < min_w {
                         br = bx + min_w - 1;
                     }
-                    out.push((
-                        Rect::new(bx, by, br - bx + 1, bb - by + 1),
-                        title,
-                        sg.color,
-                    ));
+                    out.push((Rect::new(bx, by, br - bx + 1, bb - by + 1), title, sg.color));
                     continue;
                 }
                 if let Some(r) = group_rect(sg, nodes, idx, pad) {

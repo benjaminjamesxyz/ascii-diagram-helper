@@ -612,10 +612,7 @@ mod subgraph_direction_tests {
             .lines()
             .position(|l| l.contains("Y"))
             .expect("Y rendered");
-        assert_eq!(
-            x_col, y_col,
-            "X and Y on the same row (LR inside subgraph)"
-        );
+        assert_eq!(x_col, y_col, "X and Y on the same row (LR inside subgraph)");
         // Cluster group box wraps the pasted block
         assert!(out.lines().any(|l| l.contains("Cluster")));
         // A --> B unaffected (vertical)
@@ -744,7 +741,10 @@ mod fill_thick_tests {
         };
         let theme = crate::theme::Theme::new(BoxStyle::Sharp);
         let out = FlowchartRenderer::new(&spec, theme.clone()).render(true);
-        assert!(out.contains("\u{1b}[31mHot"), "red SGR around label in {out:?}");
+        assert!(
+            out.contains("\u{1b}[31mHot"),
+            "red SGR around label in {out:?}"
+        );
         // Uncolored render has no SGR
         let plain = FlowchartRenderer::new(&spec, theme).render(false);
         assert!(!plain.contains('\u{1b}'), "no SGR when colored=false");

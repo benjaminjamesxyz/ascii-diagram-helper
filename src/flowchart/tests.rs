@@ -858,3 +858,31 @@ mod border_level_tests {
         assert!(out.contains('╔') && out.contains('╚') && !out.contains('┏'));
     }
 }
+
+#[cfg(test)]
+mod crossing_junction_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn dash_run_crossing_solid_line_renders_junction() {
+        // Regression: dashed horizontal runs stamped ╌ over solid vertical
+        // lines, losing the vertical stroke at the crossing. Crossings now
+        // merge into junction glyphs (┼) with both strokes continuous.
+        let dsl = "graph TB
+            A --> B
+            A --> C
+            B --> D
+            C --> D
+            WDG -.-> D";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                assert!(out.contains('┼'), "crossing junction expected:\n{out}");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}

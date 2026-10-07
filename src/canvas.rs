@@ -462,6 +462,11 @@ impl Canvas {
                 continue; // pre-gap before text
             }
             let cell = &mut self.cells[base + x];
+            // A stale dash glyph from an earlier dashed run would suppress
+            // junction resolution (render only resolves ' ' line cells)
+            if cell.ch == '\u{252e}' || cell.ch == '-' {
+                cell.ch = ' ';
+            }
             cell.is_line = true;
             cell.thick = weight == 1;
             cell.double = weight == 2;
@@ -502,6 +507,18 @@ impl Canvas {
                 continue; // pre-gap before text
             }
             let cell = &mut self.cells[base + x];
+            // Crossing: a solid vertical line passes through this dash run —
+            // merge into a junction instead of overwriting the stroke; render
+            // resolves ┼ from the conn flags
+            if cell.is_line && cell.ch == ' ' && (cell.conn.north || cell.conn.south) {
+                cell.conn.east = true;
+                cell.conn.west = true;
+                if cell.role != CellRole::Border {
+                    cell.role = CellRole::Line;
+                    cell.color = self.pen;
+                }
+                continue;
+            }
             cell.ch = dash_char;
             cell.is_line = false;
             if cell.role != CellRole::Border {
@@ -526,6 +543,17 @@ impl Canvas {
         for y in y1..=y2 {
             let cell = &mut self.cells[y * self.width + x];
             if cell.role == CellRole::Text && cell.ch != ' ' {
+                continue;
+            }
+            // Crossing: a solid horizontal line passes through this dash run
+            // — merge into a junction instead of overwriting the stroke
+            if cell.is_line && cell.ch == ' ' && (cell.conn.east || cell.conn.west) {
+                cell.conn.north = true;
+                cell.conn.south = true;
+                if cell.role != CellRole::Border {
+                    cell.role = CellRole::Line;
+                    cell.color = self.pen;
+                }
                 continue;
             }
             cell.ch = dash_char;
@@ -561,6 +589,10 @@ impl Canvas {
             // Collision protection: don't overwrite text with a line
             if cell.role == CellRole::Text && cell.ch != ' ' {
                 continue;
+            }
+            // Clear stale dash glyphs so junction resolution applies
+            if cell.ch == '\u{2546}' || cell.ch == '|' {
+                cell.ch = ' ';
             }
             cell.is_line = true;
             cell.thick = weight == 1;
@@ -609,12 +641,16 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, false, 0);
+        self.draw_box_inner(Rect::new(x, y, width, height), theme, title, false, 0);
     }
 
     /// Weighted box border (Mermaid `class`/`style` `stroke-width`): `1` =
     /// heavy `┏━┓` (>=2px), `2` = double `╔═╗` (>=3px). Glyphs resolved at
     /// render time like `==>` edge runs.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public API keeps explicit x/y/width/height for call-site readability"
+    )]
     pub fn draw_weighted_box(
         &mut self,
         x: usize,
@@ -625,7 +661,7 @@ impl Canvas {
         title: Option<&str>,
         weight: u8,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, false, weight);
+        self.draw_box_inner(Rect::new(x, y, width, height), theme, title, false, weight);
     }
 
     /// Dashed-border box (Mermaid `class`/`style` with `stroke-dasharray`).
@@ -638,7 +674,7 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, true, 0);
+        self.draw_box_inner(Rect::new(x, y, width, height), theme, title, true, 0);
     }
 
     /// Draws a styled rectangle box with optional title and content
@@ -649,15 +685,15 @@ impl Canvas {
     /// when the canvas must grow to fit the box.
     fn draw_box_inner(
         &mut self,
-        x: usize,
-        y: usize,
-        width: usize,
-        height: usize,
+        rect: Rect,
         theme: &Theme,
         title: Option<&str>,
         dashed: bool,
         weight: u8,
     ) {
+        let (x, y) = (rect.x, rect.y);
+        let width = rect.width;
+        let height = rect.height;
         if width < 2 || height < 2 {
             return;
         }

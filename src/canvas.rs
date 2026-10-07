@@ -89,6 +89,9 @@ pub struct Cell {
     /// Set on cells belonging to a thick (`==>`-style) edge run; picks heavy
     /// glyphs at render time.
     pub thick: bool,
+    /// Set on cells of double-weight (`stroke-width:>=3px`) box borders; picks
+    /// double glyphs (`╔═╗`) at render time. Takes precedence over `thick`.
+    pub double: bool,
     pub custom_corner: Option<char>,
     pub role: CellRole,
     /// Emphasis color for border/line/arrow cells; `None` on text cells.
@@ -103,6 +106,7 @@ impl Default for Cell {
             conn: LineConn::default(),
             is_line: false,
             thick: false,
+            double: false,
             custom_corner: None,
             role: CellRole::Empty,
             color: None,
@@ -425,17 +429,22 @@ impl Canvas {
     }
 
     pub fn draw_hline(&mut self, x1: usize, x2: usize, y: usize) {
-        self.draw_hline_thick(x1, x2, y, false);
+        self.draw_hline_weight(x1, x2, y, 0);
     }
 
     /// Thick horizontal line (heavy glyphs at render time).
     pub fn draw_thick_hline(&mut self, x1: usize, x2: usize, y: usize) {
-        self.draw_hline_thick(x1, x2, y, true);
+        self.draw_hline_weight(x1, x2, y, 1);
     }
 
-    fn draw_hline_thick(&mut self, x1: usize, x2: usize, y: usize, thick: bool) {
+    /// Double-weight horizontal line (`stroke-width:>=3px` box borders).
+    pub fn draw_double_hline(&mut self, x1: usize, x2: usize, y: usize) {
+        self.draw_hline_weight(x1, x2, y, 2);
+    }
+
+    fn draw_hline_weight(&mut self, x1: usize, x2: usize, y: usize, weight: u8) {
         if x1 > x2 {
-            return self.draw_hline_thick(x2, x1, y, thick);
+            return self.draw_hline_weight(x2, x1, y, weight);
         }
         self.ensure_capacity(x2, y);
         let base = y * self.width;
@@ -453,8 +462,14 @@ impl Canvas {
                 continue; // pre-gap before text
             }
             let cell = &mut self.cells[base + x];
+            // A stale dash glyph from an earlier dashed run would suppress
+            // junction resolution (render only resolves ' ' line cells)
+            if cell.ch == '\u{252e}' || cell.ch == '-' {
+                cell.ch = ' ';
+            }
             cell.is_line = true;
-            cell.thick = thick;
+            cell.thick = weight == 1;
+            cell.double = weight == 2;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
                 cell.color = self.pen;
@@ -492,6 +507,18 @@ impl Canvas {
                 continue; // pre-gap before text
             }
             let cell = &mut self.cells[base + x];
+            // Crossing: a solid vertical line passes through this dash run —
+            // merge into a junction instead of overwriting the stroke; render
+            // resolves ┼ from the conn flags
+            if cell.is_line && cell.ch == ' ' && (cell.conn.north || cell.conn.south) {
+                cell.conn.east = true;
+                cell.conn.west = true;
+                if cell.role != CellRole::Border {
+                    cell.role = CellRole::Line;
+                    cell.color = self.pen;
+                }
+                continue;
+            }
             cell.ch = dash_char;
             cell.is_line = false;
             if cell.role != CellRole::Border {
@@ -518,6 +545,17 @@ impl Canvas {
             if cell.role == CellRole::Text && cell.ch != ' ' {
                 continue;
             }
+            // Crossing: a solid horizontal line passes through this dash run
+            // — merge into a junction instead of overwriting the stroke
+            if cell.is_line && cell.ch == ' ' && (cell.conn.east || cell.conn.west) {
+                cell.conn.north = true;
+                cell.conn.south = true;
+                if cell.role != CellRole::Border {
+                    cell.role = CellRole::Line;
+                    cell.color = self.pen;
+                }
+                continue;
+            }
             cell.ch = dash_char;
             cell.is_line = false;
             if cell.role != CellRole::Border {
@@ -527,17 +565,22 @@ impl Canvas {
     }
 
     pub fn draw_vline(&mut self, x: usize, y1: usize, y2: usize) {
-        self.draw_vline_thick(x, y1, y2, false);
+        self.draw_vline_weight(x, y1, y2, 0);
     }
 
     /// Thick vertical line (heavy glyphs at render time).
     pub fn draw_thick_vline(&mut self, x: usize, y1: usize, y2: usize) {
-        self.draw_vline_thick(x, y1, y2, true);
+        self.draw_vline_weight(x, y1, y2, 1);
     }
 
-    fn draw_vline_thick(&mut self, x: usize, y1: usize, y2: usize, thick: bool) {
+    /// Double-weight vertical line (`stroke-width:>=3px` box borders).
+    pub fn draw_double_vline(&mut self, x: usize, y1: usize, y2: usize) {
+        self.draw_vline_weight(x, y1, y2, 2);
+    }
+
+    fn draw_vline_weight(&mut self, x: usize, y1: usize, y2: usize, weight: u8) {
         if y1 > y2 {
-            return self.draw_vline_thick(x, y2, y1, thick);
+            return self.draw_vline_weight(x, y2, y1, weight);
         }
         self.ensure_capacity(x, y2);
 
@@ -547,8 +590,13 @@ impl Canvas {
             if cell.role == CellRole::Text && cell.ch != ' ' {
                 continue;
             }
+            // Clear stale dash glyphs so junction resolution applies
+            if cell.ch == '\u{2546}' || cell.ch == '|' {
+                cell.ch = ' ';
+            }
             cell.is_line = true;
-            cell.thick = thick;
+            cell.thick = weight == 1;
+            cell.double = weight == 2;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
                 cell.color = self.pen;
@@ -593,12 +641,17 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, false, false);
+        self.draw_box_inner(Rect::new(x, y, width, height), theme, title, false, 0);
     }
 
-    /// Thick-bordered box (Mermaid `class`/`style` `stroke-width:>=2`). Heavy
-    /// line glyphs, resolved at render time like `==>` edge runs.
-    pub fn draw_thick_box(
+    /// Weighted box border (Mermaid `class`/`style` `stroke-width`): `1` =
+    /// heavy `┏━┓` (>=2px), `2` = double `╔═╗` (>=3px). Glyphs resolved at
+    /// render time like `==>` edge runs.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public API keeps explicit x/y/width/height for call-site readability"
+    )]
+    pub fn draw_weighted_box(
         &mut self,
         x: usize,
         y: usize,
@@ -606,8 +659,9 @@ impl Canvas {
         height: usize,
         theme: &Theme,
         title: Option<&str>,
+        weight: u8,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, false, true);
+        self.draw_box_inner(Rect::new(x, y, width, height), theme, title, false, weight);
     }
 
     /// Dashed-border box (Mermaid `class`/`style` with `stroke-dasharray`).
@@ -620,7 +674,7 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, true, false);
+        self.draw_box_inner(Rect::new(x, y, width, height), theme, title, true, 0);
     }
 
     /// Draws a styled rectangle box with optional title and content
@@ -631,15 +685,15 @@ impl Canvas {
     /// when the canvas must grow to fit the box.
     fn draw_box_inner(
         &mut self,
-        x: usize,
-        y: usize,
-        width: usize,
-        height: usize,
+        rect: Rect,
         theme: &Theme,
         title: Option<&str>,
         dashed: bool,
-        thick: bool,
+        weight: u8,
     ) {
+        let (x, y) = (rect.x, rect.y);
+        let width = rect.width;
+        let height = rect.height;
         if width < 2 || height < 2 {
             return;
         }
@@ -664,9 +718,12 @@ impl Canvas {
         if dashed {
             self.draw_dashed_hline(x, right, y, theme);
             self.draw_dashed_hline(x, right, bottom, theme);
-        } else if thick {
+        } else if weight == 1 {
             self.draw_thick_hline(x, right, y);
             self.draw_thick_hline(x, right, bottom);
+        } else if weight == 2 {
+            self.draw_double_hline(x, right, y);
+            self.draw_double_hline(x, right, bottom);
         } else {
             self.draw_hline(x, right, y);
             self.draw_hline(x, right, bottom);
@@ -676,9 +733,12 @@ impl Canvas {
         if dashed {
             self.draw_dashed_vline(x, y, bottom, theme);
             self.draw_dashed_vline(right, y, bottom, theme);
-        } else if thick {
+        } else if weight == 1 {
             self.draw_thick_vline(x, y, bottom);
             self.draw_thick_vline(right, y, bottom);
+        } else if weight == 2 {
+            self.draw_double_vline(x, y, bottom);
+            self.draw_double_vline(right, y, bottom);
         } else {
             self.draw_vline(x, y, bottom);
             self.draw_vline(right, y, bottom);
@@ -1042,6 +1102,7 @@ impl Canvas {
 
         // Build output directly with a single allocation
         let mut out = String::with_capacity((max_y + 1) * (max_x + 2));
+        let double_theme = Theme::new(crate::theme::BoxStyle::Double);
         let mut current: Option<Color> = None;
         for (y, &rx) in row_max_x.iter().enumerate().take(max_y + 1) {
             let limit = rx.min(max_x);
@@ -1065,7 +1126,12 @@ impl Canvas {
                     current = cell.color;
                 }
                 if cell.is_line && cell.ch == ' ' {
-                    out.push(resolve_line_glyph(cell.conn, theme, cell.thick));
+                    let (t, thick) = if cell.double {
+                        (&double_theme, false)
+                    } else {
+                        (theme, cell.thick)
+                    };
+                    out.push(resolve_line_glyph(cell.conn, t, thick));
                 } else {
                     out.push(cell.ch);
                 }

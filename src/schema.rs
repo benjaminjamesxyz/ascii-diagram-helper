@@ -18,18 +18,18 @@ pub enum LayoutDirection {
 pub enum NodeShape {
     #[default]
     Box, // [Text]
-    Rounded,    // (Text)
-    Diamond,    // {Text} - Decision
-    Database,   // [(Text)] - Cylinder
-    Subprocess, // [[Text]]
-    Stadium,    // ([Text]) - Pill
-    Circle,     // ((Text))
-    Hexagon,    // {{Text}} - Preparation / condition
-    DoubleCircle,   // (((Text))) - Start / end point
-    Parallelogram,  // [/Text/] - Input
+    Rounded,          // (Text)
+    Diamond,          // {Text} - Decision
+    Database,         // [(Text)] - Cylinder
+    Subprocess,       // [[Text]]
+    Stadium,          // ([Text]) - Pill
+    Circle,           // ((Text))
+    Hexagon,          // {{Text}} - Preparation / condition
+    DoubleCircle,     // (((Text))) - Start / end point
+    Parallelogram,    // [/Text/] - Input
     ParallelogramAlt, // [\Text\] - Output (lean left)
-    Trapezoid,      // [/Text\] - Manual input
-    TrapezoidAlt,   // [\Text/] - Manual operation
+    Trapezoid,        // [/Text\] - Manual input
+    TrapezoidAlt,     // [\Text/] - Manual operation
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,9 +49,10 @@ pub struct NodeSpec {
     /// (maps to ANSI foreground — readable on any terminal background).
     #[serde(default)]
     pub fill_color: Option<Color>,
-    /// Thicker border glyphs, set via `stroke-width:2px` or higher.
+    /// Border weight from `stroke-width`: `0` default, `1` heavy `┏━┓`
+    /// (≥2px), `2` double `╔═╗` (≥3px).
     #[serde(default)]
-    pub thick_border: bool,
+    pub border_level: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

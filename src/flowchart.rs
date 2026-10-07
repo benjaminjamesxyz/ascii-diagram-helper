@@ -23,8 +23,8 @@ pub(super) struct LayoutNode {
     /// Propagated from `NodeSpec::fill_color` (Mermaid `fill:<name|hex>`) —
     /// label text color
     fill_color: Option<Color>,
-    /// Propagated from `NodeSpec::thick_border` (`stroke-width:>=2`)
-    thick_border: bool,
+    /// Propagated from `NodeSpec::border_level` (`stroke-width` weight)
+    border_level: u8,
     width: usize,
     height: usize,
     x: usize,
@@ -303,7 +303,7 @@ impl<'a> FlowchartRenderer<'a> {
                 dashed_border: node.dashed_border,
                 color: node.color,
                 fill_color: node.fill_color,
-                thick_border: node.thick_border,
+                border_level: node.border_level,
                 width,
                 height,
                 x: 0,
@@ -343,6 +343,7 @@ impl<'a> FlowchartRenderer<'a> {
             nodes: &[LayoutNode],
             idx: &HashMap<&str, usize>,
             pad: (usize, usize, usize),
+            blocks: &Blocks,
         ) -> Option<Rect> {
             let (pad_x, pad_top, pad_bottom) = pad;
             let mut x0 = usize::MAX;
@@ -359,7 +360,12 @@ impl<'a> FlowchartRenderer<'a> {
                 }
             }
             for child in &sg.subgraphs {
-                if let Some(r) = group_rect(child, nodes, idx, pad) {
+                // Moved children render as pasted blocks elsewhere; their
+                // member coords are phantom and would inflate this box
+                if blocks.rect_for(&child.id).is_some() {
+                    continue;
+                }
+                if let Some(r) = group_rect(child, nodes, idx, pad, blocks) {
                     x0 = x0.min(r.x);
                     y0 = y0.min(r.y);
                     x1 = x1.max(r.x + r.width - 1);
@@ -404,14 +410,10 @@ impl<'a> FlowchartRenderer<'a> {
                     if br - bx + 1 < min_w {
                         br = bx + min_w - 1;
                     }
-                    out.push((
-                        Rect::new(bx, by, br - bx + 1, bb - by + 1),
-                        title,
-                        sg.color,
-                    ));
+                    out.push((Rect::new(bx, by, br - bx + 1, bb - by + 1), title, sg.color));
                     continue;
                 }
-                if let Some(r) = group_rect(sg, nodes, idx, pad) {
+                if let Some(r) = group_rect(sg, nodes, idx, pad, blocks) {
                     out.push((
                         r,
                         sg.title.clone().unwrap_or_else(|| sg.id.clone()),
@@ -618,13 +620,21 @@ impl<'a> FlowchartRenderer<'a> {
         let is_ascii = self.theme.box_style == BoxStyle::Ascii;
         canvas.set_pen(node.color);
         // Mermaid `class`/`style` `stroke-dasharray` → dashed border;
-        // `stroke-width:>=2` → heavy border glyphs (box edges only — dashed
-        // and thick are mutually exclusive, dashed wins)
+        // `stroke-width` → weighted border glyphs (box edges only — dashed
+        // and weighted are mutually exclusive, dashed wins)
         let node_box = |canvas: &mut Canvas, theme: &Theme, title: Option<&str>| {
             if node.dashed_border {
                 canvas.draw_dashed_box(node.x, node.y, node.width, node.height, theme, title);
-            } else if node.thick_border {
-                canvas.draw_thick_box(node.x, node.y, node.width, node.height, theme, title);
+            } else if node.border_level > 0 {
+                canvas.draw_weighted_box(
+                    node.x,
+                    node.y,
+                    node.width,
+                    node.height,
+                    theme,
+                    title,
+                    node.border_level,
+                );
             } else {
                 canvas.draw_box(node.x, node.y, node.width, node.height, theme, title);
             }
@@ -731,7 +741,7 @@ impl<'a> FlowchartRenderer<'a> {
                         }
                     }
                 } else {
-                    if !node.thick_border {
+                    if node.border_level == 0 {
                         canvas.put_char(node.x, node.y, '┌');
                         canvas.put_char(right, node.y, '┐');
                         canvas.put_char(node.x, bottom, '└');
@@ -790,8 +800,8 @@ impl<'a> FlowchartRenderer<'a> {
                 };
                 node_box(canvas, &box_theme, None);
                 // Literal sharp corners force the block look in any theme;
-                // thick boxes resolve corners from the heavy glyph table
-                if !is_ascii && !node.thick_border {
+                // weighted boxes resolve corners from the glyph tables
+                if !is_ascii && node.border_level == 0 {
                     let right = node.x + node.width - 1;
                     let bottom = node.y + node.height - 1;
                     // Border role so the pen color stamps the corners

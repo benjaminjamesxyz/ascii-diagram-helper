@@ -119,14 +119,8 @@ impl<'a> FlowchartRenderer<'a> {
             cursor_y = b.origin_y + b.height + 4;
         }
         let blocks_extent = if blocks.is_empty() { 0 } else { cursor_y };
-        let canvas_w = (current_x + 6 + sg_margin).max(
-            blocks
-                .items
-                .iter()
-                .map(|b| b.width + 6)
-                .max()
-                .unwrap_or(0),
-        );
+        let canvas_w = (current_x + 6 + sg_margin)
+            .max(blocks.items.iter().map(|b| b.width + 6).max().unwrap_or(0));
         let canvas_h = (max_h + 4 + sg_margin).max(blocks_extent);
 
         let mut canvas = Canvas::new(canvas_w, canvas_h);

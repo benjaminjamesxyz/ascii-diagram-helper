@@ -57,8 +57,11 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 ### Known Limitations
 
-- `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width:>=2px` renders the node border with heavy glyphs (`┏━┓`); `stroke-width:1px` and other widths are treated as default. `linkStyle` `fill` is ignored — edges have no fill
-- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` applies only to edge-isolated subgraphs — subgraphs with edges crossing their border use the global direction)
+- `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width` is graduated: `2px` → heavy glyphs (`┏━┓`), `3px`+ → double (`╔═╗`); `1px` and fractional widths below 2 are treated as default. `linkStyle` `fill` is aliased to the edge line color (Mermaid links have no fill)
+- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border. Per-subgraph `direction` boundary:
+  - **Applies** when the subgraph (including all nested members) has no edges crossing its border — rendered as a self-contained block in its own orientation, pasted beside/below the main graph
+  - **Applies to nested children** whose own member set is edge-isolated, even when the parent subgraph has external edges (the child moves out; the parent's group box wraps only its remaining members)
+  - **Falls back to global direction** when any edge crosses the subgraph's border (Mermaid parity — full mixed-direction cluster layout is future work)
 - Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
   - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched
   - Table: `color: <name|#hex>` directive line before the rows (whole-table grid color)
@@ -68,7 +71,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 Cross-branch edges (watchdog kicks, config broadcasts, debug taps) render correctly at any density and converge on a single arrowhead column per target — no adjacent `▼▼` pairs when a target is fed from both a direct edge and a supervisory feed. They still get visually busy past a threshold, so:
 
-- **Limit cross-branch edges per source to ≤ 2.** Beyond that, every edge still renders (shared corridor track per source), but dash runs cross more bands and gain `┼` crossings
+- **Limit cross-branch edges per source to ≤ 2.** Beyond that, every edge still renders (shared corridor track per source); dash runs cross more bands — crossings render as `┼` junctions with both strokes continuous, but the picture stays busier
 - **Prefer one fan-out over many hops**: `WDG -.-> A` + `WDG -.-> B` renders cleaner than routing a kick through intermediate tasks
 - **Split by concern**: put watchdog/telemetry/config wiring in a companion diagram instead of overlaying it on the main dataflow — the task graph stays readable and the cross-branch view gets its own clear picture
 - **Use dashed style (`-.->`) for supervisory edges** — visually separates control-plane from data-plane at a glance

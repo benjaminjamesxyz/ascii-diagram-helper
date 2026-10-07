@@ -20,7 +20,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -29,7 +29,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -66,7 +66,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -75,7 +75,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -111,7 +111,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -120,7 +120,7 @@ mod tests {
                     shape: NodeShape::Diamond,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -129,7 +129,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -178,7 +178,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -187,7 +187,7 @@ mod tests {
                     shape: NodeShape::Circle,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -196,7 +196,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -205,7 +205,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -288,7 +288,7 @@ mod self_loop_tests {
                 shape: NodeShape::Box,
                 dashed_border: false,
                 fill_color: None,
-                thick_border: false,
+                border_level: 0,
                 color: None,
             }],
             edges: vec![EdgeSpec {
@@ -351,7 +351,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -360,7 +360,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -369,7 +369,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -378,7 +378,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -387,7 +387,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -500,7 +500,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -509,7 +509,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -550,7 +550,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -559,7 +559,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -612,10 +612,7 @@ mod subgraph_direction_tests {
             .lines()
             .position(|l| l.contains("Y"))
             .expect("Y rendered");
-        assert_eq!(
-            x_col, y_col,
-            "X and Y on the same row (LR inside subgraph)"
-        );
+        assert_eq!(x_col, y_col, "X and Y on the same row (LR inside subgraph)");
         // Cluster group box wraps the pasted block
         assert!(out.lines().any(|l| l.contains("Cluster")));
         // A --> B unaffected (vertical)
@@ -713,7 +710,7 @@ mod fill_thick_tests {
                 dashed_border: false,
                 color: None,
                 fill_color: None,
-                thick_border: true,
+                border_level: 1,
             }],
             edges: Vec::new(),
         };
@@ -738,13 +735,16 @@ mod fill_thick_tests {
                 dashed_border: false,
                 color: None,
                 fill_color: Some(crate::color::Color::Red),
-                thick_border: false,
+                border_level: 0,
             }],
             edges: Vec::new(),
         };
         let theme = crate::theme::Theme::new(BoxStyle::Sharp);
         let out = FlowchartRenderer::new(&spec, theme.clone()).render(true);
-        assert!(out.contains("\u{1b}[31mHot"), "red SGR around label in {out:?}");
+        assert!(
+            out.contains("\u{1b}[31mHot"),
+            "red SGR around label in {out:?}"
+        );
         // Uncolored render has no SGR
         let plain = FlowchartRenderer::new(&spec, theme).render(false);
         assert!(!plain.contains('\u{1b}'), "no SGR when colored=false");
@@ -809,6 +809,166 @@ mod dense_feed_tests {
         // All five targets still receive their edges
         for id in ["SCHED", "COMM", "T1", "T2", "T3", "T4", "ACT", "SENSE"] {
             assert!(out.contains(id), "{id} missing");
+        }
+    }
+}
+
+#[cfg(test)]
+mod border_level_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    fn render_with_level(level: u8) -> String {
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Sharp,
+            title: None,
+            subgraphs: Vec::new(),
+            nodes: vec![NodeSpec {
+                id: "A".to_string(),
+                label: "X".to_string(),
+                shape: NodeShape::Box,
+                dashed_border: false,
+                color: None,
+                fill_color: None,
+                border_level: level,
+            }],
+            edges: Vec::new(),
+        };
+        let theme = crate::theme::Theme::new(BoxStyle::Sharp);
+        FlowchartRenderer::new(&spec, theme).render(false)
+    }
+
+    #[test]
+    fn level_0_renders_sharp() {
+        let out = render_with_level(0);
+        assert!(out.contains('┌') && !out.contains('┏') && !out.contains('╔'));
+    }
+
+    #[test]
+    fn level_1_renders_heavy() {
+        let out = render_with_level(1);
+        assert!(out.contains('┏') && out.contains('┗') && !out.contains('╔'));
+    }
+
+    #[test]
+    fn level_2_renders_double() {
+        let out = render_with_level(2);
+        assert!(out.contains('╔') && out.contains('╚') && !out.contains('┏'));
+    }
+}
+
+#[cfg(test)]
+mod crossing_junction_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn dash_run_crossing_solid_line_renders_junction() {
+        // Regression: dashed horizontal runs stamped ╌ over solid vertical
+        // lines, losing the vertical stroke at the crossing. Crossings now
+        // merge into junction glyphs (┼) with both strokes continuous.
+        let dsl = "graph TB
+            A --> B
+            A --> C
+            B --> D
+            C --> D
+            WDG -.-> D";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                assert!(out.contains('┼'), "crossing junction expected:\n{out}");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod track_side_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn left_heavy_feeds_route_left_corridor() {
+        // Majority of jump targets left of the source → shared track on the
+        // left corridor (shorter runs, fewer band crossings)
+        let dsl = "graph TB
+            CORE --> A1
+            CORE --> A2
+            A1 --> B1
+            A2 --> B2
+            WDG -.-> A1
+            WDG -.-> B1
+            WDG -.-> B2";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                // Left track column: a dash glyph in the first columns of the
+                // mid rows (the track runs the diagram height)
+                let left_track = out
+                    .lines()
+                    .filter(|l| l.starts_with('┆') || l.starts_with('|'))
+                    .count();
+                assert!(left_track >= 3, "left corridor track expected:\n{out}");
+                // All targets still fed
+                for id in ["A1", "B1", "B2"] {
+                    assert!(out.contains(id));
+                }
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod nested_direction_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn isolated_child_of_non_isolated_parent_keeps_direction() {
+        // `inner` has only internal edges → moves to its own LR block even
+        // though its parent `outer` has external edges. The parent's group
+        // box must NOT inflate to the moved child's phantom coordinates.
+        let dsl = "graph TB
+            MAIN --> A
+            A --> B
+            subgraph outer
+              subgraph inner [Inner LR]
+                direction LR
+                X --> Y
+              end
+              MAIN --> Z
+            end";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                // Inner block rendered in its own orientation (X left of Y)
+                let x_row = out.lines().position(|l| l.contains("X")).unwrap();
+                let y_row = out.lines().position(|l| l.contains("Y")).unwrap();
+                assert_eq!(x_row, y_row, "inner cluster laid out LR:\n{out}");
+                // Parent box does not reach column 0 via phantom coords:
+                // MAIN/A/B render outside the outer box's top-left
+                let outer_top = out
+                    .lines()
+                    .position(|l| l.contains("╭─ outer"))
+                    .expect("outer box");
+                let line = &out.lines().nth(outer_top).unwrap();
+                let box_x = line.find('╭').unwrap();
+                assert!(
+                    box_x > 0,
+                    "outer box inflated by moved child's phantom coords:\n{out}"
+                );
+            }
+            _ => panic!("Expected flowchart"),
         }
     }
 }

@@ -250,7 +250,7 @@ mod tests {
         };
 
         let renderer = FlowchartRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let mut nodes = renderer.prepare_nodes();
+        let mut nodes = renderer.prepare_nodes(&Blocks::empty());
         let idx = renderer.index_of();
         let layers = renderer.assign_ranks(&mut nodes, &idx);
 
@@ -967,6 +967,139 @@ mod nested_direction_tests {
                     box_x > 0,
                     "outer box inflated by moved child's phantom coords:\n{out}"
                 );
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod dashed_crossing_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn dashed_x_dashed_crossing_renders_junction() {
+        // Two dashed runs crossing: the crossing cell becomes a solid cross
+        // so neither stroke loses continuity (was: one dash overwrote the
+        // other, leaving a gap in one run)
+        let dsl = "graph TB
+            T --> M
+            S -.-> M
+            S -.-> R
+            T -.-> R";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                assert!(out.matches('┼').count() >= 4, "dash×dash junctions expected:\n{out}");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod barycenter_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn reduce_crossings_fixes_crossed_layer_order() {
+        // 6 nodes, ranks [0,0,1,1,2,2]; edges A→C, B→D, A→D, C→F, D→E, C→E.
+        // Layers given with L2 = [E, F] (E left of F) which crosses C→F
+        // against D→E. Barycenter sweeps must settle L2 = [F, E].
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Sharp,
+            title: None,
+            subgraphs: Vec::new(),
+            nodes: ["A", "B", "C", "D", "E", "F"]
+                .iter()
+                .map(|id| NodeSpec {
+                    id: id.to_string(),
+                    label: id.to_string(),
+                    shape: NodeShape::Box,
+                    dashed_border: false,
+                    color: None,
+                    fill_color: None,
+                    border_level: 0,
+                })
+                .collect(),
+            edges: vec![
+                ("A", "C"),
+                ("B", "D"),
+                ("A", "D"),
+                ("C", "F"),
+                ("D", "E"),
+                ("C", "E"),
+            ]
+            .into_iter()
+            .map(|(f, t)| EdgeSpec {
+                from: f.to_string(),
+                to: t.to_string(),
+                label: None,
+                arrow: ArrowDirection::Forward,
+                dashed: false,
+                thick: false,
+                color: None,
+            })
+            .collect(),
+        };
+        let renderer = FlowchartRenderer::new(&spec, crate::theme::Theme::new(BoxStyle::Sharp));
+        let idx = renderer.index_of();
+        let mut layers: Vec<Vec<usize>> = vec![
+            vec![idx["A"], idx["B"]],
+            vec![idx["C"], idx["D"]],
+            vec![idx["E"], idx["F"]],
+        ];
+        renderer.reduce_crossings(&mut layers, &idx);
+        let l2: Vec<&str> = layers[2]
+            .iter()
+            .map(|&i| spec.nodes[i].id.as_str())
+            .collect();
+        assert_eq!(l2, vec!["F", "E"], "L2 reordered to kill the crossing");
+    }
+}
+
+#[cfg(test)]
+mod supernode_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn non_isolated_cluster_renders_as_supernode_block() {
+        // Cluster with external edges + own direction: members collapse into
+        // a phantom node; the block is pasted at the phantom's position with
+        // its own orientation (LR inside a TB graph)
+        let dsl = "graph TB
+            SENSORS --> FILTER
+            FILTER --> CTRL
+            CTRL --> OUT
+            subgraph comms [Comms LR]
+              direction LR
+              TX --> ENC
+              ENC --> MOD
+            end
+            CTRL --> TX
+            MOD --> OUT";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                // Cluster content horizontal
+                let tx = out.lines().position(|l| l.contains("TX")).unwrap();
+                let enc = out.lines().position(|l| l.contains("ENC")).unwrap();
+                assert_eq!(tx, enc, "cluster laid out LR inside TB graph:\n{out}");
+                // Whole chain present
+                for id in ["SENSORS", "FILTER", "CTRL", "OUT", "MOD"] {
+                    assert!(out.contains(id), "{id} missing");
+                }
+                // Group box present
+                assert!(out.lines().any(|l| l.contains("╭─ Comms LR")));
             }
             _ => panic!("Expected flowchart"),
         }

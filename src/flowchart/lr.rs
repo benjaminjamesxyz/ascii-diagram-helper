@@ -1,4 +1,4 @@
-use super::Blocks;
+use super::{BlockMode, Blocks};
 use super::FlowchartRenderer;
 use super::edges::{edge_arrow_heads, edge_hline, edge_vline};
 use crate::canvas::{Canvas, Direction};
@@ -10,13 +10,13 @@ impl<'a> FlowchartRenderer<'a> {
         reason = "linear layout pass; splitting would thread a wide context"
     )]
     pub(super) fn render_lr(&self, colored: bool, blocks: &mut Blocks) -> String {
-        let mut nodes = self.prepare_nodes();
+        let mut nodes = self.prepare_nodes(blocks);
         let idx = self.index_of();
         let layers = self.assign_ranks(&mut nodes, &idx);
 
         // Members of moved (isolated-direction) subgraphs are laid out inside
         // their own block render; keep empty layers so rank indexing stays aligned
-        let layers: Vec<Vec<usize>> = layers
+        let mut layers: Vec<Vec<usize>> = layers
             .into_iter()
             .map(|l| {
                 l.into_iter()
@@ -24,6 +24,8 @@ impl<'a> FlowchartRenderer<'a> {
                     .collect()
             })
             .collect();
+        // Sugiyama crossing reduction within layers (dense graphs)
+        self.reduce_crossings(&mut layers, &idx);
 
         let vertical_gap = 2;
         let start_y = if self.spec.title.is_some() { 2 } else { 0 };
@@ -111,14 +113,32 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        // Paste isolated-direction subgraph blocks below the main graph
+        // AtPhantom clusters sit at their phantom node's laid-out position
+        for b in &mut blocks.items {
+            if b.mode == BlockMode::AtPhantom
+                && let Some(&pi) = idx.get(b.phantom_id.as_str())
+            {
+                b.origin_x = nodes[pi].x;
+                b.origin_y = nodes[pi].y;
+            }
+        }
+        // Below-mode clusters stack below the main graph
         let mut cursor_y = max_h + 3;
         for b in &mut blocks.items {
+            if b.mode != BlockMode::Below {
+                continue;
+            }
             b.origin_x = 2;
             b.origin_y = cursor_y + 2;
             cursor_y = b.origin_y + b.height + 4;
         }
-        let blocks_extent = if blocks.is_empty() { 0 } else { cursor_y };
+        let blocks_extent = blocks
+            .items
+            .iter()
+            .filter(|b| b.mode == BlockMode::Below)
+            .map(|b| b.origin_y + b.height + 4)
+            .max()
+            .unwrap_or(0);
         let canvas_w = (current_x + 6 + sg_margin)
             .max(blocks.items.iter().map(|b| b.width + 6).max().unwrap_or(0));
         let canvas_h = (max_h + 4 + sg_margin).max(blocks_extent);
@@ -143,6 +163,7 @@ impl<'a> FlowchartRenderer<'a> {
             if blocks.member_indices.contains(&i) {
                 continue;
             }
+            // Phantoms DO register an obstacle (see tb.rs)
             canvas.add_obstacle(crate::canvas::Rect::new(
                 node.x,
                 node.y,
@@ -264,9 +285,10 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        // Draw nodes (moved blocks already contain their member boxes)
+        // Draw nodes (moved blocks already contain their member boxes;
+        // phantoms carry the pasted block instead of a box)
         for (i, node) in nodes.iter().enumerate() {
-            if blocks.member_indices.contains(&i) {
+            if blocks.member_indices.contains(&i) || blocks.phantom_indices.contains(&i) {
                 continue;
             }
             self.draw_node(&mut canvas, node);

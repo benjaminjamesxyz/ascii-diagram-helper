@@ -456,8 +456,11 @@ impl<'a> FlowchartRenderer<'a> {
                     (w, h)
                 }
                 NodeShape::Database => {
-                    let w = (max_text_w + 4).max(8);
-                    let h = lines.len() + 3; // extra row for cylinder header
+                    // Cylinder silhouette: paren side walls plus one cell of
+                    // padding on each side, and a wall row above and below
+                    // the label under the curved caps
+                    let w = (max_text_w + 6).max(10);
+                    let h = lines.len() + 4;
                     (w, h)
                 }
                 NodeShape::Subprocess => {
@@ -1066,30 +1069,16 @@ impl<'a> FlowchartRenderer<'a> {
                 draw_label!(canvas, node.label_lines, node.y + 1, (2, 4));
             }
             NodeShape::Database => {
+                // True cylinder silhouette: theme box supplies the curved top
+                // arc (╭─╮) and bottom arc (╰─╯); paren side walls `( … )`
+                // replace the flat side borders. No mid divider — that read
+                // as a generic banded box instead of a cylinder.
                 node_box(canvas, &self.theme, None);
-                // Cylinder separator line
-                if node.height >= 3 {
-                    canvas.draw_hline(node.x, node.x + node.width - 1, node.y + 1);
-                    canvas.draw_corner(
-                        node.x,
-                        node.y + 1,
-                        crate::canvas::LineConn {
-                            north: true,
-                            south: true,
-                            east: true,
-                            west: false,
-                        },
-                    );
-                    canvas.draw_corner(
-                        node.x + node.width - 1,
-                        node.y + 1,
-                        crate::canvas::LineConn {
-                            north: true,
-                            south: true,
-                            west: true,
-                            east: false,
-                        },
-                    );
+                let right = node.x + node.width - 1;
+                let bottom = node.y + node.height - 1;
+                for r in (node.y + 1)..bottom {
+                    canvas.put_char_with_role(node.x, r, '(', CellRole::Border);
+                    canvas.put_char_with_role(right, r, ')', CellRole::Border);
                 }
                 draw_label!(canvas, node.label_lines, node.y + 2, (1, 0));
             }

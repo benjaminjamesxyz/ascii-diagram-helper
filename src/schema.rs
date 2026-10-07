@@ -2,6 +2,33 @@ use crate::color::Color;
 use crate::theme::BoxStyle;
 use serde::{Deserialize, Serialize};
 
+/// Coerces unquoted JSON numbers in data-structure specs to strings, so
+/// `"values":[8,3,10]` and `"value":8` parse like their quoted forms.
+/// Decimals normalize to their shortest round-trip form (`1.50` → `1.5`).
+mod string_or_number {
+    use serde::{Deserialize, Deserializer};
+    use serde_json::Value;
+
+    fn coerce(v: Value) -> Result<String, String> {
+        match v {
+            Value::String(s) => Ok(s),
+            Value::Number(n) => Ok(n.to_string()),
+            other => Err(format!("expected a string or number, got {other}")),
+        }
+    }
+
+    pub fn string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        coerce(Value::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+
+    pub fn vec<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
+        Vec::<Value>::deserialize(d)?
+            .into_iter()
+            .map(|v| coerce(v).map_err(serde::de::Error::custom))
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum LayoutDirection {
@@ -320,14 +347,14 @@ pub enum DsKind {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DsNode {
     /// Node label (binary tree kind). Numbers may be given unquoted in JSON.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_number::string")]
     pub value: String,
     #[serde(default)]
     pub left: Option<Box<DsNode>>,
     #[serde(default)]
     pub right: Option<Box<DsNode>>,
     /// Keys of a B-tree node, rendered as `│ k1 │ k2 │` cells.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_number::vec")]
     pub keys: Vec<String>,
     /// Child subtrees of a B-tree node (`keys.len()` separators imply
     /// `keys.len() + 1` children; fewer is rendered as-is).
@@ -367,8 +394,9 @@ pub struct DataStructureSpec {
     pub root: Option<DsNode>,
     /// Insertion order for building a BST (`kind: "tree"`); numeric strings
     /// compare numerically, others lexicographically. Ignored when `root`
-    /// is present. Cell values for `kind: "array"`.
-    #[serde(default)]
+    /// is present. Cell values for `kind: "array"`. Numbers may be given
+    /// unquoted in JSON.
+    #[serde(default, deserialize_with = "string_or_number::vec")]
     pub values: Vec<String>,
     /// B-tree root (`kind: "btree"`).
     #[serde(default)]
@@ -392,4 +420,58 @@ pub enum DiagramSpec {
     Table(TableSpec),
     Stack(StackSpec),
     DataStructure(DataStructureSpec),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_json_unquoted_numbers_accepted() {
+        let spec: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"tree","values":[8,3,10,1.5]}"#).unwrap();
+        assert_eq!(spec.values, vec!["8", "3", "10", "1.5"]);
+    }
+
+    #[test]
+    fn test_json_unquoted_node_value_and_keys() {
+        let spec: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"btree","btree_root":{"value":8,"keys":[10,20]}}"#)
+                .unwrap();
+        let root = spec.btree_root.unwrap();
+        assert_eq!(root.value, "8");
+        assert_eq!(root.keys, vec!["10", "20"]);
+    }
+
+    #[test]
+    fn test_json_rejects_non_scalar_cells() {
+        for cell in ["true", "null", "[1]"] {
+            let json = format!(r#"{{"kind":"array","values":[{cell}]}}"#);
+            let err = serde_json::from_str::<DataStructureSpec>(&json)
+                .expect_err("non-scalar cell must be rejected");
+            assert!(
+                err.to_string().contains("expected a string or number"),
+                "cell {cell}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_unquoted_renders_same_as_quoted() {
+        let unquoted: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"tree","values":[8,3,10,1,6]}"#).unwrap();
+        let quoted: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"tree","values":["8","3","10","1","6"]}"#).unwrap();
+        let a = crate::datastructure::DataStructureRenderer::new(
+            &unquoted,
+            crate::theme::Theme::ascii(),
+        )
+        .render(false)
+        .unwrap();
+        let b =
+            crate::datastructure::DataStructureRenderer::new(&quoted, crate::theme::Theme::ascii())
+                .render(false)
+                .unwrap();
+        assert_eq!(a, b);
+    }
 }

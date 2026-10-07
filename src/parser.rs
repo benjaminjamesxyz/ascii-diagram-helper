@@ -1,8 +1,9 @@
 use crate::color::Color;
 use crate::schema::{
-    ArrowDirection, DiagramSpec, EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, NodeSpec,
-    ParticipantSpec, SeqFrameSpec, SeqMessageSpec, SeqMessageType, SequenceSpec, StackLayerSpec,
-    StackSpec, SubgraphSpec, TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
+    ArrowDirection, DataStructureSpec, DiagramSpec, DsKind, DsNode, EdgeSpec, FlowchartSpec,
+    LayoutDirection, NodeShape, NodeSpec, ParticipantSpec, SeqFrameSpec, SeqMessageSpec,
+    SeqMessageType, SequenceSpec, StackLayerSpec, StackSpec, SubgraphSpec, TableSpec, TextAlign,
+    TreeNodeSpec, TreeSpec,
 };
 use crate::theme::BoxStyle;
 
@@ -101,13 +102,13 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         || trimmed.lines().any(|l| l.trim_start().starts_with("- "))
     {
         parse_tree_dsl(trimmed, default_style)
-    } else if first_line.starts_with("datastructure")
-        || first_line.split_whitespace().next() == Some("ds")
-    {
+    } else if first_line.starts_with("datastructure") {
         Err(
-            "datastructure diagrams are JSON-only, e.g. {\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\",\"3\",\"10\",\"1\",\"6\"]}"
+            "datastructure diagrams are JSON-only, e.g. {\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\",\"3\",\"10\",\"1\",\"6\"]} — or use the `ds` shorthand, e.g. `ds tree 8 3 10 1 6`"
                 .to_string(),
         )
+    } else if first_line.split_whitespace().next() == Some("ds") {
+        parse_datastructure_dsl(trimmed, default_style)
     } else if trimmed.contains("-->") || trimmed.contains("->") {
         // Default to flowchart if arrow detected
         parse_flowchart_dsl(trimmed, default_style)
@@ -115,6 +116,115 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         // Fallback to tree
         parse_tree_dsl(trimmed, default_style)
     }
+}
+
+/// Expected `ds` syntax, appended to every malformed-input error so the
+/// message names the fix.
+const DS_DSL_HINT: &str = "expected `ds tree <value...>` or \
+    `ds btree <rootkeys> | <level cells> | ...`, e.g. \
+    `ds tree 8 3 10 1 6` or `ds btree 10,20 | 3,5 12,15 25,30`";
+
+/// Parses the `ds` DSL shorthand into a [`DataStructureSpec`] diagram.
+///
+/// Two forms are supported:
+/// - `ds tree <v...>` — binary tree from insertion order (BST build), e.g.
+///   `ds tree 8 3 10 1 6`
+/// - `ds btree <rootkeys> | <next-level cells> | ...` — pipe-separated
+///   levels; each cell is a comma-separated key list, cells within a level
+///   are whitespace-separated. Children are assigned level-order (BFS): a
+///   node with `n` keys consumes up to `n + 1` cells as its children, and
+///   fewer cells render as-is (same as the JSON path).
+///
+/// # Errors
+///
+/// Returns `Err` naming the expected syntax when the kind is unknown or a
+/// key list (root keys or a level cell) is empty.
+pub fn parse_datastructure_dsl(
+    input: &str,
+    default_style: BoxStyle,
+) -> Result<DiagramSpec, String> {
+    // Drop the two leading tokens (`ds <kind>`), keeping the raw remainder
+    // so `|`-separated levels keep their spacing.
+    let mut tokens = input.splitn(3, char::is_whitespace);
+    let _ds = tokens.next();
+    let kind = tokens.next().unwrap_or_default();
+    let rest = tokens.next().unwrap_or_default().trim();
+
+    match kind {
+        "tree" => {
+            let values: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
+            if values.is_empty() {
+                return Err(format!("ds tree needs at least one value; {DS_DSL_HINT}"));
+            }
+            Ok(DiagramSpec::DataStructure(DataStructureSpec {
+                style: default_style,
+                kind: DsKind::Tree,
+                values,
+                ..DataStructureSpec::default()
+            }))
+        }
+        "btree" => {
+            if rest.is_empty() {
+                return Err(format!(
+                    "ds btree needs a root key list; {DS_DSL_HINT}"
+                ));
+            }
+            let mut levels = rest.split('|');
+            let mut root = DsNode {
+                keys: parse_ds_keys(levels.next().unwrap_or_default(), "root key")?,
+                ..DsNode::default()
+            };
+
+            // Flatten the remaining levels into a cell stream and attach
+            // children level-order (BFS). A node with `n` keys takes up to
+            // `n + 1` cells; running dry early is permissive (rendered
+            // as-is), leftovers mean no parent had a free slot.
+            let mut cells = levels
+                .flat_map(str::split_whitespace)
+                .map(|cell| parse_ds_keys(cell, "level cell"))
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .peekable();
+            let mut queue: std::collections::VecDeque<&mut DsNode> =
+                std::collections::VecDeque::new();
+            queue.push_back(&mut root);
+            while let Some(node) = queue.pop_front() {
+                if cells.peek().is_none() {
+                    break;
+                }
+                for _ in 0..=node.keys.len() {
+                    let Some(keys) = cells.next() else {
+                        break;
+                    };
+                    node.children.push(DsNode {
+                        keys,
+                        ..DsNode::default()
+                    });
+                }
+                queue.extend(node.children.iter_mut());
+            }
+            Ok(DiagramSpec::DataStructure(DataStructureSpec {
+                style: default_style,
+                kind: DsKind::BTree,
+                btree_root: Some(root),
+                ..DataStructureSpec::default()
+            }))
+        }
+        other => Err(format!(
+            "unknown `ds` kind `{other}`; {DS_DSL_HINT}"
+        )),
+    }
+}
+
+/// Splits a comma-separated `ds btree` key list, rejecting empty keys.
+fn parse_ds_keys(cell: &str, what: &str) -> Result<Vec<String>, String> {
+    let keys: Vec<String> = cell.split(',').map(str::trim).map(str::to_string).collect();
+    if keys.iter().any(String::is_empty) {
+        return Err(format!(
+            "empty {what} in `ds btree` input (`{cell}`); {DS_DSL_HINT}"
+        ));
+    }
+    Ok(keys)
 }
 
 /// Parses a Mermaid-style flowchart DSL into a [`FlowchartSpec`].
@@ -1618,5 +1728,143 @@ mod tests {
         assert_eq!(lp.branches, vec!["every 1s"]);
         assert_eq!(lp.start_step, 3);
         assert_eq!(lp.end_step, 4);
+    }
+
+    fn ds_render(spec: &DiagramSpec) -> String {
+        crate::render_diagram(spec)
+    }
+
+    #[test]
+    fn test_ds_tree_shorthand_matches_json_render() {
+        let dsl_spec = parse_dsl_or_json("ds tree 8 3 10 1", BoxStyle::Rounded).unwrap();
+        let json_spec = parse_dsl_or_json(
+            r#"{"type":"datastructure","kind":"tree","values":["8","3","10","1"]}"#,
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        // Same spec shape, byte-identical render.
+        let DiagramSpec::DataStructure(ds) = &dsl_spec else {
+            panic!("Expected datastructure")
+        };
+        assert_eq!(ds.values, vec!["8", "3", "10", "1"]);
+        assert_eq!(ds_render(&dsl_spec), ds_render(&json_spec));
+    }
+
+    #[test]
+    fn test_ds_btree_shorthand_bfs_children() {
+        let spec = match parse_dsl_or_json(
+            "ds btree 10,20 | 3,5 12,15 25,30",
+            BoxStyle::Rounded,
+        )
+        .unwrap()
+        {
+            DiagramSpec::DataStructure(ds) => ds,
+            other => panic!("Expected datastructure, got {other:?}"),
+        };
+        let root = spec.btree_root.as_ref().unwrap();
+        assert_eq!(root.keys, vec!["10".to_string(), "20".to_string()]);
+        let child_keys: Vec<_> = root.children.iter().map(|c| c.keys.clone()).collect();
+        assert_eq!(
+            child_keys,
+            vec![
+                vec!["3".to_string(), "5".to_string()],
+                vec!["12".to_string(), "15".to_string()],
+                vec!["25".to_string(), "30".to_string()],
+            ]
+        );
+        let out = ds_render(&parse_dsl_or_json(
+            "ds btree 10,20 | 3,5 12,15 25,30",
+            BoxStyle::Sharp,
+        )
+        .unwrap());
+        assert!(out.contains("│ 10 │ 20 │"));
+        assert!(out.contains("│ 25 │ 30 │"));
+    }
+
+    #[test]
+    fn test_ds_btree_matches_json_render() {
+        let dsl_spec =
+            parse_dsl_or_json("ds btree 10,20 | 3,5 12,15 25,30", BoxStyle::Rounded).unwrap();
+        let json_spec = parse_dsl_or_json(
+            r#"{"type":"datastructure","kind":"btree","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30"]}]}}"#,
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        assert_eq!(ds_render(&dsl_spec), ds_render(&json_spec));
+    }
+
+    #[test]
+    fn test_ds_btree_permissive_arity() {
+        // Root has 2 keys (3 child slots) but only 1 cell: renders as-is.
+        let spec = parse_dsl_or_json("ds btree 10,20 | 3,5", BoxStyle::Rounded).unwrap();
+        let out = ds_render(&spec);
+        assert!(out.contains("10"));
+        assert!(out.contains("3"));
+    }
+
+    #[test]
+    fn test_ds_btree_three_levels() {
+        let spec = match parse_dsl_or_json(
+            "ds btree 10 | 3 20 | 1 7 15 30",
+            BoxStyle::Rounded,
+        )
+        .unwrap()
+        {
+            DiagramSpec::DataStructure(ds) => ds,
+            other => panic!("Expected datastructure, got {other:?}"),
+        };
+        let root = spec.btree_root.as_ref().unwrap();
+        assert_eq!(root.keys, vec!["10".to_string()]);
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.children[0].children.len(), 2);
+        assert_eq!(root.children[1].children.len(), 2);
+        assert_eq!(
+            root.children[1].children[1].keys,
+            vec!["30".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_ds_btree_extra_cells_nest_deeper() {
+        // Permissive arity cuts both ways: 1-key root takes 2 cells, the
+        // third cell fills the first child's second slot (BFS order).
+        let spec = match parse_dsl_or_json("ds btree 10 | 3 5 7", BoxStyle::Rounded)
+            .unwrap()
+        {
+            DiagramSpec::DataStructure(ds) => ds,
+            other => panic!("Expected datastructure, got {other:?}"),
+        };
+        let root = spec.btree_root.as_ref().unwrap();
+        assert_eq!(root.children.len(), 2);
+        assert_eq!(root.children[0].children.len(), 1);
+        assert_eq!(root.children[0].children[0].keys, vec!["7".to_string()]);
+        assert_eq!(root.children[1].children.len(), 0);
+    }
+
+    #[test]
+    fn test_ds_malformed_errors() {
+        for (input, expect) in [
+            ("ds", "expected `ds tree"),
+            ("ds heap 1 2", "unknown `ds` kind"),
+            ("ds tree", "needs at least one value"),
+            ("ds btree", "needs a root key list"),
+            ("ds btree ,", "empty root key"),
+            ("ds btree 10, | 3", "empty root key"),
+            ("ds btree 10 | 3,,5", "empty level cell"),
+        ] {
+            let err = parse_dsl_or_json(input, BoxStyle::Rounded)
+                .err()
+                .unwrap_or_else(|| panic!("`{input}` should fail"));
+            assert!(err.contains(expect), "`{input}`: {err}");
+            // Every error names the expected syntax so it is actionable.
+            assert!(err.contains("ds btree 10,20"), "`{input}`: {err}");
+        }
+    }
+
+    #[test]
+    fn test_datastructure_keyword_still_json_hint() {
+        let err = parse_dsl_or_json("datastructure", BoxStyle::Rounded)
+            .expect_err("bare `datastructure` stays a JSON hint");
+        assert!(err.contains("JSON-only"));
     }
 }

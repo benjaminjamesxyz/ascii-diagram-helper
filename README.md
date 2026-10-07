@@ -58,7 +58,10 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 ### Known Limitations
 
 - `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width` is graduated: `2px` → heavy glyphs (`┏━┓`), `3px`+ → double (`╔═╗`); `1px` and fractional widths below 2 are treated as default. `linkStyle` `fill` is aliased to the edge line color (Mermaid links have no fill)
-- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` applies only to edge-isolated subgraphs — subgraphs with edges crossing their border use the global direction)
+- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border. Per-subgraph `direction` boundary:
+  - **Applies** when the subgraph (including all nested members) has no edges crossing its border — rendered as a self-contained block in its own orientation, pasted beside/below the main graph
+  - **Applies to nested children** whose own member set is edge-isolated, even when the parent subgraph has external edges (the child moves out; the parent's group box wraps only its remaining members)
+  - **Falls back to global direction** when any edge crosses the subgraph's border (Mermaid parity — full mixed-direction cluster layout is future work)
 - Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
   - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched
   - Table: `color: <name|#hex>` directive line before the rows (whole-table grid color)

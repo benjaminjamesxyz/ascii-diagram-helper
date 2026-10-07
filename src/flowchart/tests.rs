@@ -925,3 +925,50 @@ mod track_side_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod nested_direction_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn isolated_child_of_non_isolated_parent_keeps_direction() {
+        // `inner` has only internal edges → moves to its own LR block even
+        // though its parent `outer` has external edges. The parent's group
+        // box must NOT inflate to the moved child's phantom coordinates.
+        let dsl = "graph TB
+            MAIN --> A
+            A --> B
+            subgraph outer
+              subgraph inner [Inner LR]
+                direction LR
+                X --> Y
+              end
+              MAIN --> Z
+            end";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                // Inner block rendered in its own orientation (X left of Y)
+                let x_row = out.lines().position(|l| l.contains("X")).unwrap();
+                let y_row = out.lines().position(|l| l.contains("Y")).unwrap();
+                assert_eq!(x_row, y_row, "inner cluster laid out LR:\n{out}");
+                // Parent box does not reach column 0 via phantom coords:
+                // MAIN/A/B render outside the outer box's top-left
+                let outer_top = out
+                    .lines()
+                    .position(|l| l.contains("╭─ outer"))
+                    .expect("outer box");
+                let line = &out.lines().nth(outer_top).unwrap();
+                let box_x = line.find('╭').unwrap();
+                assert!(
+                    box_x > 0,
+                    "outer box inflated by moved child's phantom coords:\n{out}"
+                );
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}

@@ -343,6 +343,7 @@ impl<'a> FlowchartRenderer<'a> {
             nodes: &[LayoutNode],
             idx: &HashMap<&str, usize>,
             pad: (usize, usize, usize),
+            blocks: &Blocks,
         ) -> Option<Rect> {
             let (pad_x, pad_top, pad_bottom) = pad;
             let mut x0 = usize::MAX;
@@ -359,7 +360,12 @@ impl<'a> FlowchartRenderer<'a> {
                 }
             }
             for child in &sg.subgraphs {
-                if let Some(r) = group_rect(child, nodes, idx, pad) {
+                // Moved children render as pasted blocks elsewhere; their
+                // member coords are phantom and would inflate this box
+                if blocks.rect_for(&child.id).is_some() {
+                    continue;
+                }
+                if let Some(r) = group_rect(child, nodes, idx, pad, blocks) {
                     x0 = x0.min(r.x);
                     y0 = y0.min(r.y);
                     x1 = x1.max(r.x + r.width - 1);
@@ -407,7 +413,7 @@ impl<'a> FlowchartRenderer<'a> {
                     out.push((Rect::new(bx, by, br - bx + 1, bb - by + 1), title, sg.color));
                     continue;
                 }
-                if let Some(r) = group_rect(sg, nodes, idx, pad) {
+                if let Some(r) = group_rect(sg, nodes, idx, pad, blocks) {
                     out.push((
                         r,
                         sg.title.clone().unwrap_or_else(|| sg.id.clone()),

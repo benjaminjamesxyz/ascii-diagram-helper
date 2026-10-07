@@ -1108,3 +1108,111 @@ mod supernode_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod database_cylinder_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    fn render_database(style: BoxStyle) -> String {
+        let dsl = "graph TD; A[App] --> DB[(PostgreSQL)]";
+        match crate::parser::parse_dsl_or_json(dsl, style).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                FlowchartRenderer::new(&f, crate::theme::Theme::new(f.style)).render(false)
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn cylinder_has_curved_caps_and_paren_walls() {
+        let out = render_database(BoxStyle::Rounded);
+        let db_rows: Vec<&str> = out
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                t.starts_with('╭') || t.starts_with('╰') || t.starts_with('(')
+            })
+            .collect();
+        assert!(
+            db_rows.len() >= 5,
+            "expected cap/wall/label/wall/cap rows, got:\n{out}"
+        );
+        // Curved top and bottom arcs (not flat box corners)
+        assert!(
+            out.lines().any(|l| l.contains('╭') && l.contains('╮')),
+            "missing top arc:\n{out}"
+        );
+        assert!(
+            out.lines().any(|l| l.contains('╰') && l.contains('╯')),
+            "missing bottom arc:\n{out}"
+        );
+        // Label row flanked by paren side walls
+        let label_row = out
+            .lines()
+            .find(|l| l.contains("PostgreSQL"))
+            .expect("label row");
+        assert!(
+            label_row.trim_end().ends_with(')') && label_row.trim_start().starts_with('('),
+            "label row must read `( … )`, got: {label_row:?}"
+        );
+        // Wall row above the label is also parenthesized
+        assert!(
+            out.lines()
+                .any(|l| l.trim_start().starts_with("(") && l.trim_end().ends_with(")")),
+            "missing paren wall row:\n{out}"
+        );
+    }
+
+    #[test]
+    fn cylinder_has_no_flat_mid_divider() {
+        let out = render_database(BoxStyle::Rounded);
+        assert!(
+            !out.contains('├') && !out.contains('┤'),
+            "cylinder must not show a banded divider:\n{out}"
+        );
+    }
+
+    #[test]
+    fn cylinder_label_is_centered() {
+        let out = render_database(BoxStyle::Rounded);
+        let label_row = out
+            .lines()
+            .find(|l| l.contains("PostgreSQL"))
+            .expect("label row");
+        let trimmed = label_row.trim_end();
+        let open = trimmed.find('(').unwrap();
+        let close = trimmed.rfind(')').unwrap();
+        let text_start = trimmed.find("PostgreSQL").unwrap();
+        let text_end = text_start + "PostgreSQL".len();
+        // Padding measured inside the paren walls must be symmetric
+        assert_eq!(
+            text_start - open - 1,
+            close - text_end,
+            "label padding must be symmetric, got: {label_row:?}"
+        );
+        assert!(
+            text_start - open - 1 >= 1,
+            "label must clear the paren walls, got: {label_row:?}"
+        );
+    }
+
+    #[test]
+    fn cylinder_ascii_theme_keeps_paren_walls() {
+        let out = render_database(BoxStyle::Ascii);
+        let label_row = out
+            .lines()
+            .find(|l| l.contains("PostgreSQL"))
+            .expect("label row");
+        assert!(
+            label_row.trim_start().starts_with('(') && label_row.trim_end().ends_with(')'),
+            "ascii cylinder must keep paren walls, got: {label_row:?}"
+        );
+        // All-ASCII cap row
+        assert!(
+            out.lines().any(|l| l.starts_with('+') && l.contains('-')),
+            "missing ascii cap row:\n{out}"
+        );
+    }
+}

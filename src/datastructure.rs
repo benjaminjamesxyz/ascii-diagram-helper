@@ -22,6 +22,13 @@ struct Block {
 /// Horizontal gap between sibling subtree blocks (leaves room for branches).
 const SIBLING_GAP: usize = 4;
 
+/// Maximum subtree depth `render_node` lays out before returning a clear
+/// error. serde_json's 128-deep limit bounds explicit `root` trees; only
+/// `values`-built BSTs can exceed this (sorted input builds a depth-n
+/// chain). Depth-2000 verified working; crash observed between 2000-3000
+/// pre-fix.
+const MAX_RENDER_DEPTH: usize = 2048;
+
 /// Renders textbook-style data-structure diagrams: binary trees
 /// (`kind: "tree"`), B-trees (`kind: "btree"`), linked lists
 /// (`kind: "linkedlist"`), and arrays (`kind: "array"`).
@@ -56,7 +63,7 @@ impl<'a> DataStructureRenderer<'a> {
                     .ok_or_else(|| {
                         "tree diagram needs a `root` node or a `values` insertion order".to_string()
                     })?;
-                let block = self.render_node(&root, None, colored);
+                let block = self.render_node(&root, None, colored, 0)?;
                 (block.lines, block.width)
             }
             DsKind::BTree => {
@@ -65,7 +72,7 @@ impl<'a> DataStructureRenderer<'a> {
                     .btree_root
                     .clone()
                     .ok_or_else(|| "btree diagram needs a `btree_root` node".to_string())?;
-                let block = self.render_node(&root, None, colored);
+                let block = self.render_node(&root, None, colored, 0)?;
                 (block.lines, block.width)
             }
         };
@@ -88,7 +95,27 @@ impl<'a> DataStructureRenderer<'a> {
     /// a descender row, a branch bar, and child descenders. The node's own
     /// color overrides the inherited one for its box border and for the
     /// connector glyphs its subtree owns.
-    fn render_node(&self, node: &DsNode, inherited: Option<Color>, colored: bool) -> Block {
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the subtree is deeper than `MAX_RENDER_DEPTH`
+    /// (a sorted `values` insertion order builds a tree as deep as the
+    /// value count).
+    fn render_node(
+        &self,
+        node: &DsNode,
+        inherited: Option<Color>,
+        colored: bool,
+        depth: usize,
+    ) -> Result<Block, String> {
+        if depth > MAX_RENDER_DEPTH {
+            return Err(format!(
+                "data-structure diagram exceeds the maximum render depth \
+                 ({MAX_RENDER_DEPTH}); a sorted `values` insertion order \
+                 builds a tree as deep as the value count — use an explicit \
+                 `root` or fewer values"
+            ));
+        }
         let effective = node.color.or(inherited);
         let (box_lines, box_w) = self.node_box(node, effective, colored);
 
@@ -102,11 +129,41 @@ impl<'a> DataStructureRenderer<'a> {
             // Linear kinds render their own single-row layouts.
             DsKind::LinkedList | DsKind::Array => Vec::new(),
         };
-        let child_blocks: Vec<Block> = child_nodes
-            .iter()
-            .map(|c| self.render_node(c, effective, colored))
-            .collect();
+        // Recurse in a slim stack frame: debug-build frames for the full
+        // layout body are far too wide to stack 2048 deep, so the recursion
+        // lives in `render_children` and assembly runs in `assemble_block`.
+        let child_blocks = self.render_children(&child_nodes, effective, colored, depth)?;
+        Ok(self.assemble_block(effective, colored, box_lines, box_w, child_blocks))
+    }
 
+    /// Recurses into `children` one level deeper. Kept separate from
+    /// `render_node` so per-level stack use stays minimal for deep chains.
+    fn render_children(
+        &self,
+        children: &[&DsNode],
+        effective: Option<Color>,
+        colored: bool,
+        depth: usize,
+    ) -> Result<Vec<Block>, String> {
+        children
+            .iter()
+            .map(|c| self.render_node(c, effective, colored, depth + 1))
+            .collect()
+    }
+
+    /// Assembles one node's `Block` from its box lines and its laid-out
+    /// child blocks: the box is centered over the children, connected by a
+    /// descender row, a branch bar, and child descenders. The node's own
+    /// `effective` color paints its box border and the connector glyphs its
+    /// subtree owns.
+    fn assemble_block(
+        &self,
+        effective: Option<Color>,
+        colored: bool,
+        box_lines: Vec<String>,
+        box_w: usize,
+        child_blocks: Vec<Block>,
+    ) -> Block {
         if child_blocks.is_empty() {
             return Block {
                 width: box_w,
@@ -129,10 +186,18 @@ impl<'a> DataStructureRenderer<'a> {
             offset += child.width + SIBLING_GAP;
         }
 
-        // Node box, padded out to the subtree width
+        // Node box, centered over the children and padded out to the
+        // subtree width so every row stays exactly `sub_w` columns wide and
+        // the box center lands on `parent_center`.
         let mut lines: Vec<String> = box_lines
             .iter()
-            .map(|l| format!("{l}{}", " ".repeat(sub_w - box_w)))
+            .map(|l| {
+                format!(
+                    "{}{l}{}",
+                    " ".repeat(box_x),
+                    " ".repeat(sub_w - box_x - box_w)
+                )
+            })
             .collect();
 
         // Connector rows. A single aligned child is one `│` row; any other
@@ -470,12 +535,19 @@ fn build_bst(values: &[String]) -> Option<DsNode> {
 }
 
 fn insert_bst(node: &mut Option<Box<DsNode>>, value: String) {
-    match node {
-        None => *node = Some(Box::new(DsNode::leaf(value))),
-        Some(n) => {
-            let goes_left = less_than(&value, &n.value);
-            let target = if goes_left { &mut n.left } else { &mut n.right };
-            insert_bst(target, value);
+    // Iterative descent: a sorted insertion order builds a depth-n chain,
+    // which would overflow the stack if inserted recursively.
+    let mut cur = node;
+    loop {
+        match cur {
+            None => {
+                *cur = Some(Box::new(DsNode::leaf(value)));
+                return;
+            }
+            Some(n) => {
+                let goes_left = less_than(&value, &n.value);
+                cur = if goes_left { &mut n.left } else { &mut n.right };
+            }
         }
     }
 }
@@ -878,5 +950,178 @@ mod tests {
             "btree separators red, keys default: {colored:?}"
         );
         assert!(!colored.contains("[31m 20 "), "key text unpainted");
+    }
+
+    /// Runs `f` on a thread with a large stack: deep-tree renders recurse
+    /// ~2000 levels, which fits the 8 MiB main thread the CLI runs on but
+    /// not libtest's default 2 MiB worker threads.
+    fn with_big_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(f)
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_bst_sorted_3000_no_stack_overflow() {
+        // Sorted input builds a depth-3000 chain. Iterative `insert_bst`
+        // must build it without overflowing, and the render depth guard must
+        // reject the layout with a clean error (never a stack overflow).
+        with_big_stack(|| {
+            let values: Vec<String> = (1..=3000).map(|v| v.to_string()).collect();
+            let spec = DataStructureSpec {
+                style: BoxStyle::Sharp,
+                kind: DsKind::Tree,
+                values,
+                ..DataStructureSpec::default()
+            };
+            let err = DataStructureRenderer::new(&spec, Theme::ascii())
+                .render(false)
+                .unwrap_err();
+            assert!(
+                err.contains("maximum render depth"),
+                "3000 sorted values must hit the depth guard cleanly, got: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_bst_sorted_2000_still_supported() {
+        with_big_stack(|| {
+            let values: Vec<String> = (1..=2000).map(|v| v.to_string()).collect();
+            let spec = DataStructureSpec {
+                style: BoxStyle::Sharp,
+                kind: DsKind::Tree,
+                values,
+                ..DataStructureSpec::default()
+            };
+            let out = DataStructureRenderer::new(&spec, Theme::ascii())
+                .render(false)
+                .unwrap();
+            assert!(out.contains("| 2000 |"));
+        });
+    }
+
+    #[test]
+    fn test_render_depth_guard_explicit_chain() {
+        // A 3000-deep explicit left chain (programmatic, so serde_json's own
+        // 128-level limit does not apply) must return the depth-guard error.
+        with_big_stack(|| {
+            let mut node = DsNode::leaf("0");
+            for i in 1..=3000 {
+                node = DsNode {
+                    value: i.to_string(),
+                    left: Some(Box::new(node)),
+                    ..DsNode::default()
+                };
+            }
+            let out = DataStructureRenderer::new(&spec(DsKind::Tree, node), Theme::ascii())
+                .render(false)
+                .unwrap_err();
+            assert!(
+                out.contains("maximum render depth"),
+                "explicit deep chain must hit the depth guard, got: {out}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_tree_root_box_centered_over_children() {
+        // values ["2","1","3"]: two leaf children (w 5 each, gap 4) give
+        // sub_w 14, so box_x = (14-5)/2 = 4 and the parent center (box col 6)
+        // must equal the descender column.
+        let spec = DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Tree,
+            values: vec!["2".into(), "1".into(), "3".into()],
+            ..DataStructureSpec::default()
+        };
+        let out = DataStructureRenderer::new(&spec, Theme::ascii())
+            .render(false)
+            .unwrap();
+        let box_idx = out.lines().position(|l| l.contains("| 2 |")).unwrap();
+        let box_line = out.lines().nth(box_idx).unwrap();
+        assert_eq!(
+            box_line.trim_end(),
+            "    | 2 |",
+            "root box indented by box_x=4"
+        );
+        let descender = out
+            .lines()
+            .skip(box_idx + 1) // past the box rows (they contain `|` too)
+            .find(|l| l.contains('|'))
+            .unwrap();
+        let descender_col = descender.chars().position(|c| c == '|').unwrap();
+        let box_center = box_line.chars().position(|c| c == '2').unwrap();
+        assert_eq!(descender_col, 6, "descender under box center");
+        assert_eq!(descender_col, box_center, "descender under box center");
+    }
+
+    #[test]
+    fn test_wide_child_centers_parent_box() {
+        // Single wider child "333" (w 7): parent box "| 2 |" (w 5) must be
+        // centered at the child's center so the connector lines up.
+        let root = DsNode {
+            value: "2".into(),
+            right: Some(Box::new(DsNode::leaf("333"))),
+            ..DsNode::default()
+        };
+        let out = DataStructureRenderer::new(&spec(DsKind::Tree, root), Theme::ascii())
+            .render(false)
+            .unwrap();
+        let box_idx = out.lines().position(|l| l.contains("| 2 |")).unwrap();
+        let box_line = out.lines().nth(box_idx).unwrap();
+        let box_center = box_line.chars().position(|c| c == '2').unwrap();
+        let descender = out
+            .lines()
+            .skip(box_idx + 1) // past the box rows (they contain `|` too)
+            .find(|l| l.contains('|'))
+            .unwrap();
+        let descender_col = descender.chars().position(|c| c == '|').unwrap();
+        assert!(
+            box_line.starts_with(' '),
+            "parent box indented over wider child"
+        );
+        assert_eq!(descender_col, box_center, "connector meets box center");
+    }
+
+    #[test]
+    fn test_btree_root_box_indented_over_children() {
+        // 3-child btree (keys 10,20): root box must be left-indented so its
+        // center sits over the middle child, and the bar tee marks that spot.
+        let root = DsNode {
+            keys: vec!["10".into(), "20".into()],
+            children: vec![
+                DsNode {
+                    keys: vec!["3".into(), "5".into()],
+                    ..DsNode::default()
+                },
+                DsNode {
+                    keys: vec!["12".into(), "15".into()],
+                    ..DsNode::default()
+                },
+                DsNode {
+                    keys: vec!["25".into(), "30".into()],
+                    ..DsNode::default()
+                },
+            ],
+            ..DsNode::default()
+        };
+        let out =
+            DataStructureRenderer::new(&spec(DsKind::BTree, root), Theme::new(BoxStyle::Sharp))
+                .render(false)
+                .unwrap();
+        let box_line = out.lines().find(|l| l.contains("│ 10 │ 20 │")).unwrap();
+        let left_col = box_line.chars().position(|c| c == '│').unwrap();
+        assert!(
+            left_col > 0,
+            "root box left border indented, got col {left_col}"
+        );
+        let box_center = left_col + "│ 10 │ 20 │".chars().count() / 2;
+        let bar = out.lines().find(|l| l.contains('┴')).unwrap();
+        let tee_col = bar.chars().position(|c| c == '┴').unwrap();
+        assert_eq!(tee_col, box_center, "branch bar tee at box center");
     }
 }

@@ -268,6 +268,23 @@ impl<'a> FlowchartRenderer<'a> {
                     let h = lines.len() + 2;
                     (w, h)
                 }
+                NodeShape::Hexagon | NodeShape::DoubleCircle => {
+                    // Badge glyph embedded in the top border needs extra width
+                    let w = (max_text_w + 6).max(8);
+                    let h = lines.len() + 2;
+                    (w, h)
+                }
+                NodeShape::Parallelogram | NodeShape::ParallelogramAlt => {
+                    let w = (max_text_w + 6).max(8);
+                    let h = lines.len() + 2;
+                    (w, h)
+                }
+                NodeShape::Trapezoid | NodeShape::TrapezoidAlt => {
+                    // 4-char badge `/__\` in the top border
+                    let w = (max_text_w + 8).max(10);
+                    let h = lines.len() + 2;
+                    (w, h)
+                }
                 _ => {
                     let w = (max_text_w + 4).max(6);
                     let h = lines.len() + 2;
@@ -607,6 +624,81 @@ impl<'a> FlowchartRenderer<'a> {
                 };
                 let badge = if is_ascii { "(o)" } else { "○" };
                 node_box(canvas, &circle_theme, Some(badge));
+                let text_start_y = node.y + 1;
+                for (i, line) in node.label_lines.iter().enumerate() {
+                    let line_w = UnicodeWidthStr::width(line.as_str());
+                    let offset_x = if node.width > line_w {
+                        (node.width - line_w) / 2
+                    } else {
+                        1
+                    };
+                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
+                }
+            }
+            NodeShape::Hexagon => {
+                // Preparation / condition: sharp box with hexagon badge
+                let badge = if is_ascii { "<h>" } else { "⬡" };
+                node_box(canvas, &self.theme, Some(badge));
+                let text_start_y = node.y + 1;
+                for (i, line) in node.label_lines.iter().enumerate() {
+                    let line_w = UnicodeWidthStr::width(line.as_str());
+                    let offset_x = if node.width > line_w {
+                        (node.width - line_w) / 2
+                    } else {
+                        1
+                    };
+                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
+                }
+            }
+            NodeShape::DoubleCircle => {
+                // Start / end point: rounded box with bullseye badge
+                let circle_theme = if is_ascii {
+                    Theme::ascii()
+                } else {
+                    Theme::new(BoxStyle::Rounded)
+                };
+                let badge = if is_ascii { "(oo)" } else { "◎" };
+                node_box(canvas, &circle_theme, Some(badge));
+                let text_start_y = node.y + 1;
+                for (i, line) in node.label_lines.iter().enumerate() {
+                    let line_w = UnicodeWidthStr::width(line.as_str());
+                    let offset_x = if node.width > line_w {
+                        (node.width - line_w) / 2
+                    } else {
+                        1
+                    };
+                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
+                }
+            }
+            NodeShape::Parallelogram | NodeShape::ParallelogramAlt => {
+                // Input / output: sharp box with parallelogram badge
+                let sub_theme = if is_ascii {
+                    Theme::ascii()
+                } else {
+                    Theme::new(BoxStyle::Sharp)
+                };
+                let badge = if is_ascii { "/_/" } else { "▱" };
+                node_box(canvas, &sub_theme, Some(badge));
+                let text_start_y = node.y + 1;
+                for (i, line) in node.label_lines.iter().enumerate() {
+                    let line_w = UnicodeWidthStr::width(line.as_str());
+                    let offset_x = if node.width > line_w {
+                        (node.width - line_w) / 2
+                    } else {
+                        1
+                    };
+                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
+                }
+            }
+            NodeShape::Trapezoid | NodeShape::TrapezoidAlt => {
+                // Manual input / operation: sharp box with trapezoid badge
+                let sub_theme = if is_ascii {
+                    Theme::ascii()
+                } else {
+                    Theme::new(BoxStyle::Sharp)
+                };
+                let badge = "/__\\";
+                node_box(canvas, &sub_theme, Some(badge));
                 let text_start_y = node.y + 1;
                 for (i, line) in node.label_lines.iter().enumerate() {
                     let line_w = UnicodeWidthStr::width(line.as_str());

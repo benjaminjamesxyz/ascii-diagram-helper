@@ -27,7 +27,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 - **Flowcharts & Graphs (`flowchart` / `graph`)**:
   - Directions: `TB` (Top to Bottom) and `LR` (Left to Right)
-  - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`
+  - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`, Circle `((text))`, Hexagon `{{text}}`, DoubleCircle `(((text)))`, Parallelogram `[/text/]` and `\[text\]`, Trapezoid `[/text\]` and `\[text/]` — non-rectangular shapes render as solid boxes with an identifying badge glyph embedded in the top border (`⬡`, `◎`, `▱`, `/__\`; ASCII fallbacks `<h>`, `(oo)`, `/_/`, `/__\`)
   - Subgraphs: `subgraph id [Title]` ... `end` render as labeled group boxes (nesting supported); members are nodes first declared inside the block; per-subgraph `direction TB|LR|RL|BT` is applied when the subgraph is edge-isolated from the rest of the diagram (rendered in its own orientation as a self-contained block, Mermaid parity) — otherwise the global direction wins
   - Orthogonal routing with smart junction merging (`┬`, `┴`, `┼`, `├`, `┤`)
   - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs

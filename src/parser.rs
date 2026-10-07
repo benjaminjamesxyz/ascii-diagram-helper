@@ -455,6 +455,24 @@ fn parse_node_token(token: &str) -> (String, String, NodeShape) {
         return (id, label, NodeShape::Subprocess);
     }
 
+    // [/Parallelogram] | [/Trapezoid\] | [\ParallelogramAlt\] | [\TrapezoidAlt/]
+    if let Some((start, open)) = bracket_slash_open(t)
+        && let Some(end) = t.rfind(']')
+        && start + 2 < end
+    {
+        let close = t.as_bytes()[end - 1] as char;
+        let label = clean_label(&t[start + 2..end - 1]);
+        let shape = match (open, close) {
+            ('/', '/') => NodeShape::Parallelogram,
+            ('\\', '\\') => NodeShape::ParallelogramAlt,
+            ('/', '\\') => NodeShape::Trapezoid,
+            (_, '/') => NodeShape::TrapezoidAlt,
+            _ => NodeShape::Box,
+        };
+        let id = t[..start].trim().to_string();
+        return (id, label, shape);
+    }
+
     // [Box]
     if let Some(start) = t.find('[')
         && let Some(end) = t.rfind(']')
@@ -462,6 +480,15 @@ fn parse_node_token(token: &str) -> (String, String, NodeShape) {
         let id = t[..start].trim().to_string();
         let label = clean_label(&t[start + 1..end]);
         return (id, label, NodeShape::Box);
+    }
+
+    // (((DoubleCircle)))
+    if let Some(start) = t.find("(((")
+        && let Some(end) = t.rfind(")))")
+    {
+        let id = t[..start].trim().to_string();
+        let label = clean_label(&t[start + 3..end]);
+        return (id, label, NodeShape::DoubleCircle);
     }
 
     // ((Circle))
@@ -488,7 +515,7 @@ fn parse_node_token(token: &str) -> (String, String, NodeShape) {
     {
         let id = t[..start].trim().to_string();
         let label = clean_label(&t[start + 2..end]);
-        return (id, label, NodeShape::Diamond);
+        return (id, label, NodeShape::Hexagon);
     }
 
     // {Diamond}
@@ -502,6 +529,18 @@ fn parse_node_token(token: &str) -> (String, String, NodeShape) {
 
     let cleaned = clean_label(t);
     (cleaned.clone(), cleaned, NodeShape::Box)
+}
+
+/// Finds `[/` or `[\` (bracket followed by a slash) for parallelogram /
+/// trapezoid tokens. Returns the index of `[` and the slash character.
+fn bracket_slash_open(t: &str) -> Option<(usize, char)> {
+    let bytes = t.as_bytes();
+    for i in 0..bytes.len().saturating_sub(1) {
+        if bytes[i] == b'[' && (bytes[i + 1] == b'/' || bytes[i + 1] == b'\\') {
+            return Some((i, bytes[i + 1] as char));
+        }
+    }
+    None
 }
 
 fn find_next_delim(text: &str) -> Option<(usize, &'static str)> {
@@ -1016,6 +1055,63 @@ mod tests {
                 assert_eq!(f.nodes.len(), 4);
                 assert_eq!(f.edges.len(), 3);
                 assert_eq!(f.edges[0].label, Some("GET /users".to_string()));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_new_node_shapes() {
+        let dsl = r"
+        graph TB
+          H{{Hexagon}} --> D(((Double)))
+          D --> P[/Parallelogram/]
+          P --> PA[\ParallelogramAlt\]
+          PA --> T[/Trapezoid\]
+          T --> TA[\TrapezoidAlt/]
+        ";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let shape_of = |id: &str| {
+                    f.nodes
+                        .iter()
+                        .find(|n| n.id == id)
+                        .map(|n| n.shape)
+                        .unwrap_or(NodeShape::Box)
+                };
+                assert_eq!(shape_of("H"), NodeShape::Hexagon);
+                assert_eq!(shape_of("D"), NodeShape::DoubleCircle);
+                assert_eq!(shape_of("P"), NodeShape::Parallelogram);
+                assert_eq!(shape_of("PA"), NodeShape::ParallelogramAlt);
+                assert_eq!(shape_of("T"), NodeShape::Trapezoid);
+                assert_eq!(shape_of("TA"), NodeShape::TrapezoidAlt);
+                assert_eq!(f.edges.len(), 5);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_existing_shapes_unchanged() {
+        let dsl = "graph TB; A[Box]; B(Rounded); C{Diamond}; D[(Db)]; E[[Sub]]; F([Stad]); G((Circle))";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let shape_of = |id: &str| {
+                    f.nodes
+                        .iter()
+                        .find(|n| n.id == id)
+                        .map(|n| n.shape)
+                        .unwrap_or(NodeShape::Box)
+                };
+                assert_eq!(shape_of("A"), NodeShape::Box);
+                assert_eq!(shape_of("B"), NodeShape::Rounded);
+                assert_eq!(shape_of("C"), NodeShape::Diamond);
+                assert_eq!(shape_of("D"), NodeShape::Database);
+                assert_eq!(shape_of("E"), NodeShape::Subprocess);
+                assert_eq!(shape_of("F"), NodeShape::Stadium);
+                assert_eq!(shape_of("G"), NodeShape::Circle);
             }
             _ => panic!("Expected flowchart"),
         }

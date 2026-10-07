@@ -24,6 +24,12 @@ pub enum NodeShape {
     Subprocess, // [[Text]]
     Stadium,    // ([Text]) - Pill
     Circle,     // ((Text))
+    Hexagon,    // {{Text}} - Preparation / condition
+    DoubleCircle,   // (((Text))) - Start / end point
+    Parallelogram,  // [/Text/] - Input
+    ParallelogramAlt, // [\Text\] - Output (lean left)
+    Trapezoid,      // [/Text\] - Manual input
+    TrapezoidAlt,   // [\Text/] - Manual operation
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

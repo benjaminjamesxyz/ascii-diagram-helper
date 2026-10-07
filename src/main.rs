@@ -74,7 +74,7 @@ enum Commands {
     },
     /// Generate example diagram specs for quick reference
     Example {
-        /// Type of example: flowchart, sequence, architecture, tree, table, stack
+        /// Type of example: flowchart, sequence, architecture, tree, table, stack, datastructure
         #[arg(value_name = "TYPE", default_value = "flowchart")]
         diagram_type: String,
     },
@@ -147,6 +147,12 @@ Shared Libraries
 Heap (grows up)
 BSS Segment
 0x0000: Code / Text"
+                }
+                "datastructure" | "ds" | "btree" => {
+                    r#"{"type":"datastructure","kind":"btree","title":"B-Tree of order 4","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30","35"]}]}}"#
+                }
+                "bst" | "binarytree" => {
+                    r#"{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6","14","4"]}"#
                 }
                 _ => {
                     r"graph TD

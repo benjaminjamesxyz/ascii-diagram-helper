@@ -301,6 +301,72 @@ pub struct ArchitectureSpec {
     pub connections: Vec<EdgeSpec>,
 }
 
+/// Data-structure diagram kind: `tree` (binary tree, `value`/`left`/`right`
+/// nodes or `values` insertion order) or `btree` (multi-key nodes with
+/// `keys`/`children`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DsKind {
+    #[default]
+    Tree,
+    BTree,
+}
+
+/// A node in a data-structure diagram. Binary trees use `value`/`left`/
+/// `right`; B-trees use `keys`/`children`.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct DsNode {
+    /// Node label (binary tree kind). Numbers may be given unquoted in JSON.
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub left: Option<Box<DsNode>>,
+    #[serde(default)]
+    pub right: Option<Box<DsNode>>,
+    /// Keys of a B-tree node, rendered as `│ k1 │ k2 │` cells.
+    #[serde(default)]
+    pub keys: Vec<String>,
+    /// Child subtrees of a B-tree node (`keys.len()` separators imply
+    /// `keys.len() + 1` children; fewer is rendered as-is).
+    #[serde(default)]
+    pub children: Vec<DsNode>,
+}
+
+impl DsNode {
+    /// Convenience constructor for a binary-tree leaf.
+    #[must_use]
+    pub fn leaf(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Data-structure diagram: textbook-style trees with pointer links.
+/// JSON-only input, e.g.
+/// `{"type":"datastructure","kind":"tree","values":[8,3,10,1,6]}`.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct DataStructureSpec {
+    #[serde(default)]
+    pub style: BoxStyle,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub kind: DsKind,
+    /// Explicit binary-tree root (`kind: "tree"`).
+    #[serde(default)]
+    pub root: Option<DsNode>,
+    /// Insertion order for building a BST (`kind: "tree"`); numeric strings
+    /// compare numerically, others lexicographically. Ignored when `root`
+    /// is present.
+    #[serde(default)]
+    pub values: Vec<String>,
+    /// B-tree root (`kind: "btree"`).
+    #[serde(default)]
+    pub btree_root: Option<DsNode>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum DiagramSpec {
@@ -310,4 +376,5 @@ pub enum DiagramSpec {
     Tree(TreeSpec),
     Table(TableSpec),
     Stack(StackSpec),
+    DataStructure(DataStructureSpec),
 }

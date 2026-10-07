@@ -48,6 +48,11 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Classic `├──`, `└──`, `│` formatting with annotations
 - **Memory & Protocol Stacks**:
   - Memory layouts with address offsets (`0xFFFF`) and growth direction indicators
+- **Data Structures (JSON `type: "datastructure"`)**:
+  - Binary trees: explicit `root` nodes (`value`/`left`/`right`) or a `values` insertion order (auto-built BST — numeric strings compare numerically, others lexicographically)
+  - B-trees: `btree_root` nodes with `keys` cells (`│ 10 │ 20 │`) and fan-out `children`; keyless nodes fall back to `value`
+  - Boxes centered over subtrees with `┴`/`┬` branch bars and per-child descenders; optional centered `title`
+  - Example: `{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6"]}` (see `ascii-diagram example datastructure`)
 - **Multiple Styling Modes**:
   - `rounded`: `╭ ─ ╮ │ │ ╰ ─ ╯` (modern smooth terminal look)
   - `sharp`: `┌ ─ ┐ │ │ └ ─ ┘` (classic box-drawing)

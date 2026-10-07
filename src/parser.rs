@@ -101,6 +101,13 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         || trimmed.lines().any(|l| l.trim_start().starts_with("- "))
     {
         parse_tree_dsl(trimmed, default_style)
+    } else if first_line.starts_with("datastructure")
+        || first_line.split_whitespace().next() == Some("ds")
+    {
+        Err(
+            "datastructure diagrams are JSON-only, e.g. {\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\",\"3\",\"10\",\"1\",\"6\"]}"
+                .to_string(),
+        )
     } else if trimmed.contains("-->") || trimmed.contains("->") {
         // Default to flowchart if arrow detected
         parse_flowchart_dsl(trimmed, default_style)

@@ -118,7 +118,7 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 		// as a colored slab behind the diagram's own colors
 		renderShell: "self",
 		description:
-			"Draws clean, perfectly aligned ASCII and Unicode diagrams (flowcharts, sequence diagrams, architecture boxes, trees, stacks) without broken lines or misaligned borders. Accepts Mermaid DSL or JSON specification.",
+			"Draws clean, perfectly aligned ASCII and Unicode diagrams (flowcharts, sequence diagrams, architecture boxes, trees, stacks, data structures like binary trees and B-trees) without broken lines or misaligned borders. Accepts Mermaid DSL or JSON specification.",
 		promptSnippet:
 			"Draw clean, aligned ASCII/Unicode diagrams without broken boxes or lines",
 		promptGuidelines: [
@@ -130,13 +130,13 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			dsl: Type.Optional(
 				Type.String({
 					description:
-						"Diagram DSL string: supports Mermaid flowchart ('graph TD' / 'flowchart LR'), sequence ('sequenceDiagram'), tree, or stack syntax.",
+						"Diagram DSL string: supports Mermaid flowchart ('graph TD' / 'flowchart LR'), sequence ('sequenceDiagram'), tree, or stack syntax. Data structures (binary tree, B-tree) are JSON-only via `spec`.",
 				}),
 			),
 			spec: Type.Optional(
 				Type.String({
 					description:
-						"JSON diagram specification matching the DiagramSpec schema (flowchart, sequence, architecture, tree, table, stack).",
+						"JSON diagram specification matching the DiagramSpec schema (flowchart, sequence, architecture, tree, table, stack, datastructure — binary tree / B-tree, e.g. {\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\",\"3\",\"10\"]}).",
 				}),
 			),
 			style: Type.Optional(
@@ -269,7 +269,7 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 
 			if (!trimmedArgs) {
 				ctx.ui.notify(
-					"Usage: /diagram [--color] <mermaid-dsl> or /diagram --example [flowchart|sequence|stack|tree]",
+					"Usage: /diagram [--color] <mermaid-dsl> or /diagram --example [flowchart|sequence|stack|tree|datastructure]",
 					"info",
 				);
 				return;

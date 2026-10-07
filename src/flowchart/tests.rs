@@ -886,3 +886,42 @@ mod crossing_junction_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod track_side_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn left_heavy_feeds_route_left_corridor() {
+        // Majority of jump targets left of the source → shared track on the
+        // left corridor (shorter runs, fewer band crossings)
+        let dsl = "graph TB
+            CORE --> A1
+            CORE --> A2
+            A1 --> B1
+            A2 --> B2
+            WDG -.-> A1
+            WDG -.-> B1
+            WDG -.-> B2";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                // Left track column: a dash glyph in the first columns of the
+                // mid rows (the track runs the diagram height)
+                let left_track = out
+                    .lines()
+                    .filter(|l| l.starts_with('┆') || l.starts_with('|'))
+                    .count();
+                assert!(left_track >= 3, "left corridor track expected:\n{out}");
+                // All targets still fed
+                for id in ["A1", "B1", "B2"] {
+                    assert!(out.contains(id));
+                }
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}

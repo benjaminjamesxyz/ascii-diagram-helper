@@ -578,29 +578,37 @@ impl<'a> FlowchartRenderer<'a> {
                     let loop_x = loop_track_x;
                     let u_center_y = u.y + u.height / 2;
                     let v_center_y = v.y + v.height / 2;
+                    let u_bottom = u.y + u.height - 1;
 
                     // Route around same-rank boxes blocking the direct path
                     let u_exit_y = clear_route_y(&canvas, u.x + u.width, loop_x, u_center_y, true);
                     let v_entry_y =
                         clear_route_y(&canvas, v.x + v.width + 1, loop_x, v_center_y, false);
 
-                    edge_hline(
-                        &mut canvas,
-                        edge,
-                        u.x + u.width,
-                        loop_x,
-                        u_exit_y,
-                        &self.theme,
-                    );
-                    if u_exit_y != u_center_y {
-                        edge_vline(
+                    if u_exit_y == u_center_y {
+                        edge_hline(
                             &mut canvas,
                             edge,
                             u.x + u.width,
-                            u_center_y,
+                            loop_x,
                             u_exit_y,
                             &self.theme,
                         );
+                    } else {
+                        // Blocked at the exit row: leave through the source's
+                        // bottom border (perpendicular feed, like any rank
+                        // edge) and run the detour BELOW the blockers. A side
+                        // drop would hug the border (`│ Box │┆`).
+                        let stub_x = (u.x + u.width).saturating_sub(2).max(u.x.saturating_add(1));
+                        edge_vline(
+                            &mut canvas,
+                            edge,
+                            stub_x,
+                            u_bottom + 1,
+                            u_exit_y,
+                            &self.theme,
+                        );
+                        edge_hline(&mut canvas, edge, stub_x, loop_x, u_exit_y, &self.theme);
                     }
                     edge_vline(
                         &mut canvas,
@@ -610,24 +618,38 @@ impl<'a> FlowchartRenderer<'a> {
                         u_exit_y,
                         &self.theme,
                     );
-                    if v_entry_y != v_center_y {
-                        edge_vline(
+                    if v_entry_y == v_center_y {
+                        edge_hline(
                             &mut canvas,
                             edge,
                             v.x + v.width + 1,
+                            loop_x,
+                            v_entry_y,
+                            &self.theme,
+                        );
+                    } else {
+                        // Entry blocked above: drop into the target from a
+                        // channel kept one clear cell off the target's right
+                        // border, never flush against it.
+                        let channel_x = v.x + v.width + 2;
+                        edge_vline(
+                            &mut canvas,
+                            edge,
+                            channel_x,
                             v_entry_y,
                             v_center_y,
                             &self.theme,
                         );
+                        edge_hline(
+                            &mut canvas,
+                            edge,
+                            v.x + v.width + 1,
+                            channel_x,
+                            v_center_y,
+                            &self.theme,
+                        );
+                        edge_hline(&mut canvas, edge, channel_x, loop_x, v_entry_y, &self.theme);
                     }
-                    edge_hline(
-                        &mut canvas,
-                        edge,
-                        v.x + v.width + 1,
-                        loop_x,
-                        v_entry_y,
-                        &self.theme,
-                    );
                     edge_arrow_heads(
                         &mut canvas,
                         edge,

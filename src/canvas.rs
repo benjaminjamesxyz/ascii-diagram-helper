@@ -1005,11 +1005,21 @@ impl Canvas {
         }
 
         let is_ascii = theme.box_style == crate::theme::BoxStyle::Ascii;
+        // Solid borders resolve from the active theme (sharp stays `┌─┐`,
+        // double keeps `╔═╗`); dashed borders and 7-bit ascii keep their own
+        // glyph families.
         let (tl, tr, bl, br, h_char, v_char) = match (is_ascii, dashed) {
             (true, true) => ('+', '+', '+', '+', '-', '|'),
             (true, false) => ('+', '+', '+', '+', '=', '#'),
             (false, true) => ('╌', '╌', '╌', '╌', '╌', '┆'),
-            (false, false) => ('╔', '╗', '╚', '╝', '═', '║'),
+            (false, false) => (
+                theme.top_left_corner(),
+                theme.top_right_corner(),
+                theme.bottom_left_corner(),
+                theme.bottom_right_corner(),
+                theme.horizontal_line(),
+                theme.vertical_line(),
+            ),
         };
 
         // Draw horizontal edges
@@ -1064,7 +1074,8 @@ impl Canvas {
                 .is_some_and(|c| c.is_line || c.ch == '│')
             {
                 // Border role so the pen color stamps these junction glyphs
-                self.put_char_with_role(mid_x, bottom, '╧', CellRole::Border);
+                // (theme-resolved: `┬` sharp/rounded, `╦` double, `┻` heavy)
+                self.put_char_with_role(mid_x, bottom, theme.tee_down(), CellRole::Border);
             }
             // Left connector if horizontal line touches
             if x > 0
@@ -1072,14 +1083,14 @@ impl Canvas {
                     .get_cell(x - 1, mid_y)
                     .is_some_and(|c| c.is_line || c.ch == '─' || c.ch == '►')
             {
-                self.put_char_with_role(x, mid_y, '╟', CellRole::Border);
+                self.put_char_with_role(x, mid_y, theme.tee_right(), CellRole::Border);
             }
             // Right connector if horizontal line touches
             if self
                 .get_cell(right + 1, mid_y)
                 .is_some_and(|c| c.is_line || c.ch == '─')
             {
-                self.put_char_with_role(right, mid_y, '╢', CellRole::Border);
+                self.put_char_with_role(right, mid_y, theme.tee_left(), CellRole::Border);
             }
         }
 

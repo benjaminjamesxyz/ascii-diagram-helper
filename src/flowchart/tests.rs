@@ -159,8 +159,11 @@ mod tests {
         let result = renderer.render(false);
         assert!(result.contains("Is Valid?"));
         assert!(result.contains("◇"));
-        assert!(result.contains("╔"));
-        assert!(result.contains("║"));
+        // Decision box borders follow the theme: rounded style yields rounded
+        // corners, never the double-line glyphs of the old hard-coded box
+        assert!(result.contains('╭'));
+        assert!(result.contains('│'));
+        assert!(!result.contains('╔'));
         assert!(result.contains("Proceed"));
     }
 
@@ -1106,5 +1109,122 @@ mod supernode_tests {
             }
             _ => panic!("Expected flowchart"),
         }
+    }
+
+    // ---- Regression: theme-aware decision boxes + mixed-weight edge routing ----
+
+    const REPRO_DSL: &str = "graph TD; S([Start]) --> C{Valid?}; C -->|yes| P[Process]; C -->|no| E[Error]; P -.->|retry| S; P ==> D((Done))";
+
+    /// Dashed edge-stroke glyphs (`-.->` runs).
+    const DASH_GLYPHS: [char; 6] = ['╌', '┆', '┄', '┊', '╍', '╏'];
+
+    /// Heavy edge-stroke glyphs (`==>` runs).
+    const HEAVY_GLYPHS: [char; 2] = ['━', '┃'];
+
+    /// Light / double node-box border chars. Deliberately excludes `┼ ╬ ╋
+    /// ─ ═ ╭╮╰╯`-family crosses shared with junction resolution, which
+    /// dashed crossings render as.
+    const BOX_BORDER_GLYPHS: [char; 18] = [
+        '│', '║', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '╔', '╗', '╚', '╝', '╠', '╣', '╦', '╩',
+    ];
+
+    /// Heavy node-box border chars (heavy theme / weighted boxes).
+    const HEAVY_BORDER_GLYPHS: [char; 8] = ['┏', '┓', '┗', '┛', '┣', '┫', '┳', '┻'];
+
+    fn render_flow_dsl(dsl: &str, style: BoxStyle) -> String {
+        match crate::parser::parse_dsl_or_json(dsl, style).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                FlowchartRenderer::new(&f, Theme::new(f.style)).render(false)
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    /// `│ Process │┆` / `┌──────┐┆` hug pattern: a dashed/heavy stroke must
+    /// never sit immediately beside a node-box border char (side-adjacency).
+    /// Perpendicular feeds below/above a border stay legal, and a heavy
+    /// stroke meeting its own heavy corner (`┗━━┓`) is one continuous line.
+    fn assert_no_border_side_hug(output: &str) {
+        let lines: Vec<Vec<char>> = output.lines().map(|l| l.chars().collect()).collect();
+        for (r, line) in lines.iter().enumerate() {
+            for (c, &ch) in line.iter().enumerate() {
+                let (forbidden, extra): (&[char], &[char]) = if DASH_GLYPHS.contains(&ch) {
+                    (&BOX_BORDER_GLYPHS, &HEAVY_BORDER_GLYPHS)
+                } else if HEAVY_GLYPHS.contains(&ch) {
+                    (&BOX_BORDER_GLYPHS, &[])
+                } else {
+                    continue;
+                };
+                for nc in [c.checked_sub(1), Some(c + 1)] {
+                    let Some(nc) = nc else { continue };
+                    if let Some(&nch) = lines[r].get(nc)
+                        && (forbidden.contains(&nch) || extra.contains(&nch))
+                    {
+                        panic!(
+                            "edge stroke '{ch}' hugs border '{nch}' at row {r} col {c}:\n{output}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_sharp_style_decision_node_has_no_double_glyphs() {
+        let out = render_flow_dsl(REPRO_DSL, BoxStyle::Sharp);
+        // Decision node (and every other node) follows the sharp theme:
+        // no double-line corners, rows, or columns anywhere
+        for ch in ['╔', '╗', '╚', '╝', '═', '║'] {
+            assert!(!out.contains(ch), "sharp style leaked '{ch}':\n{out}");
+        }
+        // Decision badge kept, sharp corners used, bottom tee present
+        assert!(out.contains('◇'), "decision badge missing:\n{out}");
+        assert!(out.contains('┌') && out.contains('┐'));
+        assert!(out.contains('┬'), "sharp bottom connector missing:\n{out}");
+    }
+
+    #[test]
+    fn test_decision_box_follows_theme() {
+        const DSL: &str = "graph TD; A{Pick?} --> B[Ok]";
+        let cases = [
+            (BoxStyle::Rounded, '╭', '╔'),
+            (BoxStyle::Sharp, '┌', '╔'),
+            (BoxStyle::Double, '╔', '\u{0}'),
+            (BoxStyle::Heavy, '┏', '╔'),
+        ];
+        for (style, corner, forbidden) in cases {
+            let out = render_flow_dsl(DSL, style);
+            assert!(
+                out.contains(corner),
+                "{style:?}: decision box missing corner '{corner}':\n{out}"
+            );
+            if forbidden != '\u{0}' {
+                assert!(
+                    !out.contains(forbidden),
+                    "{style:?}: decision box leaked '{forbidden}':\n{out}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_mixed_edge_weights_no_border_overlap() {
+        let out = render_flow_dsl(REPRO_DSL, BoxStyle::Sharp);
+        // All three weights actually drew (guard against vacuous passes)
+        assert!(
+            out.contains('╌') && out.contains('┆'),
+            "dashed edge missing:\n{out}"
+        );
+        assert!(
+            out.contains('━') && out.contains('┃'),
+            "thick edge missing:\n{out}"
+        );
+        assert!(out.contains("retry"), "dashed label missing:\n{out}");
+        // Node borders intact
+        assert!(out.contains("│ Process │"), "source box damaged:\n{out}");
+        assert!(out.contains("│  Start  │"), "target box damaged:\n{out}");
+        // No dashed/heavy stroke beside or through a node border; the
+        // loop-back channel stays clear of every bounding box
+        assert_no_border_side_hug(&out);
     }
 }

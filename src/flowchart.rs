@@ -487,6 +487,31 @@ impl<'a> FlowchartRenderer<'a> {
         }
     }
 
+    /// True when a down-arrowhead already occupies (`x`, `y`). Bend and jump
+    /// edges reuse a nearby arrow column so a target fed from two sides shows
+    /// one converging arrowhead instead of adjacent `▼▼` pairs.
+    fn arrow_down_at(&self, canvas: &Canvas, x: usize, y: usize) -> bool {
+        canvas
+            .get_cell(x, y)
+            .is_some_and(|c| c.ch == self.theme.arrow_down())
+    }
+
+    /// Picks the drop column for an edge entering `v` from above: keeps
+    /// `v_cx` unless an arrowhead already lands at `v_cx` ± 1, in which case
+    /// that column is reused so both lines share one arrowhead.
+    fn drop_x_for(&self, canvas: &Canvas, v_cx: usize, v_top: usize) -> usize {
+        if self.arrow_down_at(canvas, v_cx, v_top) {
+            return v_cx;
+        }
+        if self.arrow_down_at(canvas, v_cx + 1, v_top) {
+            return v_cx + 1;
+        }
+        if v_cx > 0 && self.arrow_down_at(canvas, v_cx - 1, v_top) {
+            return v_cx - 1;
+        }
+        v_cx
+    }
+
     fn assign_ranks(
         &self,
         nodes: &mut [LayoutNode],

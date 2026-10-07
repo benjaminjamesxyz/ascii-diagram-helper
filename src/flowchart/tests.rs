@@ -750,3 +750,65 @@ mod fill_thick_tests {
         assert!(!plain.contains('\u{1b}'), "no SGR when colored=false");
     }
 }
+
+#[cfg(test)]
+mod dense_feed_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    fn render(dsl: &str) -> String {
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                FlowchartRenderer::new(&f, theme).render(false)
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn no_adjacent_double_arrowheads_on_shared_targets() {
+        // Regression: a target fed by one aligned edge (drawn at the source
+        // column) and one bend edge (drawn at the target center) used to get
+        // adjacent ▼▼ arrowheads. All incoming edges now converge on one
+        // arrowhead column per target.
+        let dsl = "graph TB
+            MAIN --> SCHED
+            MAIN --> COMM
+            WDG -.-> SCHED
+            WDG -.-> COMM";
+        let out = render(dsl);
+        assert!(
+            !out.contains("▼▼"),
+            "no adjacent double arrowheads expected:\n{out}"
+        );
+    }
+
+    #[test]
+    fn dense_supervisory_feeds_single_arrowheads() {
+        let dsl = "graph TB
+            MAIN --> SCHED
+            MAIN --> COMM
+            SCHED --> T1
+            SCHED --> T2
+            COMM --> T3
+            COMM --> T4
+            T1 --> ACT
+            T2 --> SENSE
+            WDG -.-> SCHED
+            WDG -.-> COMM
+            WDG -.-> T2
+            WDG -.-> T3
+            WDG -.-> ACT";
+        let out = render(dsl);
+        assert!(
+            !out.contains("▼▼"),
+            "dense feeds must not double arrowheads:\n{out}"
+        );
+        // All five targets still receive their edges
+        for id in ["SCHED", "COMM", "T1", "T2", "T3", "T4", "ACT", "SENSE"] {
+            assert!(out.contains(id), "{id} missing");
+        }
+    }
+}

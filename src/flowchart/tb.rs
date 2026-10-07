@@ -287,7 +287,6 @@ impl<'a> FlowchartRenderer<'a> {
                     if v.rank == u.rank + 1 {
                         let is_branching =
                             outgoing_counts.get(&edge.from).copied().unwrap_or(0) > 1;
-                        let is_merging = incoming_counts.get(&edge.to).copied().unwrap_or(0) > 1;
                         let is_aligned = u_cx == v_cx
                             || (u_cx.abs_diff(v_cx) <= 1
                                 && u_cx > v.x + 1
@@ -296,11 +295,12 @@ impl<'a> FlowchartRenderer<'a> {
                                 && v_cx < u.x + u.width - 2);
 
                         if is_aligned {
-                            let line_x = if is_merging && !is_branching {
-                                v_cx
-                            } else {
-                                u_cx
-                            };
+                            // Draw at the target's center column so every
+                            // edge entering the same target converges on one
+                            // arrowhead column. is_aligned guarantees v_cx is
+                            // within both boxes' spans (± 1 near-align), so
+                            // the line still touches the source bottom.
+                            let line_x = v_cx;
                             // Straight line down
                             edge_vline(
                                 &mut canvas,
@@ -334,13 +334,16 @@ impl<'a> FlowchartRenderer<'a> {
                             if let Some(&off) = band_offsets.get(&edge.from) {
                                 mid_y = (mid_y + off).min(v_top.saturating_sub(1));
                             }
+                            // Reuse a nearby arrowhead column so a target fed
+                            // from two sides converges into one arrowhead
+                            let drop_x = self.drop_x_for(&canvas, v_cx, v_top - 1);
                             edge_vline(&mut canvas, edge, u_cx, u_bottom + 1, mid_y, &self.theme);
-                            edge_hline(&mut canvas, edge, u_cx, v_cx, mid_y, &self.theme);
-                            edge_vline(&mut canvas, edge, v_cx, mid_y, v_top - 1, &self.theme);
+                            edge_hline(&mut canvas, edge, u_cx, drop_x, mid_y, &self.theme);
+                            edge_vline(&mut canvas, edge, drop_x, mid_y, v_top - 1, &self.theme);
                             edge_arrow_heads(
                                 &mut canvas,
                                 edge,
-                                (v_cx, v_top - 1, Direction::Down),
+                                (drop_x, v_top - 1, Direction::Down),
                                 (u_cx, u_bottom + 1, Direction::Up),
                                 &self.theme,
                             );
@@ -406,13 +409,16 @@ impl<'a> FlowchartRenderer<'a> {
                                     &self.theme,
                                 );
                             }
-                            // Per-target drop from the shared track
-                            edge_hline(&mut canvas, edge, track_x, v_cx, bottom_gap_y, &self.theme);
+                            // Per-target drop from the shared track — reuse a
+                            // nearby arrowhead column when one already lands
+                            // at the target top (dense supervisory feeds)
+                            let drop_x = self.drop_x_for(&canvas, v_cx, v_top - 1);
+                            edge_hline(&mut canvas, edge, track_x, drop_x, bottom_gap_y, &self.theme);
                             if bottom_gap_y < v_top - 1 {
                                 edge_vline(
                                     &mut canvas,
                                     edge,
-                                    v_cx,
+                                    drop_x,
                                     bottom_gap_y,
                                     v_top - 1,
                                     &self.theme,
@@ -421,8 +427,8 @@ impl<'a> FlowchartRenderer<'a> {
                             edge_arrow_heads(
                                 &mut canvas,
                                 edge,
-                                (v_cx, v_top - 1, Direction::Down),
-                                (v_cx, bottom_gap_y, Direction::Up),
+                                (drop_x, v_top - 1, Direction::Down),
+                                (drop_x, bottom_gap_y, Direction::Up),
                                 &self.theme,
                             );
                             if let Some(ref lbl) = edge.label {

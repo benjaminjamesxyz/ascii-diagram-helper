@@ -66,7 +66,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 ### Tips for Dense Graphs
 
-Cross-branch edges (watchdog kicks, config broadcasts, debug taps) work correctly at any density but get visually busy past a threshold. Keeping them rare keeps diagrams crisp:
+Cross-branch edges (watchdog kicks, config broadcasts, debug taps) render correctly at any density and converge on a single arrowhead column per target — no adjacent `▼▼` pairs when a target is fed from both a direct edge and a supervisory feed. They still get visually busy past a threshold, so:
 
 - **Limit cross-branch edges per source to ≤ 2.** Beyond that, every edge still renders (shared corridor track per source), but dash runs cross more bands and gain `┼` crossings
 - **Prefer one fan-out over many hops**: `WDG -.-> A` + `WDG -.-> B` renders cleaner than routing a kick through intermediate tasks

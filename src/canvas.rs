@@ -495,6 +495,14 @@ impl Canvas {
         } else {
             '╌'
         };
+        // Perpendicular dashed-run glyph: dash × dash crossing resolves to a
+        // solid cross cell — one cell loses its dash pattern, both strokes
+        // stay continuous
+        let vdash_char = if theme.box_style == crate::theme::BoxStyle::Ascii {
+            '|'
+        } else {
+            '┆'
+        };
 
         for x in x1..=x2 {
             if self.cells[base + x].role == CellRole::Text && self.cells[base + x].ch != ' ' {
@@ -511,6 +519,21 @@ impl Canvas {
             // merge into a junction instead of overwriting the stroke; render
             // resolves ┼ from the conn flags
             if cell.is_line && cell.ch == ' ' && (cell.conn.north || cell.conn.south) {
+                cell.conn.east = true;
+                cell.conn.west = true;
+                if cell.role != CellRole::Border {
+                    cell.role = CellRole::Line;
+                    cell.color = self.pen;
+                }
+                continue;
+            }
+            // Crossing: a dashed vertical run passes here — convert to a
+            // solid cross cell so neither stroke loses continuity
+            if cell.ch == vdash_char {
+                cell.ch = ' ';
+                cell.is_line = true;
+                cell.conn.north = true;
+                cell.conn.south = true;
                 cell.conn.east = true;
                 cell.conn.west = true;
                 if cell.role != CellRole::Border {
@@ -539,6 +562,13 @@ impl Canvas {
         } else {
             '┆'
         };
+        // Perpendicular dashed-run glyph: dash × dash crossing resolves to a
+        // solid cross cell (see draw_dashed_hline)
+        let hdash_char = if theme.box_style == crate::theme::BoxStyle::Ascii {
+            '-'
+        } else {
+            '╌'
+        };
 
         for y in y1..=y2 {
             let cell = &mut self.cells[y * self.width + x];
@@ -550,6 +580,21 @@ impl Canvas {
             if cell.is_line && cell.ch == ' ' && (cell.conn.east || cell.conn.west) {
                 cell.conn.north = true;
                 cell.conn.south = true;
+                if cell.role != CellRole::Border {
+                    cell.role = CellRole::Line;
+                    cell.color = self.pen;
+                }
+                continue;
+            }
+            // Crossing: a dashed horizontal run passes here — convert to a
+            // solid cross cell so neither stroke loses continuity
+            if cell.ch == hdash_char {
+                cell.ch = ' ';
+                cell.is_line = true;
+                cell.conn.north = true;
+                cell.conn.south = true;
+                cell.conn.east = true;
+                cell.conn.west = true;
                 if cell.role != CellRole::Border {
                     cell.role = CellRole::Line;
                     cell.color = self.pen;

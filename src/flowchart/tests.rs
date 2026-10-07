@@ -972,3 +972,30 @@ mod nested_direction_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod dashed_crossing_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn dashed_x_dashed_crossing_renders_junction() {
+        // Two dashed runs crossing: the crossing cell becomes a solid cross
+        // so neither stroke loses continuity (was: one dash overwrote the
+        // other, leaving a gap in one run)
+        let dsl = "graph TB
+            T --> M
+            S -.-> M
+            S -.-> R
+            T -.-> R";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                assert!(out.matches('┼').count() >= 4, "dash×dash junctions expected:\n{out}");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+}

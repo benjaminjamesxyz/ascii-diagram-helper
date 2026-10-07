@@ -67,17 +67,22 @@ fn prop_color(props: &str, name: &str) -> Option<Color> {
 /// Returns `Err` if the input is empty, JSON input does not deserialize into
 /// [`DiagramSpec`], or no diagram syntax can be detected.
 pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
-    let trimmed = input.trim();
+    let trimmed = input.trim().trim_start_matches('\u{feff}').trim();
     if trimmed.is_empty() {
         return Err("Input diagram specification is empty".to_string());
     }
 
-    // Check if JSON
+    // Check if JSON. The CLI `--style` default applies only when the spec
+    // omits `style`; an explicit JSON style keeps precedence (unconditional
+    // injection would clobber non-default explicit styles).
     if trimmed.starts_with('{') {
-        match serde_json::from_str::<DiagramSpec>(trimmed) {
-            Ok(spec) => return Ok(spec),
-            Err(e) => return Err(format!("Invalid JSON diagram specification: {e}")),
+        let mut value: serde_json::Value = serde_json::from_str(trimmed)
+            .map_err(|e| format!("Invalid JSON diagram specification: {e}"))?;
+        if value.get("style").is_none() {
+            value["style"] = serde_json::to_value(default_style).expect("BoxStyle serializes");
         }
+        return serde_json::from_value::<DiagramSpec>(value)
+            .map_err(|e| format!("Invalid JSON diagram specification: {e}"));
     }
 
     // Mermaid allows `;` as a statement separator; normalize to newlines so
@@ -109,6 +114,17 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         )
     } else if first_line.split_whitespace().next() == Some("ds") {
         parse_datastructure_dsl(trimmed, default_style)
+    } else if trimmed.contains("->>")
+        || trimmed.contains("<->")
+        || trimmed.lines().any(|l| {
+            let t = l.trim_start();
+            t.starts_with("participant ") || t.starts_with("actor ")
+        })
+    {
+        // Sequence-only markers (->> / <-> arrows, participant/actor lines)
+        // must win over the generic arrow fallback, which would otherwise
+        // hijack headerless sequence input into a flowchart.
+        parse_sequence_dsl(trimmed, default_style)
     } else if trimmed.contains("-->") || trimmed.contains("->") {
         // Default to flowchart if arrow detected
         parse_flowchart_dsl(trimmed, default_style)
@@ -2479,5 +2495,55 @@ mod tests {
         let junk = "sequenceDiagram A";
         let err = parse_sequence_dsl(junk, BoxStyle::Rounded).unwrap_err();
         assert!(err.contains("line 1: `A`"), "err: {err}");
+    }
+
+    #[test]
+    fn test_json_honors_default_style_when_style_absent() {
+        let json = r#"{"type":"datastructure","kind":"tree","values":["8","3"]}"#;
+        let spec = parse_dsl_or_json(json, BoxStyle::Ascii).unwrap();
+        match spec {
+            DiagramSpec::DataStructure(d) => assert_eq!(d.style, BoxStyle::Ascii),
+            _ => panic!("Expected datastructure"),
+        }
+        // Architecture (the originally-reported type) too
+        let arch = r#"{"type":"architecture","containers":[{"id":"c1","title":"C","items":[{"id":"a","name":"A"}]}]}"#;
+        let spec = parse_dsl_or_json(arch, BoxStyle::Heavy).unwrap();
+        match spec {
+            DiagramSpec::Architecture(a) => assert_eq!(a.style, BoxStyle::Heavy),
+            _ => panic!("Expected architecture"),
+        }
+    }
+
+    #[test]
+    fn test_json_explicit_style_beats_cli_default() {
+        let json = r#"{"type":"datastructure","kind":"tree","style":"ascii","values":["8"]}"#;
+        let spec = parse_dsl_or_json(json, BoxStyle::Sharp).unwrap();
+        match spec {
+            DiagramSpec::DataStructure(d) => assert_eq!(d.style, BoxStyle::Ascii),
+            _ => panic!("Expected datastructure"),
+        }
+    }
+
+    #[test]
+    fn test_bom_prefixed_json_still_parses() {
+        let json = format!(
+            "\u{feff}{}",
+            r#"{"type":"datastructure","kind":"tree","values":["1"]}"#
+        );
+        let spec = parse_dsl_or_json(&json, BoxStyle::Rounded).unwrap();
+        assert!(matches!(spec, DiagramSpec::DataStructure(_)));
+    }
+
+    #[test]
+    fn test_headerless_sequence_dispatch_beats_arrow_fallback() {
+        let spec = parse_dsl_or_json("A->>B: hi", BoxStyle::Rounded).unwrap();
+        assert!(matches!(spec, DiagramSpec::Sequence(_)));
+        let spec = parse_dsl_or_json("participant A\nA->>B: hi", BoxStyle::Rounded).unwrap();
+        assert!(matches!(spec, DiagramSpec::Sequence(_)));
+        // Documented flowchart forms still route to flowchart
+        let spec = parse_dsl_or_json("A --> B", BoxStyle::Rounded).unwrap();
+        assert!(matches!(spec, DiagramSpec::Flowchart(_)));
+        let spec = parse_dsl_or_json("graph TD; A --> B", BoxStyle::Rounded).unwrap();
+        assert!(matches!(spec, DiagramSpec::Flowchart(_)));
     }
 }

@@ -14,7 +14,7 @@
     "ascii-diagram": "bin/ascii-diagram"
   },
   "scripts": {
-    "build": "cargo build --release && mkdir -p bin && cp target/release/ascii-diagram bin/ascii-diagram",
+    "build": "cargo build --release && mkdir -p bin && cp target/release/ascii-diagram bin/ascii-diagram && (mkdir -p ~/.local/bin && cp target/release/ascii-diagram ~/.local/bin/ascii-diagram 2>/dev/null || echo 'note: skipped ~/.local/bin install')",
     "test": "cargo test && node --experimental-strip-types tests/extension.test.js"
   },
   "peerDependencies": {

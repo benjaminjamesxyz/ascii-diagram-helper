@@ -96,6 +96,8 @@ cp bin/ascii-diagram ~/.local/bin/
 
 (Ensure `~/.local/bin` is on your `PATH`. Alternatively, set `ASCII_DIAGRAM_BIN=/full/path/to/ascii-diagram` in your environment.)
 
+Every later `npm run build` automatically refreshes `~/.local/bin/ascii-diagram` (best-effort — skipped with a note if the directory cannot be created), so the installed copy never goes stale.
+
 ### 2. Install the Pi package
 
 ```bash

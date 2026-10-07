@@ -1,6 +1,6 @@
 use crate::canvas::{Canvas, CellRole, Direction, Rect};
 use crate::color::Color;
-use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, SubgraphSpec};
+use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, NodeSpec, SubgraphSpec};
 use crate::theme::{BoxStyle, Theme};
 use std::collections::{HashMap, HashSet, VecDeque};
 use unicode_width::UnicodeWidthStr;
@@ -41,9 +41,28 @@ pub struct FlowchartRenderer<'a> {
 /// the diagram: rendered independently in its own orientation and pasted as a
 /// pre-composed block. Mermaid applies subgraph `direction` under the same
 /// restriction (disconnected clusters only).
+/// How a rendered direction-cluster block is placed on the main canvas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BlockMode {
+    /// Edge-isolated cluster: pasted below the main graph
+    Below,
+    /// Non-isolated cluster: replaces its members as a phantom node in the
+    /// layout; block pasted at the phantom's position
+    AtPhantom,
+}
+
+#[derive(Clone)]
 pub(super) struct IsolatedBlock {
     /// Subgraph id this block was rendered from
     sg_id: String,
+    /// Placement mode
+    mode: BlockMode,
+    /// For `AtPhantom`: id of the phantom node standing in for this cluster
+    phantom_id: String,
+    /// All recursive member ids of the cluster
+    member_ids: Vec<String>,
+    /// Owned-spec index of the phantom node (AtPhantom, assigned on reindex)
+    phantom_idx: Option<usize>,
     /// Rendered content lines (no trailing blanks)
     lines: Vec<String>,
     width: usize,
@@ -57,13 +76,37 @@ pub(super) struct IsolatedBlock {
 /// isolated-direction subgraph blocks.
 pub(super) struct Blocks {
     items: Vec<IsolatedBlock>,
-    /// Indices into `spec.nodes` of ALL (recursive) members of moved subgraphs
+    /// Indices into `spec.nodes` of ALL (recursive) members of BELOW-mode
+    /// moved subgraphs (phantom members are removed from the spec instead)
     member_indices: HashSet<usize>,
+    /// Member ids of below-mode subgraphs — used to recompute
+    /// `member_indices` when the spec is rewritten for phantom clusters
+    pub(super) isolated_member_ids: Vec<String>,
+    /// Owned-spec indices of phantom nodes (skip drawing; they carry the
+    /// pasted cluster block instead)
+    pub(super) phantom_indices: HashSet<usize>,
 }
 
+/// Prefix of the phantom node standing in for a supernode cluster.
+pub(super) const PHANTOM_PREFIX: &str = "__sg_";
+
 impl Blocks {
+    /// No moved clusters — every node participates in the main layout.
+    pub(super) fn empty() -> Blocks {
+        Blocks {
+            items: Vec::new(),
+            member_indices: HashSet::new(),
+            isolated_member_ids: Vec::new(),
+            phantom_indices: HashSet::new(),
+        }
+    }
+
     fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    fn has_supernodes(&self) -> bool {
+        self.items.iter().any(|b| b.mode == BlockMode::AtPhantom)
     }
 
     fn rect_for(&self, sg_id: &str) -> Option<(usize, usize, usize, usize)> {
@@ -72,6 +115,44 @@ impl Blocks {
             .iter()
             .find(|b| b.sg_id == sg_id)
             .map(|b| (b.origin_x, b.origin_y, b.width, b.height))
+    }
+
+    /// Recomputes index-based fields against a rewritten (phantom-bearing)
+    /// spec: below-mode members keep their ids; phantoms are new nodes.
+    fn reindex_for(&self, renderer: &FlowchartRenderer<'_>) -> Blocks {
+        let idx = renderer.index_of();
+        let mut member_indices = HashSet::new();
+        for id in &self.isolated_member_ids {
+            if let Some(&i) = idx.get(id.as_str()) {
+                member_indices.insert(i);
+            }
+        }
+        let mut phantom_indices = HashSet::new();
+        for b in &self.items {
+            if b.mode == BlockMode::AtPhantom
+                && let Some(&i) = idx.get(b.phantom_id.as_str())
+            {
+                phantom_indices.insert(i);
+            }
+        }
+        Blocks {
+            items: self
+                .items
+                .iter()
+                .map(|b| {
+                    let mut b = b.clone();
+                    if b.mode == BlockMode::AtPhantom
+                        && let Some(&i) = idx.get(b.phantom_id.as_str())
+                    {
+                        b.phantom_idx = Some(i);
+                    }
+                    b
+                })
+                .collect(),
+            member_indices,
+            isolated_member_ids: self.isolated_member_ids.clone(),
+            phantom_indices,
+        }
     }
 }
 
@@ -97,11 +178,24 @@ impl<'a> FlowchartRenderer<'a> {
             return String::new();
         }
 
+        let blocks = self.collect_blocks(colored);
+        if blocks.has_supernodes() {
+            // Non-isolated direction clusters: members collapse into phantom
+            // nodes; render against the rewritten spec
+            let owned = self.supernode_spec(&blocks);
+            let sub = FlowchartRenderer::new(&owned, self.theme.clone());
+            let blocks = blocks.reindex_for(&sub);
+            sub.render_dispatch(colored, blocks)
+        } else {
+            self.render_dispatch(colored, blocks)
+        }
+    }
+
+    fn render_dispatch(&self, colored: bool, mut blocks: Blocks) -> String {
         let is_lr = matches!(
             self.spec.direction,
             LayoutDirection::LR | LayoutDirection::RL
         );
-        let mut blocks = self.collect_isolated_blocks(colored);
         if is_lr {
             self.render_lr(colored, &mut blocks)
         } else {
@@ -109,28 +203,102 @@ impl<'a> FlowchartRenderer<'a> {
         }
     }
 
+    /// Rewrites the spec for supernode clusters: below-mode members stay,
+    /// each AtPhantom cluster's members are replaced by a single phantom node,
+    /// internal cluster edges are dropped, external edge endpoints are
+    /// re-targeted to the phantom id.
+    fn supernode_spec(&self, blocks: &Blocks) -> FlowchartSpec {
+        let mut in_supernode: HashSet<&str> = HashSet::new();
+        let mut phantom_of: HashMap<&str, String> = HashMap::new();
+        for b in &blocks.items {
+            if b.mode == BlockMode::AtPhantom {
+                for id in &b.member_ids {
+                    in_supernode.insert(id.as_str());
+                    phantom_of.insert(id.as_str(), format!("{PHANTOM_PREFIX}{}", b.sg_id));
+                }
+            }
+        }
+        let mut nodes: Vec<NodeSpec> = Vec::new();
+        for n in &self.spec.nodes {
+            if let Some(pid) = phantom_of.get(n.id.as_str()) {
+                // Emit one phantom per cluster (first member seen)
+                if !nodes.iter().any(|m| &m.id == pid) {
+                    nodes.push(NodeSpec {
+                        id: pid.clone(),
+                        label: String::new(),
+                        shape: NodeShape::Box,
+                        dashed_border: false,
+                        color: None,
+                        fill_color: None,
+                        border_level: 0,
+                    });
+                }
+            } else {
+                nodes.push(n.clone());
+            }
+        }
+        let edges = self
+            .spec
+            .edges
+            .iter()
+            .filter(|e| {
+                // drop internal cluster edges
+                !(in_supernode.contains(e.from.as_str())
+                    && in_supernode.contains(e.to.as_str())
+                    && phantom_of.get(e.from.as_str()) == phantom_of.get(e.to.as_str()))
+            })
+            .map(|e| {
+                let mut e = e.clone();
+                if let Some(pid) = phantom_of.get(e.from.as_str()) {
+                    e.from = pid.clone();
+                }
+                if let Some(pid) = phantom_of.get(e.to.as_str()) {
+                    e.to = pid.clone();
+                }
+                e
+            })
+            .collect();
+        FlowchartSpec {
+            direction: self.spec.direction,
+            style: self.spec.style,
+            title: self.spec.title.clone(),
+            nodes,
+            edges,
+            subgraphs: self.spec.subgraphs.clone(),
+        }
+    }
+
     /// Finds subgraphs with an explicit `direction` that differs from the
-    /// global direction AND whose members have no edges to nodes outside the
-    /// subgraph. Each such subgraph is rendered recursively as a standalone
-    /// diagram (its own direction applies inside). Nested subgraphs of a moved
-    /// subgraph are handled inside the recursive render, not visited again.
-    fn collect_isolated_blocks(&self, colored: bool) -> Blocks {
+    /// global direction and renders each recursively as a standalone block.
+    /// Edge-isolated clusters paste below the graph (`Below`); non-isolated
+    /// clusters become phantom-backed supernodes (`AtPhantom`). Nested
+    /// subgraphs of a moved subgraph are handled inside the recursive render,
+    /// not visited again.
+    fn collect_blocks(&self, colored: bool) -> Blocks {
         let idx = self.index_of();
         let mut items = Vec::new();
         let mut member_indices = HashSet::new();
+        let mut isolated_member_ids = Vec::new();
         self.collect_sgs(
             &self.spec.subgraphs,
             &idx,
             colored,
             &mut items,
             &mut member_indices,
+            &mut isolated_member_ids,
         );
         Blocks {
             items,
             member_indices,
+            isolated_member_ids,
+            phantom_indices: HashSet::new(),
         }
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "internal collector; threading state through recursion reads clearest"
+    )]
     fn collect_sgs(
         &self,
         sgs: &[SubgraphSpec],
@@ -138,13 +306,21 @@ impl<'a> FlowchartRenderer<'a> {
         colored: bool,
         out: &mut Vec<IsolatedBlock>,
         member_indices: &mut HashSet<usize>,
+        isolated_member_ids: &mut Vec<String>,
     ) {
         for sg in sgs {
             let wants_move = sg.direction.is_some_and(|d| d != self.spec.direction);
             let mut moved = false;
             if wants_move {
                 let members = member_ids(sg);
-                if Self::is_isolated(self.spec, &members) {
+                // Both modes render the cluster recursively; isolation only
+                // picks the placement strategy
+                let mode = if Self::is_isolated(self.spec, &members) {
+                    BlockMode::Below
+                } else {
+                    BlockMode::AtPhantom
+                };
+                {
                     let idset: HashSet<&str> = members.iter().map(String::as_str).collect();
                     let sub = FlowchartSpec {
                         direction: sg.direction.unwrap(),
@@ -179,13 +355,25 @@ impl<'a> FlowchartRenderer<'a> {
                         .map(|l| UnicodeWidthStr::width(l.as_str()))
                         .max()
                         .unwrap_or(1);
-                    for id in &members {
-                        if let Some(&i) = idx.get(id.as_str()) {
-                            member_indices.insert(i);
+                    if std::env::var("DBG_SG").is_ok() {
+                        let dir_dbg = sub.direction;
+                        eprintln!("BLOCK sg={} mode={:?} sub_dir={:?} {}x{} members={:?} nodes_in_sub={}", sg.id, mode, dir_dbg, width, height, members, sub.nodes.len());
+                        eprintln!("{rendered}");
+                    }
+                    if mode == BlockMode::Below {
+                        for id in &members {
+                            if let Some(&i) = idx.get(id.as_str()) {
+                                member_indices.insert(i);
+                            }
+                            isolated_member_ids.push(id.clone());
                         }
                     }
                     out.push(IsolatedBlock {
                         sg_id: sg.id.clone(),
+                        mode,
+                        phantom_id: format!("{PHANTOM_PREFIX}{}", sg.id),
+                        member_ids: members,
+                        phantom_idx: None,
                         lines,
                         width,
                         height,
@@ -198,7 +386,14 @@ impl<'a> FlowchartRenderer<'a> {
             if !moved {
                 // Children of a moved subgraph are handled by the recursive
                 // render; only unmoved subgraphs can still host moved children
-                self.collect_sgs(&sg.subgraphs, idx, colored, out, member_indices);
+                self.collect_sgs(
+                    &sg.subgraphs,
+                    idx,
+                    colored,
+                    out,
+                    member_indices,
+                    isolated_member_ids,
+                );
             }
         }
     }
@@ -213,7 +408,7 @@ impl<'a> FlowchartRenderer<'a> {
         })
     }
 
-    fn prepare_nodes(&self) -> Vec<LayoutNode> {
+    fn prepare_nodes(&self, blocks: &Blocks) -> Vec<LayoutNode> {
         let mut nodes = Vec::with_capacity(self.spec.nodes.len());
 
         for node in &self.spec.nodes {
@@ -310,6 +505,19 @@ impl<'a> FlowchartRenderer<'a> {
                 y: 0,
                 rank: 0,
             });
+        }
+
+        // Phantom cluster nodes carry the pasted block's real dimensions
+        // (their label is empty, so text-based sizing would be wrong)
+        for (i, spec_node) in self.spec.nodes.iter().enumerate() {
+            if let Some(b) = blocks
+                .items
+                .iter()
+                .find(|b| b.mode == BlockMode::AtPhantom && b.phantom_id == spec_node.id)
+            {
+                nodes[i].width = b.width.max(6);
+                nodes[i].height = b.height.max(2);
+            }
         }
 
         nodes

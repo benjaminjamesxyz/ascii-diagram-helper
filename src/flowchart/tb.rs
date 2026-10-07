@@ -1,4 +1,4 @@
-use super::Blocks;
+use super::{BlockMode, Blocks};
 use super::FlowchartRenderer;
 use super::edges::{clear_route_y, edge_arrow_heads, edge_hline, edge_vline};
 use crate::canvas::{Canvas, Direction};
@@ -14,7 +14,7 @@ impl<'a> FlowchartRenderer<'a> {
     /// Render a top-to-bottom flowchart. Body extracted verbatim from the
     /// pre-split monolith; see mod.rs for layout pre-passes.
     pub(super) fn render_tb(&self, colored: bool, blocks: &mut Blocks) -> String {
-        let mut nodes = self.prepare_nodes();
+        let mut nodes = self.prepare_nodes(blocks);
         let idx = self.index_of();
         let layers = self.assign_ranks(&mut nodes, &idx);
 
@@ -96,15 +96,34 @@ impl<'a> FlowchartRenderer<'a> {
         }
 
         // Paste isolated-direction subgraph blocks below the main graph.
-        // origin_y leaves 2 rows above the content for the group-box title
-        // border drawn later by draw_subgraphs.
+        // AtPhantom clusters sit at their phantom node's laid-out position
+        for b in &mut blocks.items {
+            if b.mode == BlockMode::AtPhantom
+                && let Some(&pi) = idx.get(b.phantom_id.as_str())
+            {
+                b.origin_x = nodes[pi].x;
+                b.origin_y = nodes[pi].y;
+            }
+        }
+        // Below-mode clusters stack below the main graph; origin_y leaves 2
+        // rows above the content for the group-box title border drawn later
+        // by draw_subgraphs.
         let mut cursor_y = current_y + 1;
         for b in &mut blocks.items {
+            if b.mode != BlockMode::Below {
+                continue;
+            }
             b.origin_x = 2;
             b.origin_y = cursor_y + 2;
             cursor_y = b.origin_y + b.height + 4;
         }
-        let blocks_extent = if blocks.is_empty() { 0 } else { cursor_y };
+        let blocks_extent = blocks
+            .items
+            .iter()
+            .filter(|b| b.mode == BlockMode::Below)
+            .map(|b| b.origin_y + b.height + 4)
+            .max()
+            .unwrap_or(0);
         let canvas_w = (max_w + 10 + sg_margin)
             .max(blocks.items.iter().map(|b| b.width + 6).max().unwrap_or(0));
         let canvas_h = (current_y + 4 + sg_margin).max(blocks_extent);
@@ -632,9 +651,10 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        // Draw nodes (moved blocks already contain their member boxes)
+        // Draw nodes (moved blocks already contain their member boxes;
+        // phantoms carry the pasted block instead of a box)
         for (i, node) in nodes.iter().enumerate() {
-            if blocks.member_indices.contains(&i) {
+            if blocks.member_indices.contains(&i) || blocks.phantom_indices.contains(&i) {
                 continue;
             }
             self.draw_node(&mut canvas, node);

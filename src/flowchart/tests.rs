@@ -250,7 +250,7 @@ mod tests {
         };
 
         let renderer = FlowchartRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let mut nodes = renderer.prepare_nodes();
+        let mut nodes = renderer.prepare_nodes(&Blocks::empty());
         let idx = renderer.index_of();
         let layers = renderer.assign_ranks(&mut nodes, &idx);
 
@@ -1061,5 +1061,47 @@ mod barycenter_tests {
             .map(|&i| spec.nodes[i].id.as_str())
             .collect();
         assert_eq!(l2, vec!["F", "E"], "L2 reordered to kill the crossing");
+    }
+}
+
+#[cfg(test)]
+mod supernode_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn non_isolated_cluster_renders_as_supernode_block() {
+        // Cluster with external edges + own direction: members collapse into
+        // a phantom node; the block is pasted at the phantom's position with
+        // its own orientation (LR inside a TB graph)
+        let dsl = "graph TB
+            SENSORS --> FILTER
+            FILTER --> CTRL
+            CTRL --> OUT
+            subgraph comms [Comms LR]
+              direction LR
+              TX --> ENC
+              ENC --> MOD
+            end
+            CTRL --> TX
+            MOD --> OUT";
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                let out = FlowchartRenderer::new(&f, theme).render(false);
+                // Cluster content horizontal
+                let tx = out.lines().position(|l| l.contains("TX")).unwrap();
+                let enc = out.lines().position(|l| l.contains("ENC")).unwrap();
+                assert_eq!(tx, enc, "cluster laid out LR inside TB graph:\n{out}");
+                // Whole chain present
+                for id in ["SENSORS", "FILTER", "CTRL", "OUT", "MOD"] {
+                    assert!(out.contains(id), "{id} missing");
+                }
+                // Group box present
+                assert!(out.lines().any(|l| l.contains("╭─ Comms LR")));
+            }
+            _ => panic!("Expected flowchart"),
+        }
     }
 }

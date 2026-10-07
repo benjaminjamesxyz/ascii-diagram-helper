@@ -7,7 +7,22 @@ use crate::schema::{
 use crate::theme::BoxStyle;
 
 /// Per-class style marks: dashed border + optional border color.
-type ClassStyle = (bool, Option<Color>);
+/// Deferred style from `classDef` / `class` directives.
+#[derive(Clone, Copy, Default)]
+struct ClassStyle {
+    dashed: bool,
+    stroke: Option<Color>,
+    fill: Option<Color>,
+    thick: bool,
+}
+
+/// Parses a numeric prop (`stroke-width:2px`) and reports whether it means a
+/// thicker border (>= 2).
+fn prop_thick(props: &str, name: &str) -> bool {
+    prop_value(props, name)
+        .and_then(|v| v.trim_end_matches("px").trim().parse::<f64>().ok())
+        .is_some_and(|w| w >= 2.0)
+}
 
 /// Extracts the value of `name` from a Mermaid prop list like
 /// `fill:#eee, stroke:red` — splits on commas, each chunk at its first `:`.
@@ -104,6 +119,9 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     let mut dashed_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut colored_nodes: std::collections::HashMap<String, Color> =
         std::collections::HashMap::new();
+    let mut filled_nodes: std::collections::HashMap<String, Color> =
+        std::collections::HashMap::new();
+    let mut thick_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut dashed_links: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut colored_links: std::collections::HashMap<usize, Color> =
         std::collections::HashMap::new();
@@ -161,6 +179,8 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 shape,
                 dashed_border: false,
                 color: None,
+                fill_color: None,
+                thick_border: false,
             });
             // Nodes first declared while a subgraph is open become members
             if let Some(&cur) = sg_stack.borrow().last() {
@@ -239,16 +259,21 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             continue;
         }
 
-        // classDef name prop:value,... — stroke-dasharray (dashed border) and
-        // stroke:<name|#hex> (border color) map to the character grid
+        // classDef name prop:value,... — stroke-dasharray (dashed border),
+        // stroke:<name|#hex> (border color), fill:<name|#hex> (label text
+        // color), stroke-width:>=2 (thick border)
         if let Some(rest) = trimmed.strip_prefix("classDef ") {
             if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                let dashed = prop_flag(props, "stroke-dasharray");
-                let color = prop_color(props, "stroke");
+                let style = ClassStyle {
+                    dashed: prop_flag(props, "stroke-dasharray"),
+                    stroke: prop_color(props, "stroke"),
+                    fill: prop_color(props, "fill"),
+                    thick: prop_thick(props, "stroke-width"),
+                };
                 for name in names.split(',') {
                     let name = name.trim();
                     if !name.is_empty() {
-                        class_styles.insert(name.to_string(), (dashed, color));
+                        class_styles.insert(name.to_string(), style);
                     }
                 }
             }
@@ -259,14 +284,20 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         if let Some(rest) = trimmed.strip_prefix("class ") {
             if let Some((ids, class_name)) = rest.rsplit_once(char::is_whitespace) {
                 let name = class_name.trim();
-                let (dashed, color) = class_styles.get(name).copied().unwrap_or((false, None));
+                let style = class_styles.get(name).copied().unwrap_or_default();
                 for id in ids.split(',') {
                     let id = id.trim().to_string();
-                    if dashed {
+                    if style.dashed {
                         dashed_nodes.insert(id.clone());
                     }
-                    if let Some(c) = color {
-                        colored_nodes.insert(id, c);
+                    if let Some(c) = style.stroke {
+                        colored_nodes.insert(id.clone(), c);
+                    }
+                    if let Some(c) = style.fill {
+                        filled_nodes.insert(id.clone(), c);
+                    }
+                    if style.thick {
+                        thick_nodes.insert(id.clone());
                     }
                 }
             }
@@ -282,7 +313,13 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 }
                 if let Some(c) = prop_color(props, "stroke") {
                     colored_nodes.insert(id.clone(), c);
-                    colored_sgs.insert(id, c);
+                    colored_sgs.insert(id.clone(), c);
+                }
+                if let Some(c) = prop_color(props, "fill") {
+                    filled_nodes.insert(id.clone(), c);
+                }
+                if prop_thick(props, "stroke-width") {
+                    thick_nodes.insert(id.clone());
                 }
             }
             continue;
@@ -360,6 +397,12 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         }
         if let Some(c) = colored_nodes.get(&node.id) {
             node.color = Some(*c);
+        }
+        if let Some(c) = filled_nodes.get(&node.id) {
+            node.fill_color = Some(*c);
+        }
+        if thick_nodes.contains(&node.id) {
+            node.thick_border = true;
         }
     }
     for (i, edge) in edges.iter_mut().enumerate() {
@@ -1433,6 +1476,45 @@ mod tests {
                 assert_eq!(t.rows, vec![vec!["1", "2"]]);
             }
             _ => panic!("Expected table"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fill_and_stroke_width() {
+        let dsl = [
+            "graph TB; A[X]; B[Y]; C[Z]",
+            "classDef hot fill:red,stroke:#c0392b",
+            "classDef heavy stroke-width:3px",
+            "class A hot",
+            "style B fill:blue",
+            "style C stroke-width:1px",
+        ]
+        .join("\n");
+        let spec = parse_dsl_or_json(&dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let node = |id: &str| f.nodes.iter().find(|n| n.id == id).unwrap();
+                let a = node("A");
+                assert_eq!(a.fill_color, Some(Color::Red));
+                assert_eq!(a.color, Some(Color::parse("#c0392b").unwrap()));
+                assert!(!a.thick_border);
+                let b = node("B");
+                assert_eq!(b.fill_color, Some(Color::Blue));
+                let c = node("C");
+                assert!(!c.thick_border, "stroke-width:1px is not thick");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stroke_width_thick() {
+        let dsl = "graph TB; A[X]\nstyle A stroke-width:2px";
+        match parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                assert!(f.nodes[0].thick_border);
+            }
+            _ => panic!("Expected flowchart"),
         }
     }
 

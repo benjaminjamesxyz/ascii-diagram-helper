@@ -45,6 +45,13 @@ pub struct NodeSpec {
     /// Applied to border/line glyphs only — label text stays default.
     #[serde(default)]
     pub color: Option<Color>,
+    /// Label text color, set via Mermaid `class`/`style` `fill:<name|hex>`
+    /// (maps to ANSI foreground — readable on any terminal background).
+    #[serde(default)]
+    pub fill_color: Option<Color>,
+    /// Thicker border glyphs, set via `stroke-width:2px` or higher.
+    #[serde(default)]
+    pub thick_border: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

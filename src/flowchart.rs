@@ -20,6 +20,11 @@ pub(super) struct LayoutNode {
     dashed_border: bool,
     /// Propagated from `NodeSpec::color` (Mermaid `stroke:<name|hex>`)
     color: Option<Color>,
+    /// Propagated from `NodeSpec::fill_color` (Mermaid `fill:<name|hex>`) —
+    /// label text color
+    fill_color: Option<Color>,
+    /// Propagated from `NodeSpec::thick_border` (`stroke-width:>=2`)
+    thick_border: bool,
     width: usize,
     height: usize,
     x: usize,
@@ -297,6 +302,8 @@ impl<'a> FlowchartRenderer<'a> {
                 shape: node.shape,
                 dashed_border: node.dashed_border,
                 color: node.color,
+                fill_color: node.fill_color,
+                thick_border: node.thick_border,
                 width,
                 height,
                 x: 0,
@@ -585,14 +592,38 @@ impl<'a> FlowchartRenderer<'a> {
     fn draw_node(&self, canvas: &mut Canvas, node: &LayoutNode) {
         let is_ascii = self.theme.box_style == BoxStyle::Ascii;
         canvas.set_pen(node.color);
-        // Mermaid `class`/`style` `stroke-dasharray` → dashed border
+        // Mermaid `class`/`style` `stroke-dasharray` → dashed border;
+        // `stroke-width:>=2` → heavy border glyphs (box edges only — dashed
+        // and thick are mutually exclusive, dashed wins)
         let node_box = |canvas: &mut Canvas, theme: &Theme, title: Option<&str>| {
             if node.dashed_border {
                 canvas.draw_dashed_box(node.x, node.y, node.width, node.height, theme, title);
+            } else if node.thick_border {
+                canvas.draw_thick_box(node.x, node.y, node.width, node.height, theme, title);
             } else {
                 canvas.draw_box(node.x, node.y, node.width, node.height, theme, title);
             }
         };
+        // Mermaid `fill:<color>` → label text color (ANSI foreground)
+        macro_rules! draw_label {
+            ($canvas:expr, $lines:expr, $text_start_y:expr, $offset_x:expr) => {
+                if node.fill_color.is_some() {
+                    $canvas.set_text_pen(node.fill_color);
+                }
+                for (i, line) in $lines.iter().enumerate() {
+                    let line_w = UnicodeWidthStr::width(line.as_str());
+                    let offset_x = if node.width > line_w + $offset_x.1 {
+                        (node.width - line_w) / 2
+                    } else {
+                        $offset_x.0
+                    };
+                    $canvas.draw_text(node.x + offset_x, $text_start_y + i, line);
+                }
+                if node.fill_color.is_some() {
+                    $canvas.set_text_pen(None);
+                }
+            };
+        }
         match node.shape {
             NodeShape::Diamond => {
                 canvas.draw_decision_box(
@@ -604,16 +635,7 @@ impl<'a> FlowchartRenderer<'a> {
                     Some("◇"),
                     node.dashed_border,
                 );
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w + 2 {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 2));
             }
             NodeShape::Circle => {
                 // Circular summing junction / comparator with circular indicator badge
@@ -624,31 +646,13 @@ impl<'a> FlowchartRenderer<'a> {
                 };
                 let badge = if is_ascii { "(o)" } else { "○" };
                 node_box(canvas, &circle_theme, Some(badge));
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             NodeShape::Hexagon => {
                 // Preparation / condition: sharp box with hexagon badge
                 let badge = if is_ascii { "<h>" } else { "⬡" };
                 node_box(canvas, &self.theme, Some(badge));
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             NodeShape::DoubleCircle => {
                 // Start / end point: rounded box with bullseye badge
@@ -659,16 +663,7 @@ impl<'a> FlowchartRenderer<'a> {
                 };
                 let badge = if is_ascii { "(oo)" } else { "◎" };
                 node_box(canvas, &circle_theme, Some(badge));
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             NodeShape::Parallelogram | NodeShape::ParallelogramAlt => {
                 // Input / output: sharp box with parallelogram badge
@@ -679,16 +674,7 @@ impl<'a> FlowchartRenderer<'a> {
                 };
                 let badge = if is_ascii { "/_/" } else { "▱" };
                 node_box(canvas, &sub_theme, Some(badge));
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             NodeShape::Trapezoid | NodeShape::TrapezoidAlt => {
                 // Manual input / operation: sharp box with trapezoid badge
@@ -699,16 +685,7 @@ impl<'a> FlowchartRenderer<'a> {
                 };
                 let badge = "/__\\";
                 node_box(canvas, &sub_theme, Some(badge));
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             NodeShape::Subprocess => {
                 // Double vertical side borders for complex components / plant dynamics
@@ -729,10 +706,12 @@ impl<'a> FlowchartRenderer<'a> {
                         }
                     }
                 } else {
-                    canvas.put_char(node.x, node.y, '┌');
-                    canvas.put_char(right, node.y, '┐');
-                    canvas.put_char(node.x, bottom, '└');
-                    canvas.put_char(right, bottom, '┘');
+                    if !node.thick_border {
+                        canvas.put_char(node.x, node.y, '┌');
+                        canvas.put_char(right, node.y, '┐');
+                        canvas.put_char(node.x, bottom, '└');
+                        canvas.put_char(right, bottom, '┘');
+                    }
 
                     if node.width >= 6 {
                         let left_inner_x = node.x + 1;
@@ -747,16 +726,7 @@ impl<'a> FlowchartRenderer<'a> {
                         }
                     }
                 }
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w + 4 {
-                        (node.width - line_w) / 2
-                    } else {
-                        2
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (2, 4));
             }
             NodeShape::Database => {
                 node_box(canvas, &self.theme, None);
@@ -784,16 +754,7 @@ impl<'a> FlowchartRenderer<'a> {
                         },
                     );
                 }
-                let text_start_y = node.y + 2;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 2, (1, 0));
             }
             NodeShape::Box => {
                 // Sharp rectangular technical block
@@ -803,7 +764,9 @@ impl<'a> FlowchartRenderer<'a> {
                     Theme::new(BoxStyle::Sharp)
                 };
                 node_box(canvas, &box_theme, None);
-                if !is_ascii {
+                // Literal sharp corners force the block look in any theme;
+                // thick boxes resolve corners from the heavy glyph table
+                if !is_ascii && !node.thick_border {
                     let right = node.x + node.width - 1;
                     let bottom = node.y + node.height - 1;
                     // Border role so the pen color stamps the corners
@@ -812,16 +775,7 @@ impl<'a> FlowchartRenderer<'a> {
                     canvas.put_char_with_role(node.x, bottom, '└', CellRole::Border);
                     canvas.put_char_with_role(right, bottom, '┘', CellRole::Border);
                 }
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             _ => {
                 // Rounded / Stadium
@@ -831,16 +785,7 @@ impl<'a> FlowchartRenderer<'a> {
                     Theme::new(BoxStyle::Rounded)
                 };
                 node_box(canvas, &rounded_theme, None);
-                let text_start_y = node.y + 1;
-                for (i, line) in node.label_lines.iter().enumerate() {
-                    let line_w = UnicodeWidthStr::width(line.as_str());
-                    let offset_x = if node.width > line_w {
-                        (node.width - line_w) / 2
-                    } else {
-                        1
-                    };
-                    canvas.draw_text(node.x + offset_x, text_start_y + i, line);
-                }
+                draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
         }
         canvas.set_pen(None);

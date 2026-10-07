@@ -120,6 +120,10 @@ pub struct Canvas {
     /// Current pen color: stamped onto border/line/arrow cells by draw calls;
     /// text cells are never stamped. Set around node/edge drawing.
     pen: Option<Color>,
+    /// Optional foreground color for TEXT cells. Unlike `pen`, this colors
+    /// label text; used for Mermaid `fill:<color>` node labels. Scoped:
+    /// set around label drawing, cleared right after.
+    text_pen: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,12 +143,19 @@ impl Canvas {
             height,
             obstacles: Vec::new(),
             pen: None,
+            text_pen: None,
         }
     }
 
     /// Sets the pen color for subsequent border/line/arrow writes.
     pub fn set_pen(&mut self, color: Option<Color>) {
         self.pen = color;
+    }
+
+    /// Sets the foreground color for TEXT cells drawn while active (Mermaid
+    /// `fill:<color>`). Scope tightly around label drawing.
+    pub fn set_text_pen(&mut self, color: Option<Color>) {
+        self.text_pen = color;
     }
 
     #[inline]
@@ -224,9 +235,10 @@ impl Canvas {
         cell.is_continuation = false;
         cell.custom_corner = None;
         cell.role = role;
-        // Text stays terminal-default; emphasis colors ride on glyphs only
+        // Text stays terminal-default unless a text pen is active
+        // (Mermaid `fill:<color>` node labels)
         cell.color = if role == CellRole::Text {
-            None
+            self.text_pen
         } else {
             self.pen
         };
@@ -581,7 +593,21 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, false);
+        self.draw_box_inner(x, y, width, height, theme, title, false, false);
+    }
+
+    /// Thick-bordered box (Mermaid `class`/`style` `stroke-width:>=2`). Heavy
+    /// line glyphs, resolved at render time like `==>` edge runs.
+    pub fn draw_thick_box(
+        &mut self,
+        x: usize,
+        y: usize,
+        width: usize,
+        height: usize,
+        theme: &Theme,
+        title: Option<&str>,
+    ) {
+        self.draw_box_inner(x, y, width, height, theme, title, false, true);
     }
 
     /// Dashed-border box (Mermaid `class`/`style` with `stroke-dasharray`).
@@ -594,7 +620,7 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
     ) {
-        self.draw_box_inner(x, y, width, height, theme, title, true);
+        self.draw_box_inner(x, y, width, height, theme, title, true, false);
     }
 
     /// Draws a styled rectangle box with optional title and content
@@ -612,6 +638,7 @@ impl Canvas {
         theme: &Theme,
         title: Option<&str>,
         dashed: bool,
+        thick: bool,
     ) {
         if width < 2 || height < 2 {
             return;
@@ -637,6 +664,9 @@ impl Canvas {
         if dashed {
             self.draw_dashed_hline(x, right, y, theme);
             self.draw_dashed_hline(x, right, bottom, theme);
+        } else if thick {
+            self.draw_thick_hline(x, right, y);
+            self.draw_thick_hline(x, right, bottom);
         } else {
             self.draw_hline(x, right, y);
             self.draw_hline(x, right, bottom);
@@ -646,6 +676,9 @@ impl Canvas {
         if dashed {
             self.draw_dashed_vline(x, y, bottom, theme);
             self.draw_dashed_vline(right, y, bottom, theme);
+        } else if thick {
+            self.draw_thick_vline(x, y, bottom);
+            self.draw_thick_vline(right, y, bottom);
         } else {
             self.draw_vline(x, y, bottom);
             self.draw_vline(right, y, bottom);

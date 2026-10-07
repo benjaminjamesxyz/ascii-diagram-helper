@@ -19,6 +19,8 @@ mod tests {
                     label: "Client".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -26,6 +28,8 @@ mod tests {
                     label: "Server".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -61,6 +65,8 @@ mod tests {
                     label: "Start".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -68,6 +74,8 @@ mod tests {
                     label: "End".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -102,6 +110,8 @@ mod tests {
                     label: "Start".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -109,6 +119,8 @@ mod tests {
                     label: "Is Valid?".to_string(),
                     shape: NodeShape::Diamond,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -116,6 +128,8 @@ mod tests {
                     label: "Proceed".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -163,6 +177,8 @@ mod tests {
                     label: "Target".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -170,6 +186,8 @@ mod tests {
                     label: "Error".to_string(),
                     shape: NodeShape::Circle,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -177,6 +195,8 @@ mod tests {
                     label: "Controller".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -184,6 +204,8 @@ mod tests {
                     label: "Motor".to_string(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -265,6 +287,8 @@ mod self_loop_tests {
                 label: "Box".to_string(),
                 shape: NodeShape::Box,
                 dashed_border: false,
+                fill_color: None,
+                thick_border: false,
                 color: None,
             }],
             edges: vec![EdgeSpec {
@@ -326,6 +350,8 @@ mod jump_group_tests {
                     label: "Watchdog".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -333,6 +359,8 @@ mod jump_group_tests {
                     label: "Task A".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -340,6 +368,8 @@ mod jump_group_tests {
                     label: "Task B".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -347,6 +377,8 @@ mod jump_group_tests {
                     label: "Task C".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -354,6 +386,8 @@ mod jump_group_tests {
                     label: "Done".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -465,6 +499,8 @@ mod jump_group_tests {
                     label: "Start".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -472,6 +508,8 @@ mod jump_group_tests {
                     label: "End".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -511,6 +549,8 @@ mod jump_group_tests {
                     label: "Start".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
                 NodeSpec {
@@ -518,6 +558,8 @@ mod jump_group_tests {
                     label: "End".into(),
                     shape: NodeShape::Box,
                     dashed_border: false,
+                    fill_color: None,
+                    thick_border: false,
                     color: None,
                 },
             ],
@@ -648,5 +690,63 @@ mod subgraph_direction_tests {
             .expect("Y rendered");
         assert_ne!(x_row, y_row, "X above Y inside the block (TB subgraph)");
         assert!(out.lines().any(|l| l.contains("cluster")));
+    }
+}
+
+#[cfg(test)]
+mod fill_thick_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn thick_border_renders_heavy_glyphs() {
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Sharp,
+            title: None,
+            subgraphs: Vec::new(),
+            nodes: vec![NodeSpec {
+                id: "A".to_string(),
+                label: "Big".to_string(),
+                shape: NodeShape::Box,
+                dashed_border: false,
+                color: None,
+                fill_color: None,
+                thick_border: true,
+            }],
+            edges: Vec::new(),
+        };
+        let theme = crate::theme::Theme::new(BoxStyle::Sharp);
+        let out = FlowchartRenderer::new(&spec, theme).render(false);
+        assert!(out.contains('┏'), "top-left heavy corner in {out}");
+        assert!(out.contains('┗'), "bottom-left heavy corner in {out}");
+        assert!(!out.contains('┌'), "no thin corner expected in {out}");
+    }
+
+    #[test]
+    fn fill_color_colorizes_label_when_colored() {
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Sharp,
+            title: None,
+            subgraphs: Vec::new(),
+            nodes: vec![NodeSpec {
+                id: "A".to_string(),
+                label: "Hot".to_string(),
+                shape: NodeShape::Box,
+                dashed_border: false,
+                color: None,
+                fill_color: Some(crate::color::Color::Red),
+                thick_border: false,
+            }],
+            edges: Vec::new(),
+        };
+        let theme = crate::theme::Theme::new(BoxStyle::Sharp);
+        let out = FlowchartRenderer::new(&spec, theme.clone()).render(true);
+        assert!(out.contains("\u{1b}[31mHot"), "red SGR around label in {out:?}");
+        // Uncolored render has no SGR
+        let plain = FlowchartRenderer::new(&spec, theme).render(false);
+        assert!(!plain.contains('\u{1b}'), "no SGR when colored=false");
     }
 }

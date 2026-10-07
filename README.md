@@ -34,7 +34,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
   - Chained edges (`A --> B --> C`), edge labels (`-->|label|`), dotted lines (`-.->`), loops
   - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`), thick (`==>`, `<==>` — heavy glyphs `━ ┃` in Unicode styles, `=` in ASCII style)
-  - Style directives: `classDef`, `class`, `style` and `linkStyle` are parsed — `stroke-dasharray` maps to dashed node borders / dashed edges, and `stroke:<color>` maps to border/line emphasis colors. Fill and stroke *widths* are ignored
+  - Style directives: `classDef`, `class`, `style` and `linkStyle` are parsed — `stroke-dasharray` maps to dashed node borders / dashed edges, `stroke:<color>` maps to border/line emphasis colors, `fill:<color>` colorizes node label text (colored mode), and `stroke-width:>=2px` renders heavy border glyphs
 - **Sequence Diagrams (`sequenceDiagram`)**:
   - Synchronous calls (`->`, `->>`), asynchronous messages (`-->`, `-->>`), bidirectional (`<->`)
   - Self loops (`A -> A: msg`)
@@ -57,7 +57,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 ### Known Limitations
 
-- `classDef` / `class` / `style` / `linkStyle` `fill` colors and `stroke-width` are ignored — label text stays terminal-default by design (readability); only `stroke-dasharray` (dashed) and `stroke:<color>` (border/line color) are applied
+- `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width:>=2px` renders the node border with heavy glyphs (`┏━┓`); `stroke-width:1px` and other widths are treated as default. `linkStyle` `fill` is ignored — edges have no fill
 - Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` applies only to edge-isolated subgraphs — subgraphs with edges crossing their border use the global direction)
 - Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
   - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched

@@ -13,15 +13,16 @@ struct ClassStyle {
     dashed: bool,
     stroke: Option<Color>,
     fill: Option<Color>,
-    thick: bool,
+    thick: u8,
 }
 
-/// Parses a numeric prop (`stroke-width:2px`) and reports whether it means a
-/// thicker border (>= 2).
-fn prop_thick(props: &str, name: &str) -> bool {
+/// Parses a numeric prop (`stroke-width:2px`) into a border weight level:
+/// `0` default, `1` heavy (>= 2), `2` double (>= 3).
+fn prop_border_level(props: &str, name: &str) -> u8 {
     prop_value(props, name)
         .and_then(|v| v.trim_end_matches("px").trim().parse::<f64>().ok())
-        .is_some_and(|w| w >= 2.0)
+        .map(|w| if w >= 3.0 { 2 } else if w >= 2.0 { 1 } else { 0 })
+        .unwrap_or(0)
 }
 
 /// Extracts the value of `name` from a Mermaid prop list like
@@ -121,7 +122,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         std::collections::HashMap::new();
     let mut filled_nodes: std::collections::HashMap<String, Color> =
         std::collections::HashMap::new();
-    let mut thick_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut border_nodes: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     let mut dashed_links: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut colored_links: std::collections::HashMap<usize, Color> =
         std::collections::HashMap::new();
@@ -180,7 +181,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 dashed_border: false,
                 color: None,
                 fill_color: None,
-                thick_border: false,
+                border_level: 0,
             });
             // Nodes first declared while a subgraph is open become members
             if let Some(&cur) = sg_stack.borrow().last() {
@@ -261,14 +262,14 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
 
         // classDef name prop:value,... — stroke-dasharray (dashed border),
         // stroke:<name|#hex> (border color), fill:<name|#hex> (label text
-        // color), stroke-width:>=2 (thick border)
+        // color), stroke-width:2px (heavy) / 3px+ (double border)
         if let Some(rest) = trimmed.strip_prefix("classDef ") {
             if let Some((names, props)) = rest.split_once(char::is_whitespace) {
                 let style = ClassStyle {
                     dashed: prop_flag(props, "stroke-dasharray"),
                     stroke: prop_color(props, "stroke"),
                     fill: prop_color(props, "fill"),
-                    thick: prop_thick(props, "stroke-width"),
+                    thick: prop_border_level(props, "stroke-width"),
                 };
                 for name in names.split(',') {
                     let name = name.trim();
@@ -296,8 +297,8 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                     if let Some(c) = style.fill {
                         filled_nodes.insert(id.clone(), c);
                     }
-                    if style.thick {
-                        thick_nodes.insert(id.clone());
+                    if style.thick > 0 {
+                        border_nodes.insert(id.clone(), style.thick);
                     }
                 }
             }
@@ -318,8 +319,9 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 if let Some(c) = prop_color(props, "fill") {
                     filled_nodes.insert(id.clone(), c);
                 }
-                if prop_thick(props, "stroke-width") {
-                    thick_nodes.insert(id.clone());
+                let lvl = prop_border_level(props, "stroke-width");
+                if lvl > 0 {
+                    border_nodes.insert(id.clone(), lvl);
                 }
             }
             continue;
@@ -403,8 +405,8 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         if let Some(c) = filled_nodes.get(&node.id) {
             node.fill_color = Some(*c);
         }
-        if thick_nodes.contains(&node.id) {
-            node.thick_border = true;
+        if let Some(&lvl) = border_nodes.get(&node.id) {
+            node.border_level = lvl;
         }
     }
     for (i, edge) in edges.iter_mut().enumerate() {
@@ -1511,11 +1513,11 @@ mod tests {
                 let a = node("A");
                 assert_eq!(a.fill_color, Some(Color::Red));
                 assert_eq!(a.color, Some(Color::parse("#c0392b").unwrap()));
-                assert!(!a.thick_border);
+                assert_eq!(a.border_level, 0);
                 let b = node("B");
                 assert_eq!(b.fill_color, Some(Color::Blue));
                 let c = node("C");
-                assert!(!c.thick_border, "stroke-width:1px is not thick");
+                assert_eq!(c.border_level, 0, "stroke-width:1px stays default");
             }
             _ => panic!("Expected flowchart"),
         }
@@ -1526,7 +1528,18 @@ mod tests {
         let dsl = "graph TB; A[X]\nstyle A stroke-width:2px";
         match parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
             DiagramSpec::Flowchart(f) => {
-                assert!(f.nodes[0].thick_border);
+                assert_eq!(f.nodes[0].border_level, 1, "2px = heavy");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stroke_width_double() {
+        let dsl = "graph TB; A[X]\nstyle A stroke-width:3px";
+        match parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes[0].border_level, 2, "3px = double");
             }
             _ => panic!("Expected flowchart"),
         }

@@ -20,7 +20,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -29,7 +29,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -66,7 +66,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -75,7 +75,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -111,7 +111,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -120,7 +120,7 @@ mod tests {
                     shape: NodeShape::Diamond,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -129,7 +129,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -178,7 +178,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -187,7 +187,7 @@ mod tests {
                     shape: NodeShape::Circle,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -196,7 +196,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -205,7 +205,7 @@ mod tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -288,7 +288,7 @@ mod self_loop_tests {
                 shape: NodeShape::Box,
                 dashed_border: false,
                 fill_color: None,
-                thick_border: false,
+                border_level: 0,
                 color: None,
             }],
             edges: vec![EdgeSpec {
@@ -351,7 +351,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -360,7 +360,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -369,7 +369,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -378,7 +378,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -387,7 +387,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -500,7 +500,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -509,7 +509,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -550,7 +550,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
                 NodeSpec {
@@ -559,7 +559,7 @@ mod jump_group_tests {
                     shape: NodeShape::Box,
                     dashed_border: false,
                     fill_color: None,
-                    thick_border: false,
+                    border_level: 0,
                     color: None,
                 },
             ],
@@ -710,7 +710,7 @@ mod fill_thick_tests {
                 dashed_border: false,
                 color: None,
                 fill_color: None,
-                thick_border: true,
+                border_level: 1,
             }],
             edges: Vec::new(),
         };
@@ -735,7 +735,7 @@ mod fill_thick_tests {
                 dashed_border: false,
                 color: None,
                 fill_color: Some(crate::color::Color::Red),
-                thick_border: false,
+                border_level: 0,
             }],
             edges: Vec::new(),
         };
@@ -810,5 +810,51 @@ mod dense_feed_tests {
         for id in ["SCHED", "COMM", "T1", "T2", "T3", "T4", "ACT", "SENSE"] {
             assert!(out.contains(id), "{id} missing");
         }
+    }
+}
+
+#[cfg(test)]
+mod border_level_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    fn render_with_level(level: u8) -> String {
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Sharp,
+            title: None,
+            subgraphs: Vec::new(),
+            nodes: vec![NodeSpec {
+                id: "A".to_string(),
+                label: "X".to_string(),
+                shape: NodeShape::Box,
+                dashed_border: false,
+                color: None,
+                fill_color: None,
+                border_level: level,
+            }],
+            edges: Vec::new(),
+        };
+        let theme = crate::theme::Theme::new(BoxStyle::Sharp);
+        FlowchartRenderer::new(&spec, theme).render(false)
+    }
+
+    #[test]
+    fn level_0_renders_sharp() {
+        let out = render_with_level(0);
+        assert!(out.contains('┌') && !out.contains('┏') && !out.contains('╔'));
+    }
+
+    #[test]
+    fn level_1_renders_heavy() {
+        let out = render_with_level(1);
+        assert!(out.contains('┏') && out.contains('┗') && !out.contains('╔'));
+    }
+
+    #[test]
+    fn level_2_renders_double() {
+        let out = render_with_level(2);
+        assert!(out.contains('╔') && out.contains('╚') && !out.contains('┏'));
     }
 }

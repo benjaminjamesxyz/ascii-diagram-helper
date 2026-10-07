@@ -1108,3 +1108,76 @@ mod supernode_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod band_gap_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    fn render(dsl: &str) -> String {
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                FlowchartRenderer::new(&f, theme).render(false)
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    /// Rows strictly between the bottom border of `from`'s box and the top
+    /// border of `to`'s box (first occurrence of each).
+    fn gap_rows<'a>(out: &'a str, from: &str, to: &str) -> Vec<&'a str> {
+        let lines: Vec<&str> = out.lines().collect();
+        let bottom = lines
+            .iter()
+            .position(|l| l.contains(&format!("│ {from}")))
+            .expect(from)
+            + 1; // bottom border row
+        let top = lines[bottom + 1..]
+            .iter()
+            .position(|l| l.contains(&format!("│ {to}")))
+            .expect(to)
+            + bottom
+            + 1; // target label row
+        lines[bottom + 1..top - 1].to_vec()
+    }
+
+    #[test]
+    fn unlabeled_edge_compacts_to_connector_plus_arrow() {
+        // Regression: unlabeled inter-rank edges used to stretch to three
+        // blank connector rows; a compact band is one │ row then the ▼ row
+        let out = render("graph TD; A --> B --> C");
+        let rows = gap_rows(&out, "A", "B");
+        assert_eq!(
+            rows.len(),
+            2,
+            "unlabeled band must be 2 rows (│ + ▼), got {rows:?}:\n{out}"
+        );
+        assert_eq!(rows[0].trim(), "│", "connector row: {out}");
+        assert_eq!(rows[1].trim(), "▼", "arrow row: {out}");
+    }
+
+    #[test]
+    fn labeled_edge_keeps_label_row() {
+        let out = render("graph TD; A -->|yes| B --> C");
+        let rows = gap_rows(&out, "A", "B");
+        assert!(
+            rows.len() > 2 && rows.iter().any(|r| r.contains("yes")),
+            "labeled band must keep room for the label, got {rows:?}:\n{out}"
+        );
+        // The unlabeled band after B still compacts
+        let rows = gap_rows(&out, "B", "C");
+        assert_eq!(rows.len(), 2, "unlabeled band after labeled one:\n{out}");
+    }
+
+    #[test]
+    fn loop_back_channel_survives_compact_bands() {
+        // Feedback edge routes via the side channel; compact bands must not
+        // break its re-entry arrowhead
+        let out = render("graph TD; A --> B; B --> C; C --> A");
+        assert!(out.contains('◄'), "loop-back re-entry arrowhead:\n{out}");
+        let rows = gap_rows(&out, "A", "B");
+        assert_eq!(rows.len(), 2, "compact band with loop-back present:\n{out}");
+    }
+}

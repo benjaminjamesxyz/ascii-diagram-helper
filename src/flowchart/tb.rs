@@ -2,8 +2,36 @@ use super::FlowchartRenderer;
 use super::edges::{clear_route_y, edge_arrow_heads, edge_hline, edge_vline};
 use super::{BlockMode, Blocks};
 use crate::canvas::{Canvas, Direction};
+use crate::schema::SubgraphSpec;
 use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;
+
+/// Smallest node rank inside `sg` (recursing into non-moved child
+/// subgraphs); `None` when the subgraph has no ranked members. Moved child
+/// blocks render elsewhere — their phantom coords would inflate the rank
+/// set, mirroring `group_rect`'s skip.
+fn subgraph_min_rank(
+    sg: &SubgraphSpec,
+    nodes: &[super::LayoutNode],
+    idx: &HashMap<&str, usize>,
+    blocks: &Blocks,
+) -> Option<usize> {
+    let mut r = usize::MAX;
+    for id in &sg.nodes {
+        if let Some(&i) = idx.get(id.as_str()) {
+            r = r.min(nodes[i].rank);
+        }
+    }
+    for child in &sg.subgraphs {
+        if blocks.rect_for(&child.id).is_some() {
+            continue;
+        }
+        if let Some(cr) = subgraph_min_rank(child, nodes, idx, blocks) {
+            r = r.min(cr);
+        }
+    }
+    (r != usize::MAX).then_some(r)
+}
 
 impl<'a> FlowchartRenderer<'a> {
     #[allow(
@@ -31,14 +59,57 @@ impl<'a> FlowchartRenderer<'a> {
         // Sugiyama crossing reduction within layers (dense graphs)
         self.reduce_crossings(&mut layers, &idx);
 
-        let vertical_gap = 4;
         let horizontal_gap = 4;
+
+        // Per-band vertical gap: a plain single-edge unlabeled band compacts
+        // to one │ row plus the ▼ row. Anything needing more room keeps it:
+        // edge labels (a spare label row), multiple rank-adjacent edges
+        // (bend/band-stagger rows), multi-rank jumps (top/bottom route runs
+        // at `u_bottom + 2` / `v_top - 2`), and subgraph group boxes (title
+        // border rows above their top members).
+        let mut band_gap = vec![2usize; layers.len().max(1)];
+        let mut band_edges = vec![0usize; layers.len().max(1)];
+        for edge in &self.spec.edges {
+            if let (Some(&ui), Some(&vi)) = (idx.get(edge.from.as_str()), idx.get(edge.to.as_str()))
+            {
+                let (ur, vr) = (nodes[ui].rank, nodes[vi].rank);
+                if vr > ur + 1 {
+                    // Multi-rank jump: every band it crosses needs route room
+                    let gap = if edge.label.is_some() { 4 } else { 3 };
+                    for b in band_gap.iter_mut().skip(ur).take(vr - ur - 1) {
+                        *b = (*b).max(gap);
+                    }
+                } else if vr > ur {
+                    band_edges[ur] += 1;
+                    if edge.label.is_some() {
+                        band_gap[ur] = band_gap[ur].max(4);
+                    }
+                }
+            }
+        }
+        // Two or more rank-adjacent edges in one band: orthogonal bends and
+        // band staggering assume the roomy geometry (mid-band hline plus a
+        // stagger row clear of the ▼ row)
+        for (b, cnt) in band_edges.iter().enumerate() {
+            if *cnt > 1 {
+                band_gap[b] = band_gap[b].max(4);
+            }
+        }
+        // Subgraph group boxes draw their title border `pad_top` rows above
+        // the top member; that border must clear the band's trunk rows
+        for sg in &self.spec.subgraphs {
+            if let Some(r) = subgraph_min_rank(sg, &nodes, &idx, blocks)
+                && r >= 1
+            {
+                band_gap[r - 1] = band_gap[r - 1].max(4);
+            }
+        }
 
         let start_y = if self.spec.title.is_some() { 2 } else { 0 };
         let mut current_y = start_y;
 
         // Position nodes in each layer
-        for layer in &layers {
+        for (r, layer) in layers.iter().enumerate() {
             let mut layer_max_h = 0;
             let mut current_x = 0;
 
@@ -52,7 +123,7 @@ impl<'a> FlowchartRenderer<'a> {
                 }
             }
 
-            current_y += layer_max_h + vertical_gap;
+            current_y += layer_max_h + band_gap.get(r).copied().unwrap_or(2);
         }
 
         // Center layers horizontally relative to the widest layer

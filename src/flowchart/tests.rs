@@ -1208,6 +1208,102 @@ mod supernode_tests {
     }
 
     #[test]
+    fn test_box_and_subprocess_follow_theme() {
+        // Box arm:
+        // Rounded contains ╭╮╰╯ and not ┌┏╔
+        let out_rounded = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Rounded);
+        for ch in ['╭', '╮', '╰', '╯'] {
+            assert!(
+                out_rounded.contains(ch),
+                "rounded box missing '{ch}':\n{out_rounded}"
+            );
+        }
+        for ch in ['┌', '┏', '╔'] {
+            assert!(
+                !out_rounded.contains(ch),
+                "rounded box leaked '{ch}':\n{out_rounded}"
+            );
+        }
+
+        // Heavy contains ┏┗━┃ not ┌─│
+        let out_heavy = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Heavy);
+        for ch in ['┏', '┗', '━', '┃'] {
+            assert!(
+                out_heavy.contains(ch),
+                "heavy box missing '{ch}':\n{out_heavy}"
+            );
+        }
+        for ch in ['┌', '─', '│'] {
+            assert!(
+                !out_heavy.contains(ch),
+                "heavy box leaked '{ch}':\n{out_heavy}"
+            );
+        }
+
+        // Double contains ╔╚═║ not ┌
+        let out_double = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Double);
+        for ch in ['╔', '╚', '═', '║'] {
+            assert!(
+                out_double.contains(ch),
+                "double box missing '{ch}':\n{out_double}"
+            );
+        }
+        assert!(
+            !out_double.contains('┌'),
+            "double box leaked '┌':\n{out_double}"
+        );
+
+        // Sharp contains ┌└
+        let out_sharp = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Sharp);
+        assert!(
+            out_sharp.contains('┌') && out_sharp.contains('└'),
+            "sharp box missing ┌/└:\n{out_sharp}"
+        );
+
+        // Ascii '+' corners not ┌╭┏
+        let out_ascii = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Ascii);
+        assert!(
+            out_ascii.contains('+'),
+            "ascii box missing '+':\n{out_ascii}"
+        );
+        for ch in ['┌', '╭', '┏'] {
+            assert!(
+                !out_ascii.contains(ch),
+                "ascii box leaked '{ch}':\n{out_ascii}"
+            );
+        }
+
+        // Subprocess Heavy: ┏ + thick tees ┳/┻, no '┬'
+        let out_sub_heavy = render_flow_dsl("graph TD; A[[Subprocess]]", BoxStyle::Heavy);
+        assert!(
+            out_sub_heavy.contains('┏'),
+            "subprocess heavy missing '┏':\n{out_sub_heavy}"
+        );
+        assert!(
+            out_sub_heavy.contains('┳'),
+            "subprocess heavy missing '┳':\n{out_sub_heavy}"
+        );
+        assert!(
+            out_sub_heavy.contains('┻'),
+            "subprocess heavy missing '┻':\n{out_sub_heavy}"
+        );
+        assert!(
+            !out_sub_heavy.contains('┬'),
+            "subprocess heavy leaked '┬':\n{out_sub_heavy}"
+        );
+
+        // Dashed Box: no solid ┌ unless family glyph
+        let out_dashed_rounded = render_flow_dsl(
+            "graph TD; style A stroke-dasharray: 4; A[Dashed Box]",
+            BoxStyle::Rounded,
+        );
+        assert!(
+            !out_dashed_rounded.contains('┌'),
+            "dashed rounded box leaked solid '┌':\n{out_dashed_rounded}"
+        );
+    }
+
+    #[test]
     fn test_mixed_edge_weights_no_border_overlap() {
         let out = render_flow_dsl(REPRO_DSL, BoxStyle::Sharp);
         // All three weights actually drew (guard against vacuous passes)

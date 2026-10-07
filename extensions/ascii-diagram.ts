@@ -242,7 +242,14 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 				theme.fg("accent", "╭── Diagram ──────────────────────────────────────"),
 				...diagram
 					.split("\n")
-					.map((line) => `${theme.fg("accent", "│")} ${theme.fg("text", line)}`),
+					.map((line) =>
+						// ANSI-colored lines pass through raw — wrapping them in the
+						// theme text color would break at the diagram's internal
+						// resets and leave two-tone artifacts on themed terminals
+						/\x1b\[/.test(line)
+							? `${theme.fg("accent", "│")} ${line}`
+							: `${theme.fg("accent", "│")} ${theme.fg("text", line)}`,
+					),
 				theme.fg("accent", "╰─────────────────────────────────────────────────"),
 			];
 

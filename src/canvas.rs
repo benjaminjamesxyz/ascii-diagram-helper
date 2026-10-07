@@ -627,9 +627,9 @@ impl Canvas {
             let base = row * self.width;
             for col in (x + 1)..right {
                 let cell = &mut self.cells[base + col];
-                cell.ch = ' ';
-                cell.is_line = false;
-                cell.conn = LineConn::default();
+                // Full reset: stale color/role from earlier edge stamping would
+                // otherwise survive as colored whitespace patches
+                *cell = Cell::default();
             }
         }
 
@@ -734,9 +734,9 @@ impl Canvas {
             let base = row * self.width;
             for col in (x + 1)..right {
                 let cell = &mut self.cells[base + col];
-                cell.ch = ' ';
-                cell.is_line = false;
-                cell.conn = LineConn::default();
+                // Full reset: stale color/role from earlier edge stamping would
+                // otherwise survive as colored whitespace patches
+                *cell = Cell::default();
             }
         }
 
@@ -860,9 +860,9 @@ impl Canvas {
             let base = row * self.width;
             for col in (x + 1)..right {
                 let cell = &mut self.cells[base + col];
-                cell.ch = ' ';
-                cell.is_line = false;
-                cell.conn = LineConn::default();
+                // Full reset: stale color/role from earlier edge stamping would
+                // otherwise survive as colored whitespace patches
+                *cell = Cell::default();
             }
         }
 

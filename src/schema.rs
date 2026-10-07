@@ -76,6 +76,12 @@ pub struct SubgraphSpec {
     /// Group-box border color, via `style <subgraph-id> stroke:<color>` or JSON.
     #[serde(default)]
     pub color: Option<Color>,
+    /// Per-subgraph layout direction (`direction LR` inside the subgraph
+    /// block, or JSON). Applied when the subgraph is edge-isolated from the
+    /// rest of the diagram; otherwise the global direction wins (Mermaid
+    /// parity).
+    #[serde(default)]
+    pub direction: Option<LayoutDirection>,
     /// Direct member node ids
     #[serde(default)]
     pub nodes: Vec<String>,

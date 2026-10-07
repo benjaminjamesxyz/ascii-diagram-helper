@@ -535,3 +535,118 @@ mod jump_group_tests {
         assert!(out.contains('='), "ascii thick horizontal run: {out}");
     }
 }
+
+#[cfg(test)]
+mod subgraph_direction_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    fn render(dsl: &str) -> String {
+        match crate::parser::parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Flowchart(f) => {
+                let theme = crate::theme::Theme::new(f.style);
+                FlowchartRenderer::new(&f, theme).render(false)
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn isolated_subgraph_direction_lr_applies() {
+        let dsl = "graph TB
+            A --> B
+            subgraph cluster [Cluster]
+              direction LR
+              X --> Y
+            end";
+        let out = render(dsl);
+        // X and Y laid out horizontally inside the block: they share a row
+        let x_col = out
+            .lines()
+            .position(|l| l.contains("X"))
+            .expect("X rendered");
+        let y_col = out
+            .lines()
+            .position(|l| l.contains("Y"))
+            .expect("Y rendered");
+        assert_eq!(
+            x_col, y_col,
+            "X and Y on the same row (LR inside subgraph)"
+        );
+        // Cluster group box wraps the pasted block
+        assert!(out.lines().any(|l| l.contains("Cluster")));
+        // A --> B unaffected (vertical)
+        assert!(out.lines().any(|l| l.contains("A")));
+        assert!(out.lines().any(|l| l.contains("B")));
+    }
+
+    #[test]
+    fn mixed_subgraph_direction_falls_back_to_global() {
+        // C inside the subgraph has an edge crossing the border → not
+        // isolated → global TB wins (Mermaid parity)
+        let dsl = "graph TB
+            A --> B
+            subgraph g
+              direction LR
+              C --> B
+            end";
+        let out = render(dsl);
+        let c_col = out
+            .lines()
+            .position(|l| l.contains("C"))
+            .expect("C rendered");
+        let b_col = out
+            .lines()
+            .position(|l| l.contains("B"))
+            .expect("B rendered");
+        assert_ne!(
+            c_col, b_col,
+            "C and B on different rows (global TB still applies)"
+        );
+    }
+
+    #[test]
+    fn whole_diagram_is_isolated_cluster() {
+        let dsl = "graph TB
+            subgraph g
+              direction LR
+              X --> Y
+            end";
+        let out = render(dsl);
+        assert!(out.lines().any(|l| l.contains("X")));
+        assert!(out.lines().any(|l| l.contains("Y")));
+    }
+
+    #[test]
+    fn isolated_subgraph_direction_tb_in_global_lr() {
+        // Regression: member boxes were drawn at phantom positions over real
+        // nodes because the LR node-draw loop lacked the member skip
+        let dsl = "graph LR
+            A --> B
+            subgraph cluster
+              direction TB
+              X --> Y
+            end";
+        let out = render(dsl);
+        let a_row = out
+            .lines()
+            .position(|l| l.contains("A"))
+            .expect("A rendered");
+        let b_row = out
+            .lines()
+            .position(|l| l.contains("B"))
+            .expect("B rendered");
+        assert_eq!(a_row, b_row, "A and B on the same row (global LR)");
+        let x_row = out
+            .lines()
+            .position(|l| l.contains("X"))
+            .expect("X rendered");
+        let y_row = out
+            .lines()
+            .position(|l| l.contains("Y"))
+            .expect("Y rendered");
+        assert_ne!(x_row, y_row, "X above Y inside the block (TB subgraph)");
+        assert!(out.lines().any(|l| l.contains("cluster")));
+    }
+}

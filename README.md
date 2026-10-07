@@ -28,7 +28,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - **Flowcharts & Graphs (`flowchart` / `graph`)**:
   - Directions: `TB` (Top to Bottom) and `LR` (Left to Right)
   - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`
-  - Subgraphs: `subgraph id [Title]` ... `end` render as labeled group boxes (nesting supported); members are nodes first declared inside the block; per-subgraph `direction` is not applied (global direction wins)
+  - Subgraphs: `subgraph id [Title]` ... `end` render as labeled group boxes (nesting supported); members are nodes first declared inside the block; per-subgraph `direction TB|LR|RL|BT` is applied when the subgraph is edge-isolated from the rest of the diagram (rendered in its own orientation as a self-contained block, Mermaid parity) — otherwise the global direction wins
   - Orthogonal routing with smart junction merging (`┬`, `┴`, `┼`, `├`, `┤`)
   - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs
   - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
@@ -58,7 +58,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 ### Known Limitations
 
 - `classDef` / `class` / `style` / `linkStyle` `fill` colors and `stroke-width` are ignored — label text stays terminal-default by design (readability); only `stroke-dasharray` (dashed) and `stroke:<color>` (border/line color) are applied
-- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` directives are ignored — whole diagram uses the global direction)
+- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` applies only to edge-isolated subgraphs — subgraphs with edges crossing their border use the global direction)
 - Tree / table / stack colors are JSON-only (their DSL has no color syntax): `root/child.color` on tree nodes (branch glyphs, inherited by subtree), `color` on table (grid lines), `color` per stack layer (layer borders)
 
 ### Tips for Dense Graphs

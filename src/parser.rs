@@ -118,6 +118,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         id: String,
         title: Option<String>,
         parent: Option<usize>,
+        direction: Option<LayoutDirection>,
         members: Vec<String>,
         seen: std::collections::HashSet<String>,
     }
@@ -178,8 +179,26 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             || trimmed.starts_with("```")
             || trimmed.starts_with("%%")
             || trimmed.starts_with("//")
-            || trimmed.starts_with("direction")
         {
+            continue;
+        }
+
+        // direction TB|LR|RL|BT — global (first statement) or per-subgraph
+        // (inside a subgraph block, applies to that subgraph's members)
+        if let Some(rest) = trimmed.strip_prefix("direction") {
+            let dir = match rest.trim().to_uppercase().as_str() {
+                "LR" => Some(LayoutDirection::LR),
+                "RL" => Some(LayoutDirection::RL),
+                "BT" => Some(LayoutDirection::BT),
+                "TB" => Some(LayoutDirection::TB),
+                _ => None,
+            };
+            if let (Some(dir), Some(&cur)) = (dir, sg_stack.borrow().last()) {
+                subgraphs_flat.borrow_mut()[cur].direction = Some(dir);
+            } else if let Some(dir) = dir {
+                // Top-level `direction` line (e.g. after `flowchart` header)
+                direction = dir;
+            }
             continue;
         }
 
@@ -204,6 +223,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 id,
                 title,
                 parent: sg_stack.borrow().last().copied(),
+                direction: None,
                 members: Vec::new(),
                 seen: std::collections::HashSet::new(),
             });
@@ -299,18 +319,26 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     }
 
     // Assemble the flat subgraph list into a nested tree (roots first)
+    type SgFlat = (
+        String,
+        Option<String>,
+        Option<usize>,
+        Option<LayoutDirection>,
+        Vec<String>,
+    );
     fn build_subgraph_tree(
-        flat: &[(String, Option<String>, Option<usize>, Vec<String>)],
+        flat: &[SgFlat],
         parent: Option<usize>,
         colored_sgs: &std::collections::HashMap<String, Color>,
     ) -> Vec<SubgraphSpec> {
         let mut out = Vec::new();
-        for (i, (id, title, p, members)) in flat.iter().enumerate() {
+        for (i, (id, title, p, sg_dir, members)) in flat.iter().enumerate() {
             if *p == parent {
                 out.push(SubgraphSpec {
                     id: id.clone(),
                     title: title.clone(),
                     color: colored_sgs.get(id).copied(),
+                    direction: *sg_dir,
                     nodes: members.clone(),
                     subgraphs: build_subgraph_tree(flat, Some(i), colored_sgs),
                 });
@@ -318,10 +346,10 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         }
         out
     }
-    let flat_tuples: Vec<(String, Option<String>, Option<usize>, Vec<String>)> = subgraphs_flat
+    let flat_tuples: Vec<SgFlat> = subgraphs_flat
         .into_inner()
         .into_iter()
-        .map(|sg| (sg.id, sg.title, sg.parent, sg.members))
+        .map(|sg| (sg.id, sg.title, sg.parent, sg.direction, sg.members))
         .collect();
     let subgraphs = build_subgraph_tree(&flat_tuples, None, &colored_sgs);
 
@@ -1183,6 +1211,38 @@ mod tests {
                 assert_eq!(inner.title.as_deref(), Some("inner"));
                 assert_eq!(inner.nodes, vec!["C"]);
                 assert!(inner.subgraphs.is_empty());
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_subgraph_direction() {
+        let dsl = "graph TB
+            A --> B
+            subgraph inner [Inner]
+              direction LR
+              X --> Y
+            end";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.direction, LayoutDirection::TB);
+                let inner = &f.subgraphs[0];
+                assert_eq!(inner.direction, Some(LayoutDirection::LR));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_direction_outside_subgraph_sets_global() {
+        let dsl = "flowchart TD\n            direction LR\n            A --> B";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.direction, LayoutDirection::LR);
+                assert!(f.subgraphs.is_empty());
             }
             _ => panic!("Expected flowchart"),
         }

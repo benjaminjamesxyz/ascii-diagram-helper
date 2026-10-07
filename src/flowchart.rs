@@ -32,6 +32,54 @@ pub struct FlowchartRenderer<'a> {
     theme: Theme,
 }
 
+/// A subgraph with its own `direction` that is edge-isolated from the rest of
+/// the diagram: rendered independently in its own orientation and pasted as a
+/// pre-composed block. Mermaid applies subgraph `direction` under the same
+/// restriction (disconnected clusters only).
+pub(super) struct IsolatedBlock {
+    /// Subgraph id this block was rendered from
+    sg_id: String,
+    /// Rendered content lines (no trailing blanks)
+    lines: Vec<String>,
+    width: usize,
+    height: usize,
+    /// Paste origin on the main canvas, assigned during layout
+    origin_x: usize,
+    origin_y: usize,
+}
+
+/// Everything `render_tb` / `render_lr` need to lay out a diagram containing
+/// isolated-direction subgraph blocks.
+pub(super) struct Blocks {
+    items: Vec<IsolatedBlock>,
+    /// Indices into `spec.nodes` of ALL (recursive) members of moved subgraphs
+    member_indices: HashSet<usize>,
+}
+
+impl Blocks {
+    fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    fn rect_for(&self, sg_id: &str) -> Option<(usize, usize, usize, usize)> {
+        // Assigned during layout; stored alongside by render_tb/render_lr
+        self.items
+            .iter()
+            .find(|b| b.sg_id == sg_id)
+            .map(|b| (b.origin_x, b.origin_y, b.width, b.height))
+    }
+}
+
+/// Recursive member ids of a subgraph, including nested subgraph members.
+/// The parser assigns each node to exactly one subgraph, so ids are unique.
+fn member_ids(sg: &SubgraphSpec) -> Vec<String> {
+    let mut out = sg.nodes.clone();
+    for child in &sg.subgraphs {
+        out.extend(member_ids(child));
+    }
+    out
+}
+
 impl<'a> FlowchartRenderer<'a> {
     #[must_use]
     pub fn new(spec: &'a FlowchartSpec, theme: Theme) -> Self {
@@ -48,11 +96,116 @@ impl<'a> FlowchartRenderer<'a> {
             self.spec.direction,
             LayoutDirection::LR | LayoutDirection::RL
         );
+        let mut blocks = self.collect_isolated_blocks(colored);
         if is_lr {
-            self.render_lr(colored)
+            self.render_lr(colored, &mut blocks)
         } else {
-            self.render_tb(colored)
+            self.render_tb(colored, &mut blocks)
         }
+    }
+
+    /// Finds subgraphs with an explicit `direction` that differs from the
+    /// global direction AND whose members have no edges to nodes outside the
+    /// subgraph. Each such subgraph is rendered recursively as a standalone
+    /// diagram (its own direction applies inside). Nested subgraphs of a moved
+    /// subgraph are handled inside the recursive render, not visited again.
+    fn collect_isolated_blocks(&self, colored: bool) -> Blocks {
+        let idx = self.index_of();
+        let mut items = Vec::new();
+        let mut member_indices = HashSet::new();
+        self.collect_sgs(
+            &self.spec.subgraphs,
+            &idx,
+            colored,
+            &mut items,
+            &mut member_indices,
+        );
+        Blocks {
+            items,
+            member_indices,
+        }
+    }
+
+    fn collect_sgs(
+        &self,
+        sgs: &[SubgraphSpec],
+        idx: &HashMap<&str, usize>,
+        colored: bool,
+        out: &mut Vec<IsolatedBlock>,
+        member_indices: &mut HashSet<usize>,
+    ) {
+        for sg in sgs {
+            let wants_move = sg.direction.is_some_and(|d| d != self.spec.direction);
+            let mut moved = false;
+            if wants_move {
+                let members = member_ids(sg);
+                if Self::is_isolated(self.spec, &members) {
+                    let idset: HashSet<&str> = members.iter().map(String::as_str).collect();
+                    let sub = FlowchartSpec {
+                        direction: sg.direction.unwrap(),
+                        style: self.spec.style,
+                        title: None,
+                        nodes: self
+                            .spec
+                            .nodes
+                            .iter()
+                            .filter(|n| idset.contains(n.id.as_str()))
+                            .cloned()
+                            .collect(),
+                        edges: self
+                            .spec
+                            .edges
+                            .iter()
+                            .filter(|e| {
+                                idset.contains(e.from.as_str()) && idset.contains(e.to.as_str())
+                            })
+                            .cloned()
+                            .collect(),
+                        subgraphs: sg.subgraphs.clone(),
+                    };
+                    let rendered = FlowchartRenderer::new(&sub, self.theme.clone()).render(colored);
+                    let mut lines: Vec<String> = rendered.lines().map(String::from).collect();
+                    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+                        lines.pop();
+                    }
+                    let height = lines.len().max(1);
+                    let width = lines
+                        .iter()
+                        .map(|l| UnicodeWidthStr::width(l.as_str()))
+                        .max()
+                        .unwrap_or(1);
+                    for id in &members {
+                        if let Some(&i) = idx.get(id.as_str()) {
+                            member_indices.insert(i);
+                        }
+                    }
+                    out.push(IsolatedBlock {
+                        sg_id: sg.id.clone(),
+                        lines,
+                        width,
+                        height,
+                        origin_x: 0,
+                        origin_y: 0,
+                    });
+                    moved = true;
+                }
+            }
+            if !moved {
+                // Children of a moved subgraph are handled by the recursive
+                // render; only unmoved subgraphs can still host moved children
+                self.collect_sgs(&sg.subgraphs, idx, colored, out, member_indices);
+            }
+        }
+    }
+
+    /// True when no edge connects a member of `members` to a node outside it.
+    fn is_isolated(spec: &FlowchartSpec, members: &[String]) -> bool {
+        let set: HashSet<&str> = members.iter().map(String::as_str).collect();
+        spec.edges.iter().all(|e| {
+            let f = set.contains(e.from.as_str());
+            let t = set.contains(e.to.as_str());
+            f == t
+        })
     }
 
     fn prepare_nodes(&self) -> Vec<LayoutNode> {
@@ -157,6 +310,7 @@ impl<'a> FlowchartRenderer<'a> {
         canvas: &mut Canvas,
         nodes: &[LayoutNode],
         idx: &HashMap<&str, usize>,
+        blocks: &Blocks,
     ) {
         let (pad_x, pad_top, pad_bottom) = (2usize, 2usize, 1usize);
 
@@ -209,9 +363,30 @@ impl<'a> FlowchartRenderer<'a> {
             nodes: &[LayoutNode],
             idx: &HashMap<&str, usize>,
             pad: (usize, usize, usize),
+            blocks: &Blocks,
             out: &mut Vec<(Rect, String, Option<Color>)>,
         ) {
             for sg in sgs {
+                if let Some((ox, oy, w, h)) = blocks.rect_for(&sg.id) {
+                    // Moved subgraph: box wraps the pasted block; nested boxes
+                    // are already baked into the block's own render
+                    let (pad_x, pad_top, pad_bottom) = pad;
+                    let title = sg.title.clone().unwrap_or_else(|| sg.id.clone());
+                    let bx = ox.saturating_sub(pad_x);
+                    let by = oy.saturating_sub(pad_top);
+                    let mut br = ox + w + pad_x;
+                    let bb = oy + h + pad_bottom;
+                    let min_w = UnicodeWidthStr::width(format!(" {title} ").as_str()) + 4;
+                    if br - bx + 1 < min_w {
+                        br = bx + min_w - 1;
+                    }
+                    out.push((
+                        Rect::new(bx, by, br - bx + 1, bb - by + 1),
+                        title,
+                        sg.color,
+                    ));
+                    continue;
+                }
                 if let Some(r) = group_rect(sg, nodes, idx, pad) {
                     out.push((
                         r,
@@ -219,7 +394,7 @@ impl<'a> FlowchartRenderer<'a> {
                         sg.color,
                     ));
                 }
-                collect(&sg.subgraphs, nodes, idx, pad, out);
+                collect(&sg.subgraphs, nodes, idx, pad, blocks, out);
             }
         }
 
@@ -229,6 +404,7 @@ impl<'a> FlowchartRenderer<'a> {
             nodes,
             idx,
             (pad_x, pad_top, pad_bottom),
+            blocks,
             &mut groups,
         );
         // Outer boxes first so nested borders layer cleanly

@@ -1,3 +1,4 @@
+use super::Blocks;
 use super::FlowchartRenderer;
 use super::edges::{edge_arrow_heads, edge_hline, edge_vline};
 use crate::canvas::{Canvas, Direction};
@@ -8,10 +9,21 @@ impl<'a> FlowchartRenderer<'a> {
         clippy::too_many_lines,
         reason = "linear layout pass; splitting would thread a wide context"
     )]
-    pub(super) fn render_lr(&self, colored: bool) -> String {
+    pub(super) fn render_lr(&self, colored: bool, blocks: &mut Blocks) -> String {
         let mut nodes = self.prepare_nodes();
         let idx = self.index_of();
         let layers = self.assign_ranks(&mut nodes, &idx);
+
+        // Members of moved (isolated-direction) subgraphs are laid out inside
+        // their own block render; keep empty layers so rank indexing stays aligned
+        let layers: Vec<Vec<usize>> = layers
+            .into_iter()
+            .map(|l| {
+                l.into_iter()
+                    .filter(|i| !blocks.member_indices.contains(i))
+                    .collect()
+            })
+            .collect();
 
         let vertical_gap = 2;
         let start_y = if self.spec.title.is_some() { 2 } else { 0 };
@@ -99,14 +111,44 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        let mut canvas = Canvas::new(current_x + 6 + sg_margin, max_h + 4 + sg_margin);
+        // Paste isolated-direction subgraph blocks below the main graph
+        let mut cursor_y = max_h + 3;
+        for b in &mut blocks.items {
+            b.origin_x = 2;
+            b.origin_y = cursor_y + 2;
+            cursor_y = b.origin_y + b.height + 4;
+        }
+        let blocks_extent = if blocks.is_empty() { 0 } else { cursor_y };
+        let canvas_w = (current_x + 6 + sg_margin).max(
+            blocks
+                .items
+                .iter()
+                .map(|b| b.width + 6)
+                .max()
+                .unwrap_or(0),
+        );
+        let canvas_h = (max_h + 4 + sg_margin).max(blocks_extent);
+
+        let mut canvas = Canvas::new(canvas_w, canvas_h);
 
         if let Some(ref title) = self.spec.title {
             canvas.draw_text(0, 0, title);
         }
 
-        // Register node obstacles for collision detection
-        for node in &nodes {
+        // Paste isolated-direction subgraph blocks (pre-composed in their own
+        // orientation by the recursive render)
+        for b in &blocks.items {
+            for (dy, line) in b.lines.iter().enumerate() {
+                canvas.draw_text(b.origin_x, b.origin_y + dy, line);
+            }
+        }
+
+        // Register node obstacles for collision detection (moved blocks have
+        // no external edges — their region needs no protection)
+        for (i, node) in nodes.iter().enumerate() {
+            if blocks.member_indices.contains(&i) {
+                continue;
+            }
             canvas.add_obstacle(crate::canvas::Rect::new(
                 node.x,
                 node.y,
@@ -117,10 +159,14 @@ impl<'a> FlowchartRenderer<'a> {
 
         let mut loop_track_y = max_h + 2 + sg_margin;
 
-        // Draw edges
+        // Draw edges (edges between members of moved blocks are baked into
+        // those blocks)
         for edge in &self.spec.edges {
             if let (Some(&ui), Some(&vi)) = (idx.get(edge.from.as_str()), idx.get(edge.to.as_str()))
             {
+                if blocks.member_indices.contains(&ui) || blocks.member_indices.contains(&vi) {
+                    continue;
+                }
                 let u = &nodes[ui];
                 let v = &nodes[vi];
                 if ui == vi {
@@ -224,13 +270,16 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        // Draw nodes
-        for node in &nodes {
+        // Draw nodes (moved blocks already contain their member boxes)
+        for (i, node) in nodes.iter().enumerate() {
+            if blocks.member_indices.contains(&i) {
+                continue;
+            }
             self.draw_node(&mut canvas, node);
         }
 
         // Draw subgraph grouping boxes on top of empty cells
-        self.draw_subgraphs(&mut canvas, &nodes, &idx);
+        self.draw_subgraphs(&mut canvas, &nodes, &idx, blocks);
 
         canvas.render_impl(&self.theme, colored)
     }

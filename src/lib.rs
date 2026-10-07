@@ -68,7 +68,7 @@ pub fn render_diagram_colored(spec: &DiagramSpec, colored: bool) -> Result<Strin
         DiagramSpec::DataStructure(ds) => {
             let theme = Theme::new(ds.style);
             let renderer = DataStructureRenderer::new(ds, theme);
-            renderer.render()
+            renderer.render(colored)
         }
     }
 }

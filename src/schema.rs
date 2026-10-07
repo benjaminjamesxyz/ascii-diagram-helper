@@ -302,14 +302,17 @@ pub struct ArchitectureSpec {
 }
 
 /// Data-structure diagram kind: `tree` (binary tree, `value`/`left`/`right`
-/// nodes or `values` insertion order) or `btree` (multi-key nodes with
-/// `keys`/`children`).
+/// nodes or `values` insertion order), `btree` (multi-key nodes with
+/// `keys`/`children`), `linkedlist` (value chain in `nodes`), or `array`
+/// (boxed cells from `values`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DsKind {
     #[default]
     Tree,
     BTree,
+    LinkedList,
+    Array,
 }
 
 /// A node in a data-structure diagram. Binary trees use `value`/`left`/
@@ -330,6 +333,11 @@ pub struct DsNode {
     /// `keys.len() + 1` children; fewer is rendered as-is).
     #[serde(default)]
     pub children: Vec<DsNode>,
+    /// Node box border + connector color (JSON only). Descendants inherit
+    /// the nearest colored ancestor unless they set their own; label text
+    /// stays default.
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 impl DsNode {
@@ -359,12 +367,19 @@ pub struct DataStructureSpec {
     pub root: Option<DsNode>,
     /// Insertion order for building a BST (`kind: "tree"`); numeric strings
     /// compare numerically, others lexicographically. Ignored when `root`
-    /// is present.
+    /// is present. Cell values for `kind: "array"`.
     #[serde(default)]
     pub values: Vec<String>,
     /// B-tree root (`kind: "btree"`).
     #[serde(default)]
     pub btree_root: Option<DsNode>,
+    /// Value chain for `kind: "linkedlist"`, rendered head → … → ∅.
+    #[serde(default)]
+    pub nodes: Vec<String>,
+    /// Entry label drawn before the first linked-list node (default
+    /// `"head"`).
+    #[serde(default)]
+    pub head_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

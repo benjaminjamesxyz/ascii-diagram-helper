@@ -19,7 +19,7 @@ merge dry-run on `sprint/v0.8.0` before anything touches `master`.
 |---|---|---|
 | `feat/ds-list-array` | `src/schema.rs` (DsKind + new spec fields), `src/datastructure.rs` (new render fns + dispatch arms), tests | schema.rs/datastructure.rs overlap with C — A is additive; rebase on C if hunks collide |
 | `feat/ds-dsl-shorthand` | `src/parser.rs` (`ds` dispatch + `parse_datastructure_dsl`), tests | low |
-| `feat/ds-node-colors` | `src/schema.rs` (DsNode.color), `src/datastructure.rs` (paint threading), tests | schema.rs/datastructure.rs overlap with A |
+| `feat/ds-node-colors` | `src/schema.rs` (DsNode.color), `src/datastructure.rs` (paint threading), `src/lib.rs` (call-site only), tests | schema.rs/datastructure.rs overlap with A |
 
 ## Branch A — `feat/ds-list-array` — linked list + array kinds
 **Problem:** datastructure covers only tree/btree. Classic linear structures

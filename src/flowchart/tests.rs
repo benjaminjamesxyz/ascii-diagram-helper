@@ -999,3 +999,67 @@ mod dashed_crossing_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod barycenter_tests {
+    use super::*;
+    use crate::schema::*;
+    use crate::theme::BoxStyle;
+
+    #[test]
+    fn reduce_crossings_fixes_crossed_layer_order() {
+        // 6 nodes, ranks [0,0,1,1,2,2]; edges A→C, B→D, A→D, C→F, D→E, C→E.
+        // Layers given with L2 = [E, F] (E left of F) which crosses C→F
+        // against D→E. Barycenter sweeps must settle L2 = [F, E].
+        let spec = FlowchartSpec {
+            direction: LayoutDirection::TB,
+            style: BoxStyle::Sharp,
+            title: None,
+            subgraphs: Vec::new(),
+            nodes: ["A", "B", "C", "D", "E", "F"]
+                .iter()
+                .map(|id| NodeSpec {
+                    id: id.to_string(),
+                    label: id.to_string(),
+                    shape: NodeShape::Box,
+                    dashed_border: false,
+                    color: None,
+                    fill_color: None,
+                    border_level: 0,
+                })
+                .collect(),
+            edges: vec![
+                ("A", "C"),
+                ("B", "D"),
+                ("A", "D"),
+                ("C", "F"),
+                ("D", "E"),
+                ("C", "E"),
+            ]
+            .into_iter()
+            .map(|(f, t)| EdgeSpec {
+                from: f.to_string(),
+                to: t.to_string(),
+                label: None,
+                arrow: ArrowDirection::Forward,
+                dashed: false,
+                thick: false,
+                color: None,
+            })
+            .collect(),
+        };
+        let renderer = FlowchartRenderer::new(&spec, crate::theme::Theme::new(BoxStyle::Sharp));
+        let idx = renderer.index_of();
+        let mut layers: Vec<Vec<usize>> = vec![
+            vec![idx["A"], idx["B"]],
+            vec![idx["C"], idx["D"]],
+            vec![idx["E"], idx["F"]],
+        ];
+        renderer.reduce_crossings(&mut layers, &idx);
+        let l2: Vec<&str> = layers[2]
+            .iter()
+            .map(|&i| spec.nodes[i].id.as_str())
+            .collect();
+        assert_eq!(l2, vec!["F", "E"], "L2 reordered to kill the crossing");
+    }
+}

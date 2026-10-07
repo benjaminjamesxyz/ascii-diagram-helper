@@ -514,6 +514,91 @@ impl<'a> FlowchartRenderer<'a> {
         v_cx
     }
 
+    /// Sugiyama crossing reduction: reorders nodes within each layer by the
+    /// barycenter (average ordinal) of their neighbors in the adjacent layer.
+    /// Two down + up sweep rounds; stable sort — ties keep current order.
+    /// Only rank-adjacent layers are considered; multi-rank jumps route via
+    /// corridors and don't participate.
+    pub(super) fn reduce_crossings(&self, layers: &mut [Vec<usize>], idx: &HashMap<&str, usize>) {
+        if layers.len() < 2 {
+            return;
+        }
+        // node index -> (layer, ordinal)
+        let mut pos: HashMap<usize, (usize, usize)> = HashMap::new();
+        for (r, layer) in layers.iter().enumerate() {
+            for (o, &i) in layer.iter().enumerate() {
+                pos.insert(i, (r, o));
+            }
+        }
+        // undirected adjacency (self-loops excluded)
+        let mut adj: HashMap<usize, Vec<usize>> = HashMap::new();
+        for e in &self.spec.edges {
+            if let (Some(&ui), Some(&vi)) = (idx.get(e.from.as_str()), idx.get(e.to.as_str()))
+                && ui != vi
+            {
+                adj.entry(ui).or_default().push(vi);
+                adj.entry(vi).or_default().push(ui);
+            }
+        }
+
+        // Average ordinal of `node`'s neighbors located in layer `toward`.
+        // NaN when the node has no neighbors there (keeps current order).
+        let barycenter =
+            |node: usize, toward: usize, pos: &HashMap<usize, (usize, usize)>| -> f64 {
+                let mut sum = 0.0f64;
+                let mut n = 0usize;
+                if let Some(nbrs) = adj.get(&node) {
+                    for &nb in nbrs {
+                        if let Some(&(lr, ord)) = pos.get(&nb)
+                            && lr == toward
+                        {
+                            sum += ord as f64;
+                            n += 1;
+                        }
+                    }
+                }
+                if n == 0 { f64::NAN } else { sum / n as f64 }
+            };
+
+        // Reorder layer `r` by neighbor barycenter in layer `toward`
+        let sweep = |layers: &mut [Vec<usize>],
+                     pos: &mut HashMap<usize, (usize, usize)>,
+                     r: usize,
+                     toward: usize| {
+            let mut keyed: Vec<(usize, f64, usize)> = layers[r]
+                .iter()
+                .enumerate()
+                .map(|(o, &i)| (i, barycenter(i, toward, pos), o))
+                .collect();
+            keyed.sort_by(|a, b| {
+                let (ba, bb) = (a.1, b.1);
+                let ord = if ba.is_nan() && bb.is_nan() {
+                    std::cmp::Ordering::Equal
+                } else if ba.is_nan() {
+                    std::cmp::Ordering::Greater
+                } else if bb.is_nan() {
+                    std::cmp::Ordering::Less
+                } else {
+                    ba.partial_cmp(&bb).unwrap_or(std::cmp::Ordering::Equal)
+                };
+                ord.then(a.2.cmp(&b.2))
+            });
+            layers[r] = keyed.into_iter().map(|(i, _, _)| i).collect();
+            for (o, &i) in layers[r].iter().enumerate() {
+                pos.insert(i, (r, o));
+            }
+        };
+
+        for _ in 0..2 {
+            for r in 1..layers.len() {
+                sweep(layers, &mut pos, r, r - 1);
+            }
+            for r in (0..layers.len().saturating_sub(1)).rev() {
+                sweep(layers, &mut pos, r, r + 1);
+            }
+        }
+    }
+
     fn assign_ranks(
         &self,
         nodes: &mut [LayoutNode],

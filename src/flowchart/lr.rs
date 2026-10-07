@@ -16,7 +16,7 @@ impl<'a> FlowchartRenderer<'a> {
 
         // Members of moved (isolated-direction) subgraphs are laid out inside
         // their own block render; keep empty layers so rank indexing stays aligned
-        let layers: Vec<Vec<usize>> = layers
+        let mut layers: Vec<Vec<usize>> = layers
             .into_iter()
             .map(|l| {
                 l.into_iter()
@@ -24,6 +24,8 @@ impl<'a> FlowchartRenderer<'a> {
                     .collect()
             })
             .collect();
+        // Sugiyama crossing reduction within layers (dense graphs)
+        self.reduce_crossings(&mut layers, &idx);
 
         let vertical_gap = 2;
         let start_y = if self.spec.title.is_some() { 2 } else { 0 };

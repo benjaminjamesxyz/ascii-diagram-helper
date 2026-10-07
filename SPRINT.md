@@ -1,3 +1,50 @@
+# Sprint v0.9.0 — Ultimate Test: Multi-Agent Hardening Loop
+
+**Goal:** test-driven quality sprint across all 7 diagram types. Tester →
+reviewer → engineer → developer per type, looping (hard cap 3 cycles) until
+every reviewer is satisfied (zero open blocker/major/minor). No new features —
+fixes only. Release `v0.9.0` gated on human approval.
+**Integration branch:** `sprint/v0.9.0` (from `master`)
+**Test gate per branch:** `cargo test` + `cargo clippy --all-targets` (7
+pre-existing baseline warnings tolerated) + `cargo fmt --check`.
+
+## Cycle policy
+- Cycle = test → review → design → implement → integrate → re-test changed
+  types. Loop until all reviewer verdicts `satisfied`; HARD CAP 3 cycles.
+- Findings require exact repro commands; reviewers re-run repros and reject
+  false positives with reasons. Agents re-verify; reports are never trusted
+  blindly.
+
+## File ownership (shared files batched at integration)
+
+| Branch | Owns | Shared-file policy |
+|---|---|---|
+| `fix/flowchart` | `src/flowchart.rs`, `src/flowchart/*`, flowchart tests | parser.rs/canvas.rs hunks → batched |
+| `fix/sequence` | `src/sequence.rs`, sequence tests | parser.rs hunks → batched |
+| `fix/architecture` | `src/architecture.rs`, arch tests | schema.rs hunks → batched |
+| `fix/tree` | `src/tree.rs`, tree tests | — |
+| `fix/table` | `src/table.rs`, table tests | parser.rs hunks → batched |
+| `fix/stack` | `src/stack.rs`, stack tests | parser.rs hunks → batched |
+| `fix/datastructure` | `src/datastructure.rs`, ds tests | parser.rs/schema.rs hunks → batched |
+| integration (scrum master) | `src/parser.rs`, `src/canvas.rs`, `src/schema.rs`, `src/main.rs`, `src/lib.rs`, `README.md`, `SPRINT.md` | applied as one `fix/shared` batch |
+
+Developers whose design requires shared-file hunks note them in the branch
+report; the scrum master applies them post-merge to avoid N-way conflicts.
+
+## Integration
+1. Merge fix branches in table order → `sprint/v0.9.0` (`--no-ff`)
+2. Apply batched shared-file hunks, full gate + master-vs-integration render
+   `cmp` sweep across all 7 types × 5 styles
+3. Re-test changed types (next cycle) until reviewers satisfied or cap
+4. Gate report → **human approval** → bump `0.9.0`, `npm run sync:pi`, merge
+   `--no-ff` to `master`, tag `v0.9.0`
+
+## Post-sprint backlog (not this sprint)
+- Findings rejected as "by design" get README Known Limitations entries
+- Tester checklist promoted to a reusable `skills/` QA skill
+
+---
+
 # Sprint v0.8.0 — Data-Structure Diagrams Expansion
 
 **Goal:** round out the `type:"datastructure"` family (tree/btree landed in

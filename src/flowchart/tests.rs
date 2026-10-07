@@ -993,7 +993,10 @@ mod dashed_crossing_tests {
             DiagramSpec::Flowchart(f) => {
                 let theme = crate::theme::Theme::new(f.style);
                 let out = FlowchartRenderer::new(&f, theme).render(false);
-                assert!(out.matches('┼').count() >= 4, "dash×dash junctions expected:\n{out}");
+                assert!(
+                    out.matches('┼').count() >= 4,
+                    "dash×dash junctions expected:\n{out}"
+                );
             }
             _ => panic!("Expected flowchart"),
         }

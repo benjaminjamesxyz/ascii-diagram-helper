@@ -1,6 +1,6 @@
-use super::{BlockMode, Blocks};
 use super::FlowchartRenderer;
 use super::edges::{clear_route_y, edge_arrow_heads, edge_hline, edge_vline};
+use super::{BlockMode, Blocks};
 use crate::canvas::{Canvas, Direction};
 use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;

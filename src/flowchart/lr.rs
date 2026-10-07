@@ -1,6 +1,6 @@
-use super::{BlockMode, Blocks};
 use super::FlowchartRenderer;
 use super::edges::{edge_arrow_heads, edge_hline, edge_vline};
+use super::{BlockMode, Blocks};
 use crate::canvas::{Canvas, Direction};
 use unicode_width::UnicodeWidthStr;
 

@@ -357,7 +357,16 @@ impl<'a> FlowchartRenderer<'a> {
                         .unwrap_or(1);
                     if std::env::var("DBG_SG").is_ok() {
                         let dir_dbg = sub.direction;
-                        eprintln!("BLOCK sg={} mode={:?} sub_dir={:?} {}x{} members={:?} nodes_in_sub={}", sg.id, mode, dir_dbg, width, height, members, sub.nodes.len());
+                        eprintln!(
+                            "BLOCK sg={} mode={:?} sub_dir={:?} {}x{} members={:?} nodes_in_sub={}",
+                            sg.id,
+                            mode,
+                            dir_dbg,
+                            width,
+                            height,
+                            members,
+                            sub.nodes.len()
+                        );
                         eprintln!("{rendered}");
                     }
                     if mode == BlockMode::Below {

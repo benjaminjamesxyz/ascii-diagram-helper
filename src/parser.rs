@@ -470,9 +470,17 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         }
 
         if find_next_delim(trimmed).is_some() {
-            parse_flowchart_edges_in_line(trimmed, &mut ensure_node, &mut edges);
+            parse_flowchart_edges_in_line(trimmed, &mut ensure_node, &mut edges)?;
         } else {
-            // Standalone node definition: e.g. A[Label]
+            // Standalone node definition: e.g. A[Label]. Reject tokens with
+            // residue the same way edge statements are — an unrecognized
+            // delimiter like `A ~>> B` must error, not absorb prose into a
+            // node id.
+            if !node_token_fully_consumed(trimmed) {
+                return Err(format!(
+                    "invalid node text `{trimmed}` — wrap node text in [brackets] or \"quotes\""
+                ));
+            }
             let (id, label, shape) = parse_node_token(trimmed);
             if !id.is_empty() {
                 ensure_node(&id, &label, shape);
@@ -591,6 +599,134 @@ fn clean_label(raw: &str) -> String {
         .replace("<br>", "\n")
         .replace("<br />", "\n");
     s
+}
+
+/// Is `c` a character that only occurs inside shape wrappers or quotes?
+fn is_node_token_special(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '[' | ']' | '{' | '}' | '(' | ')' | '"' | '\'')
+}
+
+/// Closed node-token grammar: does this token consist of exactly one
+/// complete node spec with zero residue? Accepts (a) one shape wrapper using
+/// the same patterns [`parse_node_token`] recognizes — `[(..)]`, `([..])`,
+/// `[[..]]`, `/../` or `[..\\]` (see [`bracket_slash_open`]), `[..]`,
+/// `(((..)))`, `((..))`, `(..)`, `{{..}}`, `{..}` — where the wrapper closes
+/// at the very end of the token and only a clean node id precedes it (an
+/// empty label is allowed, e.g. `B[]`), (b) a fully quoted string (outer
+/// quotes stripped later by [`clean_label`]), or (c) a bare identifier with
+/// no whitespace and no bracket/quote characters.
+///
+/// Every documented construct fully consumes its token — `|edge labels|` are
+/// stripped before target extraction, whitespace is legal only inside
+/// quotes/brackets, and bare node ids are single lexical tokens — so any
+/// residue is necessarily a typo, unsupported arrow, or prose, and must
+/// error instead of being silently absorbed into a node id.
+fn node_token_fully_consumed(token: &str) -> bool {
+    let t = token.trim();
+    if t.is_empty() {
+        return false;
+    }
+
+    // (b) fully quoted label (quotes may wrap whitespace)
+    if t.len() >= 2
+        && ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))
+    {
+        return true;
+    }
+
+    // (a) shape wrappers, checked in parse_node_token's order. Each check
+    // mirrors parse_node_token's find/rfind semantics and additionally
+    // requires the closing needle to end the token and the id prefix before
+    // the wrapper to be a clean bare identifier.
+    let id_ok = |prefix: &str| -> bool {
+        let p = prefix.trim();
+        !p.is_empty() && !p.chars().any(is_node_token_special)
+    };
+
+    // [(Database)]
+    if let Some(start) = t.find("[(")
+        && let Some(end) = t.rfind(")]")
+        && end + 2 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // ([Stadium])
+    if let Some(start) = t.find("([")
+        && let Some(end) = t.rfind("])")
+        && end + 2 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // [[Subprocess]]
+    if let Some(start) = t.find("[[")
+        && let Some(end) = t.rfind("]]")
+        && end + 2 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // [/Parallelogram] | [/Trapezoid\] | [\ParallelogramAlt\] | [\TrapezoidAlt/]
+    if let Some((start, _)) = bracket_slash_open(t)
+        && let Some(end) = t.rfind(']')
+        && end + 1 == t.len()
+        && start + 2 < end
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // [Box]
+    if let Some(start) = t.find('[')
+        && let Some(end) = t.rfind(']')
+        && end + 1 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // (((DoubleCircle)))
+    if let Some(start) = t.find("(((")
+        && let Some(end) = t.rfind(")))")
+        && end + 3 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // ((Circle))
+    if let Some(start) = t.find("((")
+        && let Some(end) = t.rfind("))")
+        && end + 2 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // (Rounded)
+    if let Some(start) = t.find('(')
+        && let Some(end) = t.rfind(')')
+        && end + 1 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // {{Hexagon}}
+    if let Some(start) = t.find("{{")
+        && let Some(end) = t.rfind("}}")
+        && end + 2 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+    // {Diamond}
+    if let Some(start) = t.find('{')
+        && let Some(end) = t.rfind('}')
+        && end + 1 == t.len()
+        && id_ok(&t[..start])
+    {
+        return true;
+    }
+
+    // (c) bare identifier: no whitespace, no bracket/quote characters
+    !t.chars().any(is_node_token_special)
 }
 
 fn parse_node_token(token: &str) -> (String, String, NodeShape) {
@@ -712,7 +848,14 @@ fn bracket_slash_open(t: &str) -> Option<(usize, char)> {
 }
 
 fn find_next_delim(text: &str) -> Option<(usize, &'static str)> {
-    let delimiters = ["<==>", "==>", "<-->", "<--", "-.->", "-->", "---"];
+    // Longer variants must precede their prefixes: the earliest-position
+    // tie-break below keeps the first table entry on equal index (strict
+    // `<`), so `<-->` wins over `<--` and `<==>` over `<==` at the same
+    // occurrence. `<-.->` starts one char earlier than `-.->` at the same
+    // spot, but listing it first documents intent.
+    let delimiters = [
+        "<-.->", "<==>", "<-->", "==>", "<--", "-.->", "-->", "<==", "---",
+    ];
     let mut earliest: Option<(usize, &'static str)> = None;
 
     for delim in delimiters {
@@ -763,7 +906,11 @@ fn split_bracket_aware(s: &str, delimiter: char) -> Vec<&str> {
     result
 }
 
-fn parse_flowchart_edges_in_line<F>(mut line: &str, ensure_node: &mut F, edges: &mut Vec<EdgeSpec>)
+fn parse_flowchart_edges_in_line<F>(
+    mut line: &str,
+    ensure_node: &mut F,
+    edges: &mut Vec<EdgeSpec>,
+) -> Result<(), String>
 where
     F: FnMut(&str, &str, NodeShape),
 {
@@ -786,15 +933,38 @@ where
 
         let arrow = match delim {
             "---" => ArrowDirection::None,
-            "<-->" | "<==>" => ArrowDirection::Both,
-            "<--" => ArrowDirection::Back,
+            "<-->" | "<==>" | "<-.->" => ArrowDirection::Both,
+            "<--" | "<==" => ArrowDirection::Back,
             _ => ArrowDirection::Forward,
         };
-        let is_dashed = delim == "-.->";
-        let is_thick = delim == "==>" || delim == "<==>";
+        let is_dashed = delim == "-.->" || delim == "<-.->";
+        let is_thick = delim == "==>" || delim == "<==>" || delim == "<==";
 
         let sources = split_bracket_aware(left_part, '&');
         let targets = split_bracket_aware(target_part, '&');
+
+        if sources.is_empty() {
+            return Err(format!(
+                "invalid node text `{left_part}` in edge statement — wrap node text in [brackets] or \"quotes\""
+            ));
+        }
+        if targets.is_empty() {
+            return Err(format!(
+                "invalid node text `{target_part}` in edge statement — wrap node text in [brackets] or \"quotes\""
+            ));
+        }
+
+        // Reject tokens with residue: anything outside the closed node-token
+        // grammar is a typo, unsupported arrow, or prose, never a documented
+        // construct (|labels| are stripped above, whitespace is legal only
+        // inside quotes/brackets)
+        for token in sources.iter().chain(targets.iter()) {
+            if !node_token_fully_consumed(token) {
+                return Err(format!(
+                    "invalid node text `{token}` in edge statement — wrap node text in [brackets] or \"quotes\""
+                ));
+            }
+        }
 
         for s in &sources {
             let (u_id, u_label, u_shape) = parse_node_token(s);
@@ -821,6 +991,7 @@ where
         }
         line = rest;
     }
+    Ok(())
 }
 
 /// Parses a Mermaid sequence-diagram DSL into a [`SequenceSpec`].
@@ -1328,6 +1499,143 @@ mod tests {
             }
             _ => panic!("Expected flowchart"),
         }
+    }
+
+    #[test]
+    fn test_parse_bidirectional_dashed_and_reverse_thick_edges() {
+        // (1) 'A <-.-> B' -> 1 edge Both+dashed, nodes exactly {A,B}
+        let dsl = "graph TD; A <-.-> B";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.edges[0].from, "A");
+                assert_eq!(f.edges[0].to, "B");
+                assert_eq!(f.edges[0].arrow, ArrowDirection::Both);
+                assert!(f.edges[0].dashed);
+                assert!(!f.edges[0].thick);
+                assert_eq!(f.nodes.len(), 2);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+
+        // (2) 'A <== B' -> Back+thick
+        let dsl2 = "graph TD; A <== B";
+        let spec2 = parse_dsl_or_json(dsl2, BoxStyle::Rounded).unwrap();
+        match spec2 {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.edges[0].from, "A");
+                assert_eq!(f.edges[0].to, "B");
+                assert_eq!(f.edges[0].arrow, ArrowDirection::Back);
+                assert!(f.edges[0].thick);
+                assert!(!f.edges[0].dashed);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+
+        // (3) regressions '<==>','-.->','<-->','<--','---' unchanged
+        let dsl3 = "graph TD; A <==> B; B -.-> C; C <--> D; D <-- E; E --- F";
+        let spec3 = parse_dsl_or_json(dsl3, BoxStyle::Rounded).unwrap();
+        match spec3 {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 5);
+                assert_eq!(f.edges[0].arrow, ArrowDirection::Both);
+                assert!(f.edges[0].thick);
+                assert_eq!(f.edges[1].arrow, ArrowDirection::Forward);
+                assert!(f.edges[1].dashed);
+                assert_eq!(f.edges[2].arrow, ArrowDirection::Both);
+                assert!(!f.edges[2].dashed && !f.edges[2].thick);
+                assert_eq!(f.edges[3].arrow, ArrowDirection::Back);
+                assert!(!f.edges[3].dashed && !f.edges[3].thick);
+                assert_eq!(f.edges[4].arrow, ArrowDirection::None);
+                assert!(!f.edges[4].dashed && !f.edges[4].thick);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+
+        // (4) chained 'A <-.-> B <== C' -> 2 edges correct flags
+        let dsl4 = "graph TD; A <-.-> B <== C";
+        let spec4 = parse_dsl_or_json(dsl4, BoxStyle::Rounded).unwrap();
+        match spec4 {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 2);
+                assert_eq!(f.edges[0].from, "A");
+                assert_eq!(f.edges[0].to, "B");
+                assert_eq!(f.edges[0].arrow, ArrowDirection::Both);
+                assert!(f.edges[0].dashed);
+                assert!(!f.edges[0].thick);
+
+                assert_eq!(f.edges[1].from, "B");
+                assert_eq!(f.edges[1].to, "C");
+                assert_eq!(f.edges[1].arrow, ArrowDirection::Back);
+                assert!(f.edges[1].thick);
+                assert!(!f.edges[1].dashed);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+
+        // (5) 'A <-.->|lbl| B' parses
+        let dsl5 = "graph TD; A <-.->|lbl| B";
+        let spec5 = parse_dsl_or_json(dsl5, BoxStyle::Rounded).unwrap();
+        match spec5 {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.edges[0].from, "A");
+                assert_eq!(f.edges[0].to, "B");
+                assert_eq!(f.edges[0].label.as_deref(), Some("lbl"));
+                assert_eq!(f.edges[0].arrow, ArrowDirection::Both);
+                assert!(f.edges[0].dashed);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_flowchart_token_validation_errors() {
+        // (1) 'A --> B this is garbage' -> Err containing 'garbage'
+        let err1 =
+            parse_dsl_or_json("graph TD; A --> B this is garbage", BoxStyle::Rounded).unwrap_err();
+        assert!(err1.contains("garbage"), "expected 'garbage' in: {err1}");
+
+        // (2) 'A ~>> B' -> Err
+        let err2 = parse_dsl_or_json("graph TD; A ~>> B", BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err2.contains("A ~>> B"),
+            "expected offending text in: {err2}"
+        );
+
+        // (3) 'garbage here --> B' -> Err
+        let err3 =
+            parse_dsl_or_json("graph TD; garbage here --> B", BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err3.contains("garbage here"),
+            "expected 'garbage here' in: {err3}"
+        );
+
+        // empty target edge 'A --> |lbl|' or 'A -->'
+        assert!(parse_dsl_or_json("graph TD; A --> |lbl|", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("graph TD; A -->", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("graph TD; --> B", BoxStyle::Rounded).is_err());
+
+        // prose chaining 'A --> B and B --> C' -> Err
+        let err4 =
+            parse_dsl_or_json("graph TD; A --> B and B --> C", BoxStyle::Rounded).unwrap_err();
+        assert!(err4.contains("B and B"), "expected 'B and B' in: {err4}");
+    }
+
+    #[test]
+    fn test_flowchart_token_validation_accepts_valid() {
+        // (4) accept: 'A --> B[label with spaces]', quoted labels, '|edge label|', '& chains', 'A --> B --> C', labels containing ';'
+        assert!(
+            parse_dsl_or_json("graph TD; A --> B[label with spaces]", BoxStyle::Rounded).is_ok()
+        );
+        assert!(parse_dsl_or_json("graph TD; A --> \"quoted label\"", BoxStyle::Rounded).is_ok());
+        assert!(parse_dsl_or_json("graph TD; \"quoted source\" --> B", BoxStyle::Rounded).is_ok());
+        assert!(parse_dsl_or_json("graph TD; A -->|edge label| B", BoxStyle::Rounded).is_ok());
+        assert!(parse_dsl_or_json("graph TD; A & B --> C & D", BoxStyle::Rounded).is_ok());
+        assert!(parse_dsl_or_json("graph TD; A --> B --> C", BoxStyle::Rounded).is_ok());
+        assert!(parse_dsl_or_json("graph TD; A[Foo; Bar] --> B", BoxStyle::Rounded).is_ok());
     }
 
     #[test]

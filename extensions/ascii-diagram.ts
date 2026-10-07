@@ -114,6 +114,9 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "draw_diagram",
 		label: "ASCII Diagram",
+		// Own framing: skips Pi's toolSuccessBg panel paint, which would sit
+		// as a colored slab behind the diagram's own colors
+		renderShell: "self",
 		description:
 			"Draws clean, perfectly aligned ASCII and Unicode diagrams (flowcharts, sequence diagrams, architecture boxes, trees, stacks) without broken lines or misaligned borders. Accepts Mermaid DSL or JSON specification.",
 		promptSnippet:
@@ -220,7 +223,7 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			);
 		},
 
-		renderResult(result, { expanded }, theme) {
+		renderResult(result, { expanded: _expanded }, theme) {
 			const details = (result.details ?? {}) as {
 				error?: string;
 				diagram?: string;

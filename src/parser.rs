@@ -2,8 +2,8 @@ use crate::color::Color;
 use crate::schema::{
     ArrowDirection, DataStructureSpec, DiagramSpec, DsKind, DsNode, EdgeSpec, FlowchartSpec,
     LayoutDirection, NodeShape, NodeSpec, ParticipantSpec, SeqFrameSpec, SeqMessageSpec,
-    SeqMessageType, SequenceSpec, StackLayerSpec, StackSpec, SubgraphSpec, TableSpec, TextAlign,
-    TreeNodeSpec, TreeSpec,
+    SeqMessageType, SeqNotePosition, SeqNoteSpec, SequenceSpec, StackLayerSpec, StackSpec,
+    SubgraphSpec, TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
 };
 use crate::theme::BoxStyle;
 
@@ -998,15 +998,19 @@ where
 ///
 /// # Errors
 ///
-/// Currently always returns `Ok`; the `Result` keeps the parser signatures
-/// uniform with the other DSL parsers.
+/// Returns `Err` only when no messages could be parsed and at least one line
+/// was unrecognized (with 1-based line numbers); lenient otherwise, matching
+/// the parser's best-effort posture for machine-generated DSL.
 pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
     let mut participants = Vec::new();
     let mut p_set = std::collections::HashSet::new();
     let mut messages = Vec::new();
     let mut frames = Vec::new();
+    let mut notes: Vec<SeqNoteSpec> = Vec::new();
     // Stack of in-progress frames; `end` pops and commits them (supports nesting)
     let mut open_frames: Vec<SeqFrameSpec> = Vec::new();
+    // Unrecognized (1-based line number, trimmed text) for diagnostics
+    let mut unrecognized: Vec<(usize, String)> = Vec::new();
 
     let add_participant = |id: &str,
                            label: Option<String>,
@@ -1022,9 +1026,27 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
         }
     };
 
-    for line in input.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("%%") || trimmed == "sequenceDiagram" {
+    for (ln, line) in input.lines().enumerate() {
+        // `sequenceDiagram` header; a same-line statement suffix (Mermaid
+        // `sequenceDiagram A->>B: hi`) is parsed as the first statement.
+        // `parse_dsl_or_json` normalizes `;` to newlines, so direct pub calls
+        // with multi-statement `;` suffixes degrade to one statement + an
+        // unrecognized-line diagnostic.
+        let mut trimmed = line.trim();
+        if trimmed.starts_with("sequenceDiagram") {
+            let after = &trimmed["sequenceDiagram".len()..];
+            if after.is_empty()
+                || after.starts_with(';')
+                || after.starts_with(|c: char| c.is_whitespace())
+            {
+                let rest = after.trim_start_matches(';').trim();
+                if rest.is_empty() {
+                    continue;
+                }
+                trimmed = rest;
+            }
+        }
+        if trimmed.is_empty() || trimmed.starts_with("%%") {
             continue;
         }
 
@@ -1047,6 +1069,70 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
                 add_participant(id, None, &mut participants, &mut p_set);
             }
             continue;
+        }
+
+        // Notes: `note over A[,B]: text`, `note right of X: text`,
+        // `note left of X: text` (keyword case-insensitive, Mermaid form).
+        // Notes introduce participants, matching Mermaid. Malformed note
+        // forms fall through to the unrecognized-line tracking below.
+        if trimmed.len() >= 5
+            && trimmed[..4].eq_ignore_ascii_case("note")
+            && (trimmed.as_bytes()[4] == b' ' || trimmed.as_bytes()[4] == b'\t')
+        {
+            let rest = trimmed[4..].trim();
+            let (targets_raw, text_raw) = match rest.find(':') {
+                Some(c) => (&rest[..c], rest[c + 1..].trim()),
+                None => (rest, ""),
+            };
+            let targets_lc = targets_raw.to_ascii_lowercase();
+            let ids: Vec<String> = if targets_lc == "over" || targets_lc.starts_with("over ") {
+                targets_raw[4..]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            } else if targets_lc == "right of" || targets_lc.starts_with("right of ") {
+                let id = targets_raw[8..].trim();
+                if id.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![id.to_string()]
+                }
+            } else if targets_lc == "left of" || targets_lc.starts_with("left of ") {
+                let id = targets_raw[7..].trim();
+                if id.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![id.to_string()]
+                }
+            } else {
+                Vec::new()
+            };
+            if !ids.is_empty() {
+                let text = text_raw
+                    .trim_matches('"')
+                    .replace("\\n", " ")
+                    .replace("<br/>", " ")
+                    .replace("<br>", " ")
+                    .replace("<br />", " ");
+                for id in &ids {
+                    add_participant(id, None, &mut participants, &mut p_set);
+                }
+                notes.push(SeqNoteSpec {
+                    over: ids,
+                    text,
+                    at_step: messages.len(),
+                    position: if targets_lc.starts_with("right of") {
+                        SeqNotePosition::RightOf
+                    } else if targets_lc.starts_with("left of") {
+                        SeqNotePosition::LeftOf
+                    } else {
+                        SeqNotePosition::Over
+                    },
+                });
+                continue;
+            }
         }
 
         // Control-flow frames: alt/opt/loop/par/critical/break + else/and branches + end
@@ -1073,9 +1159,16 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
             }
             continue;
         }
+        // Branch splits: `else` (alt/opt), `and` (par), `option` (critical only)
+        let opt_rest = if open_frames.last().is_some_and(|f| f.label == "critical") {
+            trimmed.strip_prefix("option ")
+        } else {
+            None
+        };
         if let Some(rest) = trimmed
             .strip_prefix("else ")
             .or_else(|| trimmed.strip_prefix("and "))
+            .or(opt_rest)
         {
             if let Some(frame) = open_frames.last_mut() {
                 frame.branches.push(rest.trim().to_string());
@@ -1086,6 +1179,7 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
 
         // Messages: A ->> B: Msg or A -> B: Msg or A --> B: Msg
         let arrow_patterns = ["-->>", "-->", "<->", "->>", "->"];
+        let mut matched = false;
         for pat in arrow_patterns {
             if let Some(idx) = trimmed.find(pat) {
                 let from_id = trimmed[..idx].trim();
@@ -1119,9 +1213,34 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
                     label: clean_label,
                     message_type: m_type,
                 });
+                matched = true;
                 break;
             }
         }
+        if !matched {
+            unrecognized.push((ln + 1, trimmed.to_string()));
+        }
+    }
+
+    // Lenient auto-commit: frames left open at EOF close after the last
+    // message. Pop order (innermost first) matches `end`-commit order, so
+    // frames-vec nesting order (inner = lower index) is preserved.
+    while let Some(mut frame) = open_frames.pop() {
+        frame.end_step = messages.len();
+        frames.push(frame);
+    }
+
+    // Diagnostics: junk is tolerated once something parsed, but fully
+    // unrecognized input is reported with line numbers.
+    if messages.is_empty() && !unrecognized.is_empty() {
+        return Err(format!(
+            "sequenceDiagram: no messages parsed; unrecognized line(s): {}",
+            unrecognized
+                .iter()
+                .map(|(n, l)| format!("line {n}: `{l}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
 
     Ok(DiagramSpec::Sequence(SequenceSpec {
@@ -1129,7 +1248,7 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
         title: None,
         participants,
         messages,
-        notes: vec![],
+        notes,
         frames,
     }))
 }
@@ -2156,5 +2275,209 @@ mod tests {
         let err = parse_dsl_or_json("datastructure", BoxStyle::Rounded)
             .expect_err("bare `datastructure` stays a JSON hint");
         assert!(err.contains("JSON-only"));
+    }
+
+    #[test]
+    fn test_parse_sequence_notes() {
+        let dsl = r"
+        sequenceDiagram
+          A->>B: ping
+          note over A: self note
+          note over A,B: cross note
+          note right of B: right note
+          note left of A: left note
+        ";
+        let spec = match parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.notes.len(), 4);
+        assert_eq!(spec.notes[0].over, vec!["A"]);
+        assert_eq!(spec.notes[0].text, "self note");
+        assert_eq!(spec.notes[0].at_step, 1);
+        assert_eq!(spec.notes[0].position, SeqNotePosition::Over);
+
+        assert_eq!(spec.notes[1].over, vec!["A", "B"]);
+        assert_eq!(spec.notes[1].text, "cross note");
+        assert_eq!(spec.notes[1].at_step, 1);
+        assert_eq!(spec.notes[1].position, SeqNotePosition::Over);
+
+        assert_eq!(spec.notes[2].over, vec!["B"]);
+        assert_eq!(spec.notes[2].text, "right note");
+        assert_eq!(spec.notes[2].at_step, 1);
+        assert_eq!(spec.notes[2].position, SeqNotePosition::RightOf);
+
+        assert_eq!(spec.notes[3].over, vec!["A"]);
+        assert_eq!(spec.notes[3].text, "left note");
+        assert_eq!(spec.notes[3].at_step, 1);
+        assert_eq!(spec.notes[3].position, SeqNotePosition::LeftOf);
+    }
+
+    #[test]
+    fn test_parse_sequence_note_introduces_participant() {
+        let dsl = r"
+        sequenceDiagram
+          Note over C: note before message
+          A->>B: hi
+        ";
+        let spec = match parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.participants.len(), 3);
+        assert_eq!(spec.participants[0].id, "C");
+        assert_eq!(spec.notes.len(), 1);
+        assert_eq!(spec.notes[0].at_step, 0);
+        assert_eq!(spec.notes[0].text, "note before message");
+    }
+
+    #[test]
+    fn test_parse_sequence_unrecognized_diagnostics() {
+        // (a) header + 'foo','bar' -> Err naming lines 2,3
+        let bad = "sequenceDiagram\nfoo\nbar";
+        let err = parse_sequence_dsl(bad, BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("line 2: `foo`"), "err: {err}");
+        assert!(err.contains("line 3: `bar`"), "err: {err}");
+
+        // (b) junk line + valid message -> Ok 1 message (lenient best-effort)
+        let tolerant = "sequenceDiagram\njunk\nA->>B: hi";
+        let spec = match parse_sequence_dsl(tolerant, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.messages.len(), 1);
+
+        // (c) %% comment not flagged
+        let commented = "sequenceDiagram\n%% comment\nA->>B: hi";
+        assert!(parse_sequence_dsl(commented, BoxStyle::Rounded).is_ok());
+
+        // (d) bare sequenceDiagram still Ok empty
+        let bare = "sequenceDiagram";
+        let spec = match parse_sequence_dsl(bare, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert!(spec.messages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_sequence_frame_autocommit_eof() {
+        // (a) unclosed alt -> 1 frame end_step==1 branches==['ok']
+        let dsl = "sequenceDiagram\nalt ok\nA->>B: msg";
+        let spec = match parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.frames.len(), 1);
+        assert_eq!(spec.frames[0].label, "alt");
+        assert_eq!(spec.frames[0].branches, vec!["ok"]);
+        assert_eq!(spec.frames[0].end_step, 1);
+
+        // (b) nested unclosed loop > alt -> 2 frames inner index 0
+        let nested = "sequenceDiagram\nloop every 1s\nalt inner\nA->>B: msg";
+        let n_spec = match parse_sequence_dsl(nested, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(n_spec.frames.len(), 2);
+        assert_eq!(n_spec.frames[0].label, "alt");
+        assert_eq!(n_spec.frames[1].label, "loop");
+
+        // (c) unclosed break -> frame labeled break
+        let brk = "sequenceDiagram\nbreak timeout\nA->>B: msg";
+        let b_spec = match parse_sequence_dsl(brk, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(b_spec.frames.len(), 1);
+        assert_eq!(b_spec.frames[0].label, "break");
+        assert_eq!(b_spec.frames[0].branches, vec!["timeout"]);
+
+        // (d) closed input identical spec
+        let closed = "sequenceDiagram\nalt ok\nA->>B: msg\nend";
+        let c_spec = match parse_sequence_dsl(closed, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.frames[0], c_spec.frames[0]);
+    }
+
+    #[test]
+    fn test_parse_sequence_critical_option() {
+        // (a) critical up / msg / option backup / msg / end
+        let dsl = r"
+        sequenceDiagram
+          critical up
+            A->>B: try up
+          option backup
+            A->>B: try backup
+          end
+        ";
+        let spec = match parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.frames.len(), 1);
+        assert_eq!(spec.frames[0].label, "critical");
+        assert_eq!(spec.frames[0].branches, vec!["up", "backup"]);
+        assert_eq!(spec.frames[0].branch_steps, vec![0, 1]);
+
+        // (b) option outside critical is unrecognized
+        let bad = "sequenceDiagram\noption orphan";
+        assert!(parse_sequence_dsl(bad, BoxStyle::Rounded).is_err());
+
+        // (d) nested critical inside alt: option binds innermost
+        let nested = r"
+        sequenceDiagram
+          alt outer
+            critical inner
+              A->>B: msg1
+            option inner_opt
+              A->>B: msg2
+            end
+          else outer_else
+            A->>B: msg3
+          end
+        ";
+        let n_spec = match parse_sequence_dsl(nested, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(n_spec.frames.len(), 2);
+        // inner critical committed on end -> index 0
+        assert_eq!(n_spec.frames[0].label, "critical");
+        assert_eq!(n_spec.frames[0].branches, vec!["inner", "inner_opt"]);
+        // outer alt committed on second end -> index 1
+        assert_eq!(n_spec.frames[1].label, "alt");
+        assert_eq!(n_spec.frames[1].branches, vec!["outer", "outer_else"]);
+    }
+
+    #[test]
+    fn test_parse_sequence_header_prefix_strip() {
+        // (a) same line message suffix
+        let dsl = "sequenceDiagram A->>B: hi";
+        let spec = match parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec.participants.len(), 2);
+        assert_eq!(spec.messages.len(), 1);
+        assert_eq!(spec.messages[0].label, "hi");
+
+        // (b) semicolon delimited direct call
+        let dsl_semi = "sequenceDiagram;A->>B: hi";
+        let spec_semi = match parse_sequence_dsl(dsl_semi, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Sequence(s) => s,
+            _ => panic!("Expected sequence"),
+        };
+        assert_eq!(spec_semi.messages.len(), 1);
+
+        // (c) bare header line
+        assert!(parse_sequence_dsl("sequenceDiagram", BoxStyle::Rounded).is_ok());
+
+        // (d) junk with no arrow fails T-3
+        let junk = "sequenceDiagram A";
+        let err = parse_sequence_dsl(junk, BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("line 1: `A`"), "err: {err}");
     }
 }

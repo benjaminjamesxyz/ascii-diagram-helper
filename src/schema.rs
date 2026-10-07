@@ -147,15 +147,29 @@ pub struct SeqMessageSpec {
     pub message_type: SeqMessageType,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Horizontal anchor for a sequence note box: spanning participant columns
+/// (`over`) or anchored beside a single lifeline (`right of` / `left of`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SeqNotePosition {
+    #[default]
+    Over,
+    RightOf,
+    LeftOf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeqNoteSpec {
     pub over: Vec<String>,
     pub text: String,
     #[serde(default)]
     pub at_step: usize,
+    /// Box anchor; defaults to `Over` so JSON notes without the field keep
+    /// rendering as participant-span boxes.
+    #[serde(default)]
+    pub position: SeqNotePosition,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SeqFrameSpec {
     /// Frame keyword: `alt`, `opt`, `loop`, `par`, `critical`, or `break`
     pub label: String,

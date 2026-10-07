@@ -1,5 +1,5 @@
 use crate::canvas::{Canvas, Direction};
-use crate::schema::{SeqMessageType, SequenceSpec};
+use crate::schema::{SeqMessageType, SeqNotePosition, SequenceSpec};
 use crate::theme::{BoxStyle, Theme};
 use unicode_width::UnicodeWidthStr;
 
@@ -128,10 +128,17 @@ impl<'a> SequenceRenderer<'a> {
             }
         }
 
+        // Notes anchored between message rows (clamped at_step -> note index)
+        let mut note_at: Vec<Vec<usize>> = vec![Vec::new(); n_msgs + 1];
+        for (ni, n) in self.spec.notes.iter().enumerate() {
+            note_at[n.at_step.min(n_msgs)].push(ni);
+        }
+
         let mut msg_y = Vec::new();
         let mut frame_tops = vec![0usize; self.spec.frames.len()];
         let mut frame_bottoms = vec![0usize; self.spec.frames.len()];
         let mut divider_ys: Vec<Vec<(usize, usize)>> = vec![Vec::new(); self.spec.frames.len()];
+        let mut note_y = vec![0usize; self.spec.notes.len()];
         let mut cur_y = p_bottom_y + 2;
 
         for i in 0..n_msgs {
@@ -150,6 +157,11 @@ impl<'a> SequenceRenderer<'a> {
                 divider_ys[fi].push((bi, cur_y));
                 cur_y += 1;
             }
+            // Notes anchored at this step: top border + text + bottom border
+            for &ni in &note_at[i] {
+                note_y[ni] = cur_y;
+                cur_y += 3;
+            }
             let msg = &self.spec.messages[i];
             let is_self = msg.from == msg.to;
             msg_y.push(cur_y);
@@ -158,6 +170,18 @@ impl<'a> SequenceRenderer<'a> {
             } else {
                 cur_y += 2; // label row + line row
             }
+        }
+        // Trailing dividers (else/and after the last message) allocate above
+        // their frame's bottom border — draining closes first would draw the
+        // divider below the frame bottom.
+        for &(fi, bi) in &divider_ids[n_msgs] {
+            divider_ys[fi].push((bi, cur_y));
+            cur_y += 1;
+        }
+        // Notes anchored after the last message
+        for &ni in &note_at[n_msgs] {
+            note_y[ni] = cur_y;
+            cur_y += 3;
         }
         // Frames closing at the very end
         for &fi in &close_ids[n_msgs] {
@@ -187,18 +211,22 @@ impl<'a> SequenceRenderer<'a> {
         }
         canvas.set_pen(None);
 
-        // Draw control-flow frames (alt/opt/loop/par) behind messages
+        let is_ascii = self.theme.box_style == BoxStyle::Ascii;
+        let (c_tl, c_tr, c_bl, c_br, c_tee_l, c_tee_r, _hz, vt) = if is_ascii {
+            ('+', '+', '+', '+', '+', '+', '-', '|')
+        } else {
+            ('┌', '┐', '└', '┘', '├', '┤', '─', '│')
+        };
+
+        // Draw control-flow frames (alt/opt/loop/par) behind messages.
+        // Draw in reverse commit order: inner frames sit at lower indices, so
+        // painting outer frames first lets nested corners overwrite the outer
+        // side borders (painter's algorithm restores correct nesting).
         if !self.spec.frames.is_empty() {
             let fx = p_cx[0].saturating_sub(p_widths[0] / 2);
             let fr = p_cx[num_p - 1] + p_widths[num_p - 1] / 2;
             let fw = fr.saturating_sub(fx) + 1;
-            let is_ascii = self.theme.box_style == BoxStyle::Ascii;
-            let (c_tl, c_tr, c_bl, c_br, c_tee_l, c_tee_r, _hz, vt) = if is_ascii {
-                ('+', '+', '+', '+', '+', '+', '-', '|')
-            } else {
-                ('┌', '┐', '└', '┘', '├', '┤', '─', '│')
-            };
-            for (fi, frame) in self.spec.frames.iter().enumerate() {
+            for (fi, frame) in self.spec.frames.iter().enumerate().rev() {
                 let top = frame_tops[fi];
                 let bottom = frame_bottoms[fi];
                 if bottom <= top || fw < 6 {
@@ -233,11 +261,12 @@ impl<'a> SequenceRenderer<'a> {
                     canvas.put_char(fx, *dy, c_tee_l);
                     canvas.put_char(fx + fw - 1, *dy, c_tee_r);
                     canvas.draw_hline(fx + 1, fx + fw - 2, *dy);
-                    let dhead = format!(
-                        "{} {}",
-                        if frame.label == "par" { "and" } else { "else" },
-                        frame.branches[*bi]
-                    );
+                    let div_kw = match frame.label.as_str() {
+                        "par" => "and",
+                        "critical" => "option",
+                        _ => "else",
+                    };
+                    let dhead = format!("{} {}", div_kw, frame.branches[*bi]);
                     let dw = UnicodeWidthStr::width(dhead.as_str());
                     if dw + 4 < fw {
                         canvas.put_char(fx + 1, *dy, ' ');
@@ -246,6 +275,66 @@ impl<'a> SequenceRenderer<'a> {
                     }
                 }
             }
+        }
+
+        // Draw notes (annotation boxes over or beside lifelines)
+        for (ni, note) in self.spec.notes.iter().enumerate() {
+            let idxs: Vec<usize> = note
+                .over
+                .iter()
+                .filter_map(|id| p_index.get(id).copied())
+                .collect();
+            if idxs.is_empty() {
+                continue;
+            }
+            let text_w = UnicodeWidthStr::width(note.text.as_str());
+            let y = note_y[ni];
+            let span_lx = p_cx[0].saturating_sub(p_widths[0] / 2);
+            let span_rx = p_cx[num_p - 1] + p_widths[num_p - 1] / 2;
+            let (left_x, right_x) = match note.position {
+                SeqNotePosition::Over => {
+                    let min_i = idxs.iter().min().copied().unwrap_or(0);
+                    let max_i = idxs.iter().max().copied().unwrap_or(0);
+                    (
+                        p_cx[min_i].saturating_sub(p_widths[min_i] / 2),
+                        p_cx[max_i] + p_widths[max_i] / 2,
+                    )
+                }
+                SeqNotePosition::RightOf => {
+                    // Anchor beside the lifeline: left edge 2 right of cx
+                    let lx = p_cx[idxs[0]] + 2;
+                    let rx = lx + text_w + 3; // text + 4 padding/borders, inclusive
+                    if rx < total_w {
+                        (lx, rx)
+                    } else {
+                        (span_lx, span_rx) // clamped: fall back to column span
+                    }
+                }
+                SeqNotePosition::LeftOf => {
+                    // Anchor beside the lifeline: right edge 2 left of cx
+                    let rx = p_cx[idxs[0]].saturating_sub(2);
+                    if rx + 1 >= text_w + 4 {
+                        (rx + 1 - (text_w + 4), rx)
+                    } else {
+                        (span_lx, span_rx) // clamped: fall back to column span
+                    }
+                }
+            };
+            if right_x <= left_x || right_x - left_x + 1 < 6 {
+                continue;
+            }
+            let y_bot = y + 2;
+            canvas.put_char(left_x, y, c_tl);
+            canvas.put_char(right_x, y, c_tr);
+            canvas.draw_hline(left_x + 1, right_x - 1, y);
+            canvas.put_char(left_x, y_bot, c_bl);
+            canvas.put_char(right_x, y_bot, c_br);
+            canvas.draw_hline(left_x + 1, right_x - 1, y_bot);
+            canvas.put_char(left_x, y + 1, vt);
+            canvas.put_char(right_x, y + 1, vt);
+            let tw = right_x - left_x + 1;
+            let tx = left_x + tw.saturating_sub(text_w) / 2;
+            canvas.draw_text(tx, y + 1, &note.text);
         }
 
         // Draw top participant boxes
@@ -512,5 +601,206 @@ mod tests {
         assert!(out.contains('┌'));
         assert!(out.contains('├'));
         assert!(out.contains('└'));
+    }
+
+    #[test]
+    fn test_sequence_note_render() {
+        let dsl = r"
+        sequenceDiagram
+          A->>B: step1
+          note over A,B: cross note
+          A->>B: step2
+          note right of B: right note
+          note left of A: left note
+          note over A: trailing note
+        ";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+
+        // (d) render shows text + box glyphs between message rows
+        assert!(out.contains("cross note"));
+        assert!(out.contains("right note"));
+        assert!(out.contains("left note"));
+        assert!(out.contains("trailing note"));
+
+        let lines: Vec<&str> = out.lines().collect();
+        let idx_step1 = lines.iter().position(|l| l.contains("step1")).unwrap();
+        let idx_cross = lines.iter().position(|l| l.contains("cross note")).unwrap();
+        let idx_step2 = lines.iter().position(|l| l.contains("step2")).unwrap();
+        let idx_trailing = lines
+            .iter()
+            .position(|l| l.contains("trailing note"))
+            .unwrap();
+
+        assert!(idx_step1 < idx_cross, "step1 before cross note");
+        assert!(idx_cross < idx_step2, "cross note before step2");
+        assert!(idx_step2 < idx_trailing, "step2 before trailing note (f)");
+
+        // (e) JSON spec notes render same as DSL
+        let json_dsl = r#"
+        {
+          "type": "sequence",
+          "participants": [{"id": "A"}, {"id": "B"}],
+          "messages": [
+            {"from": "A", "to": "B", "label": "step1"},
+            {"from": "A", "to": "B", "label": "step2"}
+          ],
+          "notes": [
+            {"over": ["A", "B"], "text": "cross note", "at_step": 1, "position": "Over"},
+            {"over": ["B"], "text": "right note", "at_step": 2, "position": "RightOf"},
+            {"over": ["A"], "text": "left note", "at_step": 2, "position": "LeftOf"},
+            {"over": ["A"], "text": "trailing note", "at_step": 2, "position": "Over"}
+          ]
+        }
+        "#;
+        let json_spec = crate::parser::parse_dsl_or_json(json_dsl, BoxStyle::Rounded).unwrap();
+        let json_out = crate::render_diagram(&json_spec);
+        assert_eq!(out, json_out);
+    }
+
+    #[test]
+    fn test_sequence_unclosed_frame_render() {
+        // T-4 (e) unclosed-alt DSL renders header + bottom border
+        let dsl = "sequenceDiagram\nalt pending\nA->>B: query";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("alt pending"));
+        assert!(out.contains('┌'));
+        assert!(out.contains('└'));
+    }
+
+    #[test]
+    fn test_sequence_trailing_divider_render() {
+        // T-5 (a) alt ok / msg / else bad / end -> render contains 'else bad',
+        // divider row strictly between last message row and frame bottom
+        let dsl = r"
+        sequenceDiagram
+          A->>B: init
+          alt ok
+            A->>B: success
+          else bad
+          end
+        ";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("else bad"));
+
+        let lines: Vec<&str> = out.lines().collect();
+        let msg_line = lines.iter().position(|l| l.contains("success")).unwrap();
+        let div_line = lines.iter().position(|l| l.contains("else bad")).unwrap();
+        let bot_line = lines
+            .iter()
+            .rposition(|l| l.contains('└') && l.contains('┘'))
+            .unwrap();
+
+        assert!(msg_line < div_line, "message row above trailing divider");
+        assert!(
+            div_line < bot_line,
+            "trailing divider above frame bottom border"
+        );
+
+        // T-5 (b) trailing 'and' in par renders
+        let par_dsl = r"
+        sequenceDiagram
+          par one
+            A->>B: task1
+          and two
+          end
+        ";
+        let DiagramSpec::Sequence(par_spec) =
+            crate::parser::parse_sequence_dsl(par_dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let par_out = SequenceRenderer::new(&par_spec, Theme::new(BoxStyle::Rounded)).render(false);
+        assert!(par_out.contains("and two"));
+    }
+
+    #[test]
+    fn test_sequence_critical_option_render() {
+        // T-6 (a) critical up / msg / option backup / msg / end
+        let dsl = r"
+        sequenceDiagram
+          critical up
+            A->>B: live
+          option backup
+            A->>B: backup
+          end
+        ";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("critical up"));
+        assert!(out.contains("option backup"));
+    }
+
+    #[test]
+    fn test_sequence_nested_frames_draw_order() {
+        // T-7: loop outer > alt inner > opt innermost: both frame labels render,
+        // >= two '└' and two '┘' glyphs; inner bottom corner row above outer's
+        let dsl = r"
+        sequenceDiagram
+          loop outer
+            alt inner
+              opt in
+                A->>B: ping
+              end
+            end
+          end
+        ";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+
+        assert!(out.contains("loop outer"));
+        assert!(out.contains("alt inner"));
+        assert!(out.contains("opt in"));
+
+        let bl_count = out.chars().filter(|&c| c == '└').count();
+        let br_count = out.chars().filter(|&c| c == '┘').count();
+        assert!(
+            bl_count >= 3,
+            "expected at least 3 bottom-left corners, got {bl_count}"
+        );
+        assert!(
+            br_count >= 3,
+            "expected at least 3 bottom-right corners, got {br_count}"
+        );
+
+        let lines: Vec<&str> = out.lines().collect();
+        let bottom_rows: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.contains('└') && l.contains('┘'))
+            .map(|(idx, _)| idx)
+            .collect();
+        assert!(bottom_rows.len() >= 3);
+        // Each nested frame bottom is on a distinct or strictly ordered row
+        assert!(bottom_rows[0] < bottom_rows[1]);
+        assert!(bottom_rows[1] < bottom_rows[2]);
     }
 }

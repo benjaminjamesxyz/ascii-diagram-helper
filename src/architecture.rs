@@ -30,7 +30,7 @@ impl<'a> ArchitectureRenderer<'a> {
         clippy::similar_names,
         reason = "u_/v_ prefixes denote the two endpoints of a connection"
     )]
-    pub fn render(&self) -> String {
+    pub fn render(&self, colored: bool) -> String {
         if self.spec.containers.is_empty() {
             return String::new();
         }
@@ -103,6 +103,7 @@ impl<'a> ArchitectureRenderer<'a> {
 
         // Draw inter-component connection lines
         for conn in &self.spec.connections {
+            canvas.set_pen(conn.color);
             if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to)) {
                 let u_right = u.x + u.width - 1;
                 let u_cy = u.y + u.height / 2;
@@ -225,8 +226,9 @@ impl<'a> ArchitectureRenderer<'a> {
                 }
             }
         }
+        canvas.set_pen(None);
 
-        canvas.render(&self.theme)
+        canvas.render_impl(&self.theme, colored)
     }
     fn calculate_row_gap(&self) -> usize {
         let max_label_w = self
@@ -302,6 +304,7 @@ impl<'a> ArchitectureRenderer<'a> {
         bounds: &mut HashMap<String, BoxBounds>,
     ) {
         // Draw outer container box
+        canvas.set_pen(c.color);
         canvas.draw_box(
             area.x,
             area.y,
@@ -310,6 +313,7 @@ impl<'a> ArchitectureRenderer<'a> {
             &self.theme,
             Some(&c.title),
         );
+        canvas.set_pen(None);
 
         let gap = match c.layout {
             ContainerLayout::Row => self.calculate_row_gap(),
@@ -377,7 +381,9 @@ impl<'a> ArchitectureRenderer<'a> {
         width: usize,
         height: usize,
     ) {
+        canvas.set_pen(leaf.color);
         canvas.draw_box(x, y, width, height, &self.theme, None);
+        canvas.set_pen(None);
 
         // Name
         let name_w = UnicodeWidthStr::width(leaf.name.as_str());
@@ -437,16 +443,19 @@ mod tests {
                 id: "k8s".to_string(),
                 title: "Namespace: Production".to_string(),
                 layout: ContainerLayout::Row,
+                color: None,
                 items: vec![
                     ContainerItem::Leaf(LeafComponent {
                         id: "frontend".to_string(),
                         name: "Frontend".to_string(),
                         properties: vec![("Port".to_string(), "80".to_string())],
+                        color: None,
                     }),
                     ContainerItem::Leaf(LeafComponent {
                         id: "backend".to_string(),
                         name: "Backend API".to_string(),
                         properties: vec![("Port".to_string(), "8080".to_string())],
+                        color: None,
                     }),
                 ],
             }],
@@ -457,11 +466,12 @@ mod tests {
                 arrow: crate::schema::ArrowDirection::Forward,
                 dashed: false,
                 thick: false,
+                color: None,
             }],
         };
 
         let renderer = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render();
+        let out = renderer.render(false);
         println!("ARCHITECTURE OUTPUT:\n{out}");
         assert!(out.contains("Kubernetes Cluster"));
         assert!(out.contains("Namespace: Production"));

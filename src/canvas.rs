@@ -1,3 +1,4 @@
+use crate::color::Color;
 use crate::theme::Theme;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -90,6 +91,8 @@ pub struct Cell {
     pub thick: bool,
     pub custom_corner: Option<char>,
     pub role: CellRole,
+    /// Emphasis color for border/line/arrow cells; `None` on text cells.
+    pub color: Option<Color>,
 }
 
 impl Default for Cell {
@@ -102,6 +105,7 @@ impl Default for Cell {
             thick: false,
             custom_corner: None,
             role: CellRole::Empty,
+            color: None,
         }
     }
 }
@@ -113,6 +117,9 @@ pub struct Canvas {
     pub width: usize,
     pub height: usize,
     pub obstacles: Vec<Rect>,
+    /// Current pen color: stamped onto border/line/arrow cells by draw calls;
+    /// text cells are never stamped. Set around node/edge drawing.
+    pen: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +138,13 @@ impl Canvas {
             width,
             height,
             obstacles: Vec::new(),
+            pen: None,
         }
+    }
+
+    /// Sets the pen color for subsequent border/line/arrow writes.
+    pub fn set_pen(&mut self, color: Option<Color>) {
+        self.pen = color;
     }
 
     #[inline]
@@ -211,6 +224,12 @@ impl Canvas {
         cell.is_continuation = false;
         cell.custom_corner = None;
         cell.role = role;
+        // Text stays terminal-default; emphasis colors ride on glyphs only
+        cell.color = if role == CellRole::Text {
+            None
+        } else {
+            self.pen
+        };
 
         if w > 1 {
             for offset in 1..w {
@@ -426,6 +445,7 @@ impl Canvas {
             cell.thick = thick;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
+                cell.color = self.pen;
             }
             if x > x1 {
                 cell.conn.west = true;
@@ -462,6 +482,9 @@ impl Canvas {
             let cell = &mut self.cells[base + x];
             cell.ch = dash_char;
             cell.is_line = false;
+            if cell.role != CellRole::Border {
+                cell.color = self.pen;
+            }
         }
     }
 
@@ -485,6 +508,9 @@ impl Canvas {
             }
             cell.ch = dash_char;
             cell.is_line = false;
+            if cell.role != CellRole::Border {
+                cell.color = self.pen;
+            }
         }
     }
 
@@ -513,6 +539,7 @@ impl Canvas {
             cell.thick = thick;
             if cell.role != CellRole::Border {
                 cell.role = CellRole::Line;
+                cell.color = self.pen;
             }
             if y > y1 {
                 cell.conn.north = true;
@@ -530,6 +557,7 @@ impl Canvas {
         cell.is_line = true;
         if cell.role != CellRole::Border {
             cell.role = CellRole::Line;
+            cell.color = self.pen;
         }
         cell.conn.merge(conn);
     }
@@ -654,16 +682,25 @@ impl Canvas {
         // Register obstacle
         self.add_obstacle(Rect::new(x, y, width, height));
 
-        // Mark borders
+        // Mark borders (pen color wins over earlier edge lines here — border
+        // cells were just drawn over the edge approach paths)
         let top_base = y * self.width;
         let bottom_base = bottom * self.width;
         for col in x..=right {
-            self.cells[top_base + col].role = CellRole::Border;
-            self.cells[bottom_base + col].role = CellRole::Border;
+            let cell = &mut self.cells[top_base + col];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
+            let cell = &mut self.cells[bottom_base + col];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
         }
         for row in y..=bottom {
-            self.cells[row * self.width + x].role = CellRole::Border;
-            self.cells[row * self.width + right].role = CellRole::Border;
+            let cell = &mut self.cells[row * self.width + x];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
+            let cell = &mut self.cells[row * self.width + right];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
         }
 
         // Title if present
@@ -862,12 +899,20 @@ impl Canvas {
         let top_base = y * self.width;
         let bottom_base = bottom * self.width;
         for col in x..=right {
-            self.cells[top_base + col].role = CellRole::Border;
-            self.cells[bottom_base + col].role = CellRole::Border;
+            let cell = &mut self.cells[top_base + col];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
+            let cell = &mut self.cells[bottom_base + col];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
         }
         for row in y..=bottom {
-            self.cells[row * self.width + x].role = CellRole::Border;
-            self.cells[row * self.width + right].role = CellRole::Border;
+            let cell = &mut self.cells[row * self.width + x];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
+            let cell = &mut self.cells[row * self.width + right];
+            cell.role = CellRole::Border;
+            cell.color = self.pen;
         }
 
         // Connectors on boundaries:
@@ -914,9 +959,20 @@ impl Canvas {
         }
     }
 
-    /// Render canvas to string using theme glyphs
+    /// Render canvas to string using theme glyphs (no ANSI color codes).
     #[must_use]
     pub fn render(&self, theme: &Theme) -> String {
+        self.render_impl(theme, false)
+    }
+
+    /// Render with per-cell emphasis colors as ANSI SGR runs. Escape codes are
+    /// emitted after layout — they never affect column math.
+    #[must_use]
+    pub fn render_colored(&self, theme: &Theme) -> String {
+        self.render_impl(theme, true)
+    }
+
+    pub fn render_impl(&self, theme: &Theme, colored: bool) -> String {
         if self.cells.is_empty() {
             return String::new();
         }
@@ -952,6 +1008,7 @@ impl Canvas {
 
         // Build output directly with a single allocation
         let mut out = String::with_capacity((max_y + 1) * (max_x + 2));
+        let mut current: Option<Color> = None;
         for (y, &rx) in row_max_x.iter().enumerate().take(max_y + 1) {
             let limit = rx.min(max_x);
             let base = y * self.width;
@@ -960,11 +1017,26 @@ impl Canvas {
                 if cell.is_continuation {
                     continue;
                 }
+                if colored && cell.color != current {
+                    if current.is_some() {
+                        out.push_str("\u{1b}[0m");
+                    }
+                    if let Some(c) = cell.color {
+                        out.push_str(&format!("\u{1b}[{}m", c.sgr()));
+                    }
+                    current = cell.color;
+                }
                 if cell.is_line && cell.ch == ' ' {
                     out.push(resolve_line_glyph(cell.conn, theme, cell.thick));
                 } else {
                     out.push(cell.ch);
                 }
+            }
+            // Close any open color run before trimming/pushing the newline so
+            // SGR state never leaks across rows
+            if colored && current.is_some() {
+                out.push_str("\u{1b}[0m");
+                current = None;
             }
             // Trim trailing spaces of this line
             while out.ends_with(' ') {
@@ -1039,10 +1111,14 @@ fn resolve_line_glyph(conn: LineConn, theme: &Theme, thick: bool) -> char {
             (true, false, false, true) => theme.bottom_right_corner(),
 
             // Vertical line and stubs
-            (true, true | false, false, false) | (false, true, false, false) => theme.vertical_line(),
+            (true, true | false, false, false) | (false, true, false, false) => {
+                theme.vertical_line()
+            }
 
             // Horizontal line and stubs
-            (false, false, true, true | false) | (false, false, false, true) => theme.horizontal_line(),
+            (false, false, true, true | false) | (false, false, false, true) => {
+                theme.horizontal_line()
+            }
 
             // Empty / none
             (false, false, false, false) => ' ',
@@ -1053,7 +1129,90 @@ fn resolve_line_glyph(conn: LineConn, theme: &Theme, thick: bool) -> char {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::color::Color;
     use crate::theme::BoxStyle;
+
+    /// Strips ANSI SGR sequences — used to prove color never shifts layout.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c in chars.by_ref() {
+                    if c == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn test_pen_colors_borders_not_text() {
+        let mut canvas = Canvas::new(10, 5);
+        let theme = Theme::new(BoxStyle::Rounded);
+        canvas.set_pen(Some(Color::Red));
+        canvas.draw_box(0, 0, 6, 3, &theme, None);
+        canvas.draw_text(1, 1, "Hi");
+        canvas.set_pen(None);
+        let colored = canvas.render_colored(&theme);
+        assert!(
+            colored.contains("\u{1b}[31m╭"),
+            "border colored: {colored:?}"
+        );
+        assert!(
+            !colored.contains("[31mH"),
+            "text never colored: {colored:?}"
+        );
+    }
+
+    #[test]
+    fn test_colored_strips_to_plain() {
+        let mut canvas = Canvas::new(12, 5);
+        let theme = Theme::new(BoxStyle::Sharp);
+        canvas.set_pen(Some(Color::Green));
+        canvas.draw_box(0, 0, 8, 3, &theme, None);
+        canvas.set_pen(Some(Color::Hex(1, 2, 3)));
+        canvas.draw_hline(1, 6, 4);
+        canvas.set_pen(None);
+        canvas.draw_text(1, 1, "ok");
+
+        let plain = canvas.render(&theme);
+        let colored = canvas.render_colored(&theme);
+        assert!(!plain.contains('\u{1b}'), "plain render has no ANSI");
+        assert!(colored.contains("\u{1b}[32m"), "green border present");
+        assert!(colored.contains("\u{1b}[38;2;1;2;3m"), "hex line present");
+        assert_eq!(strip_ansi(&colored), plain, "color never shifts layout");
+    }
+
+    #[test]
+    fn test_edge_color_yields_to_border_at_junction() {
+        let mut canvas = Canvas::new(14, 6);
+        let theme = Theme::new(BoxStyle::Rounded);
+        // Red edge drawn first, then green box on top at the junction cell
+        canvas.set_pen(Some(Color::Red));
+        canvas.draw_hline(0, 10, 3);
+        canvas.set_pen(Some(Color::Green));
+        canvas.draw_box(8, 2, 5, 3, &theme, None);
+        canvas.set_pen(None);
+        let colored = canvas.render_colored(&theme);
+        // The box border glyphs (green) must not be recolored by the edge
+        let border_line = colored
+            .lines()
+            .find(|l| l.contains('╭'))
+            .expect("border row");
+        assert!(
+            border_line.contains("[32m"),
+            "border stays green: {border_line:?}"
+        );
+        assert!(
+            !border_line.contains("[31m"),
+            "no red on border row: {border_line:?}"
+        );
+    }
 
     #[test]
     fn test_simple_box() {

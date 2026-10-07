@@ -7,6 +7,7 @@ let registeredTool = null;
 let registeredCommand = null;
 let registeredTransformer = null;
 
+const sentMessages = [];
 const mockPi = {
 	registerTool: (tool) => {
 		registeredTool = tool;
@@ -16,6 +17,9 @@ const mockPi = {
 	},
 	registerMarkdownTransformer: (fn) => {
 		registeredTransformer = fn;
+	},
+	sendUserMessage: (msg) => {
+		sentMessages.push(msg);
 	},
 };
 
@@ -101,5 +105,15 @@ assert.ok(transformed.includes("```text"), "Must convert to ```text code block")
 assert.ok(transformed.includes("CPSR/PSTATE to SPSR"), "Must contain node label text");
 assert.ok(transformed.includes("Exception Vector Table"), "Must contain target node text");
 assert.ok(!transformed.includes("Mermaid diagram not rendered"), "Must strip grok-mermaid warning");
+
+// Test /diagram --color flag parsing (colored output requested)
+const ctxMock = { cwd: process.cwd(), ui: { notify: () => {} } };
+await registeredCommand.cmd.handler("--color graph TD; A --> B", ctxMock);
+assert.ok(sentMessages.length > 0, "diagram message sent");
+assert.ok(sentMessages.at(-1).includes("A"), "diagram content present");
+
+// Test /diagram plain mode (no flag → no --color arg → binary auto = plain when piped)
+await registeredCommand.cmd.handler("graph TD; C --> D", ctxMock);
+assert.ok(sentMessages.at(-1).includes("C"), "plain diagram sent");
 
 console.log("All Pi Extension tests passed successfully!");

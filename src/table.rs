@@ -1,6 +1,15 @@
+use crate::color::Color;
 use crate::schema::{TableSpec, TextAlign};
 use crate::theme::Theme;
 use unicode_width::UnicodeWidthStr;
+
+/// Paints `s` when `colored` and a color is set; otherwise returns it plain.
+fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
+    match (colored, color) {
+        (true, Some(c)) => c.paint(s),
+        _ => s.to_string(),
+    }
+}
 
 pub struct TableRenderer<'a> {
     spec: &'a TableSpec,
@@ -14,11 +23,14 @@ impl<'a> TableRenderer<'a> {
     }
 
     #[must_use]
-    pub fn render(&self) -> String {
+    pub fn render(&self, colored: bool) -> String {
         let num_cols = self.spec.headers.len();
         if num_cols == 0 {
             return String::new();
         }
+        let grid = self.spec.color;
+        // Border glyphs only — cell text stays terminal-default
+        let bar = || paint(colored, grid, &self.theme.vertical_line().to_string());
 
         // Calculate column widths
         let mut col_widths = vec![0; num_cols];
@@ -47,21 +59,33 @@ impl<'a> TableRenderer<'a> {
 
         // Top line
         let mut top = String::new();
-        top.push(self.theme.top_left_corner());
+        top.push_str(&paint(
+            colored,
+            grid,
+            &self.theme.top_left_corner().to_string(),
+        ));
         for (i, &w) in col_widths.iter().enumerate() {
             for _ in 0..w {
-                top.push(self.theme.horizontal_line());
+                top.push_str(&paint(
+                    colored,
+                    grid,
+                    &self.theme.horizontal_line().to_string(),
+                ));
             }
             if i + 1 < num_cols {
-                top.push(self.theme.tee_down());
+                top.push_str(&paint(colored, grid, &self.theme.tee_down().to_string()));
             }
         }
-        top.push(self.theme.top_right_corner());
+        top.push_str(&paint(
+            colored,
+            grid,
+            &self.theme.top_right_corner().to_string(),
+        ));
         lines.push(top);
 
         // Header row
         let mut header_line = String::new();
-        header_line.push(self.theme.vertical_line());
+        header_line.push_str(&bar());
         for (i, h) in self.spec.headers.iter().enumerate() {
             let align = self
                 .spec
@@ -70,28 +94,32 @@ impl<'a> TableRenderer<'a> {
                 .copied()
                 .unwrap_or(TextAlign::Center);
             header_line.push_str(&Self::format_cell(h, col_widths[i], align));
-            header_line.push(self.theme.vertical_line());
+            header_line.push_str(&bar());
         }
         lines.push(header_line);
 
         // Header separator
         let mut sep = String::new();
-        sep.push(self.theme.tee_right());
+        sep.push_str(&paint(colored, grid, &self.theme.tee_right().to_string()));
         for (i, &w) in col_widths.iter().enumerate() {
             for _ in 0..w {
-                sep.push(self.theme.horizontal_line());
+                sep.push_str(&paint(
+                    colored,
+                    grid,
+                    &self.theme.horizontal_line().to_string(),
+                ));
             }
             if i + 1 < num_cols {
-                sep.push(self.theme.cross());
+                sep.push_str(&paint(colored, grid, &self.theme.cross().to_string()));
             }
         }
-        sep.push(self.theme.tee_left());
+        sep.push_str(&paint(colored, grid, &self.theme.tee_left().to_string()));
         lines.push(sep);
 
         // Data rows
         for row in &self.spec.rows {
             let mut row_line = String::new();
-            row_line.push(self.theme.vertical_line());
+            row_line.push_str(&bar());
             for (i, &w) in col_widths.iter().enumerate() {
                 let cell = row.get(i).map_or("", std::string::String::as_str);
                 let align = self
@@ -101,23 +129,35 @@ impl<'a> TableRenderer<'a> {
                     .copied()
                     .unwrap_or(TextAlign::Left);
                 row_line.push_str(&Self::format_cell(cell, w, align));
-                row_line.push(self.theme.vertical_line());
+                row_line.push_str(&bar());
             }
             lines.push(row_line);
         }
 
         // Bottom line
         let mut bottom = String::new();
-        bottom.push(self.theme.bottom_left_corner());
+        bottom.push_str(&paint(
+            colored,
+            grid,
+            &self.theme.bottom_left_corner().to_string(),
+        ));
         for (i, &w) in col_widths.iter().enumerate() {
             for _ in 0..w {
-                bottom.push(self.theme.horizontal_line());
+                bottom.push_str(&paint(
+                    colored,
+                    grid,
+                    &self.theme.horizontal_line().to_string(),
+                ));
             }
             if i + 1 < num_cols {
-                bottom.push(self.theme.tee_up());
+                bottom.push_str(&paint(colored, grid, &self.theme.tee_up().to_string()));
             }
         }
-        bottom.push(self.theme.bottom_right_corner());
+        bottom.push_str(&paint(
+            colored,
+            grid,
+            &self.theme.bottom_right_corner().to_string(),
+        ));
         lines.push(bottom);
 
         lines.join("\n")
@@ -160,6 +200,7 @@ mod tests {
     fn test_table_render() {
         let spec = TableSpec {
             style: BoxStyle::Rounded,
+            color: None,
             headers: vec![
                 "Service".to_string(),
                 "Port".to_string(),
@@ -181,9 +222,31 @@ mod tests {
         };
 
         let renderer = TableRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render();
+        let out = renderer.render(false);
         assert!(out.contains("API Gateway"));
         assert!(out.contains("8080"));
         assert!(out.contains("OK"));
+        assert!(!out.contains('\u{1b}'), "plain table has no ANSI");
+    }
+
+    #[test]
+    fn test_table_grid_color() {
+        let spec = TableSpec {
+            style: BoxStyle::Rounded,
+            color: Some(crate::color::Color::Blue),
+            headers: vec!["A".to_string(), "B".to_string()],
+            rows: vec![vec!["1".to_string(), "2".to_string()]],
+            alignments: vec![],
+        };
+        let renderer = TableRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let plain = renderer.render(false);
+        let colored = renderer.render(true);
+        assert_eq!(
+            crate::color::Color::strip_ansi(&colored),
+            plain,
+            "color never shifts layout"
+        );
+        assert!(colored.contains("\u{1b}[34m"), "grid painted blue");
+        assert!(!colored.contains("[34m1"), "cell text not painted");
     }
 }

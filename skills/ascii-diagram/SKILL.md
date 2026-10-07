@@ -113,8 +113,11 @@ You can also run the binary directly via bash:
 ```bash
 ./bin/ascii-diagram dsl "graph TD; A --> B"
 ./bin/ascii-diagram --style ascii example sequence
-./bin/ascii-diagram render path/to/diagram.json
+./bin/ascii-diagram --color always dsl "graph TD; A --> B; classDef hot stroke:red; class A hot"
 ```
+
+Pi `/diagram` command accepts `--color` to force ANSI colors in the rendered fence
+(e.g. `/diagram --color graph TD; A --> B`); default is plain for transcript/copy safety.
 
 ## Terminal Display & Width Guidelines (Avoid Diagram Wrapping)
 
@@ -138,7 +141,7 @@ To ensure diagrams always display cleanly in any terminal:
 
 - **Edges**: solid `-->`, dashed `-.->`, no arrow `---`, bidirectional `<-->` / `<==>`, reverse `<--`, thick `==>` / `<==>` (heavy line weight); labels via `-->|label|` or `-- "label" -->`
 - **Shapes**: `[box]`, `(rounded)`, `((circle))`, `[[subprocess]]`, `{diamond}`, `([stadium])`, `[(database)]`
-- Mermaid `subgraph` blocks are **flattened**: nodes and edges are kept, grouping boxes are not rendered
 - Mermaid `subgraph id [Title]` ... `end` renders as a labeled group box (nesting supported; members = nodes first declared inside). Per-subgraph `direction` is ignored
-- `classDef` / `class` / `style` / `linkStyle`: only `stroke-dasharray` is applied (dashed borders/edges); colors ignored (no color channel in a character grid)
+- **Colors**: `classDef`/`class`/`style` `stroke:<name|#hex>` colorizes node borders + edge lines; `linkStyle N stroke:<color>` colorizes edges. Named colors: `red green yellow blue magenta cyan white black grey gray orange purple brown bright*`. Hex: `#ff8800` / `#f80`. Label text stays terminal-default — colors emphasize structure without hurting text readability. Emits ANSI 16 (theme-adaptive) for names, truecolor for hex
+- `classDef` / `class` / `style` / `linkStyle`: only `stroke-dasharray` (dashed) and `stroke:<color>` are applied; `fill`, `stroke-width` and other props are ignored
 - **Tips**: prefer `TB` for cascades with multiple feedback loops; declare same-rank branch targets left-to-right in escape order so loop-back channels stay clear.

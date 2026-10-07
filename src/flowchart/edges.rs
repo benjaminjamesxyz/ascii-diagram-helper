@@ -34,6 +34,7 @@ pub(super) fn edge_hline(
     y: usize,
     theme: &Theme,
 ) {
+    canvas.set_pen(edge.color);
     if edge.dashed {
         canvas.draw_dashed_hline(x1, x2, y, theme);
     } else if edge.thick {
@@ -51,6 +52,7 @@ pub(super) fn edge_vline(
     y2: usize,
     theme: &Theme,
 ) {
+    canvas.set_pen(edge.color);
     if edge.dashed {
         canvas.draw_dashed_vline(x, y1, y2, theme);
     } else if edge.thick {
@@ -69,6 +71,7 @@ pub(super) fn edge_arrow_heads(
     s: (usize, usize, Direction),
     theme: &Theme,
 ) {
+    canvas.set_pen(edge.color);
     match edge.arrow {
         ArrowDirection::None => {}
         ArrowDirection::Both => {

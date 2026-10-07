@@ -20,7 +20,7 @@ impl<'a> SequenceRenderer<'a> {
         clippy::single_match_else,
         reason = "linear layout pass; direction dispatch reads clearest as if/else-if"
     )]
-    pub fn render(&self) -> String {
+    pub fn render(&self, colored: bool) -> String {
         if self.spec.participants.is_empty() {
             return String::new();
         }
@@ -180,10 +180,12 @@ impl<'a> SequenceRenderer<'a> {
             canvas.draw_text(tx, 0, title);
         }
 
-        // Draw lifelines
-        for &cx in &p_cx {
+        // Draw lifelines (participant color)
+        for (i, &cx) in p_cx.iter().enumerate() {
+            canvas.set_pen(self.spec.participants[i].color);
             canvas.draw_vline(cx, p_bottom_y, bottom_box_y);
         }
+        canvas.set_pen(None);
 
         // Draw control-flow frames (alt/opt/loop/par) behind messages
         if !self.spec.frames.is_empty() {
@@ -250,7 +252,9 @@ impl<'a> SequenceRenderer<'a> {
         for (i, &cx) in p_cx.iter().enumerate() {
             let w = p_widths[i];
             let x = cx - w / 2;
+            canvas.set_pen(self.spec.participants[i].color);
             canvas.draw_box(x, p_top_y, w, box_h, &self.theme, None);
+            canvas.set_pen(None);
             for (line_idx, line) in p_labels[i].iter().enumerate() {
                 let lbl_w = UnicodeWidthStr::width(line.as_str());
                 let lbl_x = x + (w - lbl_w) / 2;
@@ -336,7 +340,9 @@ impl<'a> SequenceRenderer<'a> {
         for (i, &cx) in p_cx.iter().enumerate() {
             let w = p_widths[i];
             let x = cx - w / 2;
+            canvas.set_pen(self.spec.participants[i].color);
             canvas.draw_box(x, bottom_box_y, w, box_h, &self.theme, None);
+            canvas.set_pen(None);
             for (line_idx, line) in p_labels[i].iter().enumerate() {
                 let lbl_w = UnicodeWidthStr::width(line.as_str());
                 let lbl_x = x + (w - lbl_w) / 2;
@@ -344,7 +350,7 @@ impl<'a> SequenceRenderer<'a> {
             }
         }
 
-        canvas.render(&self.theme)
+        canvas.render_impl(&self.theme, colored)
     }
 }
 
@@ -363,14 +369,17 @@ mod tests {
                 ParticipantSpec {
                     id: "client".to_string(),
                     label: Some("Client".to_string()),
+                    color: None,
                 },
                 ParticipantSpec {
                     id: "auth".to_string(),
                     label: Some("Auth Service".to_string()),
+                    color: None,
                 },
                 ParticipantSpec {
                     id: "db".to_string(),
                     label: Some("Database".to_string()),
+                    color: None,
                 },
             ],
             messages: vec![
@@ -404,7 +413,7 @@ mod tests {
         };
 
         let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render();
+        let out = renderer.render(false);
         assert!(out.contains("Authentication Flow"));
         assert!(out.contains("Client"));
         assert!(out.contains("Auth Service"));
@@ -423,10 +432,12 @@ mod tests {
                 ParticipantSpec {
                     id: "A".to_string(),
                     label: Some("Top\nHalf".to_string()),
+                    color: None,
                 },
                 ParticipantSpec {
                     id: "B".to_string(),
                     label: Some("Bottom\nHalf".to_string()),
+                    color: None,
                 },
             ],
             messages: vec![SeqMessageSpec {
@@ -440,7 +451,7 @@ mod tests {
         };
 
         let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render();
+        let out = renderer.render(false);
         assert!(out.contains("Top"));
         assert!(out.contains("Half"));
         assert!(out.contains("dispatch"));
@@ -456,10 +467,12 @@ mod tests {
                 ParticipantSpec {
                     id: "A".to_string(),
                     label: Some("Client".to_string()),
+                    color: None,
                 },
                 ParticipantSpec {
                     id: "B".to_string(),
                     label: Some("Server".to_string()),
+                    color: None,
                 },
             ],
             messages: vec![
@@ -493,7 +506,7 @@ mod tests {
         };
 
         let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render();
+        let out = renderer.render(false);
         assert!(out.contains("alt valid"));
         assert!(out.contains("else invalid"));
         assert!(out.contains('┌'));

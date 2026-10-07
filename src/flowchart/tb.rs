@@ -12,7 +12,7 @@ impl<'a> FlowchartRenderer<'a> {
     )]
     /// Render a top-to-bottom flowchart. Body extracted verbatim from the
     /// pre-split monolith; see mod.rs for layout pre-passes.
-    pub(super) fn render_tb(&self) -> String {
+    pub(super) fn render_tb(&self, colored: bool) -> String {
         let mut nodes = self.prepare_nodes();
         let idx = self.index_of();
         let layers = self.assign_ranks(&mut nodes, &idx);
@@ -555,6 +555,6 @@ impl<'a> FlowchartRenderer<'a> {
         // Draw subgraph grouping boxes on top of empty cells
         self.draw_subgraphs(&mut canvas, &nodes, &idx);
 
-        canvas.render(&self.theme)
+        canvas.render_impl(&self.theme, colored)
     }
 }

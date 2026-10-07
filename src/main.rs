@@ -1,7 +1,7 @@
-use ascii_diagram::{BoxStyle, render_dsl};
+use ascii_diagram::{BoxStyle, render_dsl_colored};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -25,6 +25,15 @@ impl From<CliStyle> for BoxStyle {
     }
 }
 
+#[derive(ValueEnum, Clone, Copy, Debug, Default)]
+enum ColorMode {
+    /// Colors on for a terminal, off when piped; `NO_COLOR` env forces off
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "ascii-diagram")]
 #[command(about = "High-precision terminal ASCII and Unicode diagram generator for Pi AI agent")]
@@ -40,6 +49,10 @@ struct Cli {
     /// Wrap rendered output in a markdown fenced code block
     #[arg(short, long, global = true)]
     markdown: bool,
+
+    /// Node/edge emphasis colors: auto (TTY detection), always, never
+    #[arg(long, value_enum, default_value = "auto", global = true)]
+    color: ColorMode,
 
     /// Direct input string or file path (if no subcommand)
     #[arg(trailing_var_arg = true)]
@@ -74,9 +87,14 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     let style: BoxStyle = cli.style.into();
+    let colored = match cli.color {
+        ColorMode::Always => true,
+        ColorMode::Never => false,
+        ColorMode::Auto => std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal(),
+    };
 
     let output = match cli.command {
-        Some(Commands::Dsl { dsl }) => render_dsl(&dsl, style),
+        Some(Commands::Dsl { dsl }) => render_dsl_colored(&dsl, style, colored),
         Some(Commands::Render { path }) => {
             let content = match path {
                 Some(p) if p.to_str() != Some("-") => fs::read_to_string(&p).unwrap_or_else(|e| {
@@ -92,7 +110,7 @@ fn main() {
                     buffer
                 }
             };
-            render_dsl(&content, style)
+            render_dsl_colored(&content, style, colored)
         }
         Some(Commands::Example { diagram_type }) => {
             let example_dsl = match diagram_type.to_lowercase().as_str() {
@@ -139,7 +157,7 @@ Gateway --> Orders[Order Service]
 Orders --> DB[(PostgreSQL)]"
                 }
             };
-            render_dsl(example_dsl, style)
+            render_dsl_colored(example_dsl, style, colored)
         }
         None => {
             // Check if trailing input provided
@@ -150,7 +168,7 @@ Orders --> DB[(PostgreSQL)]"
                     eprintln!("Error reading stdin: {e}");
                     std::process::exit(1);
                 });
-                render_dsl(&buffer, style)
+                render_dsl_colored(&buffer, style, colored)
             } else {
                 let joined = cli.input.join(" ");
                 // If it's a file path that exists, read it; otherwise treat as DSL
@@ -159,9 +177,9 @@ Orders --> DB[(PostgreSQL)]"
                         eprintln!("Error reading file {joined}: {e}");
                         std::process::exit(1);
                     });
-                    render_dsl(&content, style)
+                    render_dsl_colored(&content, style, colored)
                 } else {
-                    render_dsl(&joined, style)
+                    render_dsl_colored(&joined, style, colored)
                 }
             }
         }

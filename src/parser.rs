@@ -1,9 +1,39 @@
+use crate::color::Color;
 use crate::schema::{
     ArrowDirection, DiagramSpec, EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, NodeSpec,
     ParticipantSpec, SeqFrameSpec, SeqMessageSpec, SeqMessageType, SequenceSpec, StackLayerSpec,
     StackSpec, SubgraphSpec, TableSpec, TextAlign, TreeNodeSpec, TreeSpec,
 };
 use crate::theme::BoxStyle;
+
+/// Per-class style marks: dashed border + optional border color.
+type ClassStyle = (bool, Option<Color>);
+
+/// Extracts the value of `name` from a Mermaid prop list like
+/// `fill:#eee, stroke:red` — splits on commas, each chunk at its first `:`.
+fn prop_value<'a>(props: &'a str, name: &str) -> Option<&'a str> {
+    props.split(',').find_map(|chunk| {
+        let (k, v) = chunk.split_once(':')?;
+        k.trim().eq_ignore_ascii_case(name).then_some(v.trim())
+    })
+}
+
+/// True if `name` appears in the prop list, with or without a value
+/// (`stroke-dasharray` is often a bare flag).
+fn prop_flag(props: &str, name: &str) -> bool {
+    props.split(',').any(|chunk| {
+        let chunk = chunk.trim();
+        match chunk.split_once(':') {
+            Some((k, _)) => k.trim().eq_ignore_ascii_case(name),
+            None => chunk.eq_ignore_ascii_case(name),
+        }
+    })
+}
+
+/// Parses a color-valued prop (`stroke:red`, `stroke:#f80`) if well-formed.
+fn prop_color(props: &str, name: &str) -> Option<Color> {
+    prop_value(props, name).and_then(Color::parse)
+}
 
 /// Parses any supported diagram DSL or a JSON [`DiagramSpec`].
 ///
@@ -69,10 +99,18 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         std::collections::HashMap::new();
     let mut edges: Vec<EdgeSpec> = Vec::new();
     // Mermaid style directives, deferred until all nodes/edges exist
-    let mut class_dashed: std::collections::HashMap<String, bool> =
+    let mut class_styles: std::collections::HashMap<String, ClassStyle> =
         std::collections::HashMap::new();
     let mut dashed_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut colored_nodes: std::collections::HashMap<String, Color> =
+        std::collections::HashMap::new();
     let mut dashed_links: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut colored_links: std::collections::HashMap<usize, Color> =
+        std::collections::HashMap::new();
+    // Subgraph ids styled via `style <sg-id> stroke:<color>`; node ids may
+    // also land here — build_subgraph_tree only looks up subgraph ids
+    let mut colored_sgs: std::collections::HashMap<String, Color> =
+        std::collections::HashMap::new();
     // Subgraph blocks: flat storage + open-stack, assembled into a tree below.
     // RefCell because `ensure_node` (a long-lived closure) records membership
     // while the main loop pushes/pops open blocks.
@@ -121,6 +159,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 },
                 shape,
                 dashed_border: false,
+                color: None,
             });
             // Nodes first declared while a subgraph is open become members
             if let Some(&cur) = sg_stack.borrow().last() {
@@ -180,14 +219,16 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             continue;
         }
 
-        // classDef name prop:value,... — only stroke-dasharray is mappable to
-        // a monochrome character grid (dashed border); colors are ignored.
+        // classDef name prop:value,... — stroke-dasharray (dashed border) and
+        // stroke:<name|#hex> (border color) map to the character grid
         if let Some(rest) = trimmed.strip_prefix("classDef ") {
             if let Some((names, props)) = rest.split_once(char::is_whitespace) {
-                let dashed = props.contains("stroke-dasharray");
+                let dashed = prop_flag(props, "stroke-dasharray");
+                let color = prop_color(props, "stroke");
                 for name in names.split(',') {
-                    if !name.trim().is_empty() {
-                        class_dashed.insert(name.trim().to_string(), dashed);
+                    let name = name.trim();
+                    if !name.is_empty() {
+                        class_styles.insert(name.to_string(), (dashed, color));
                     }
                 }
             }
@@ -196,11 +237,17 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
 
         // class id1,id2 className
         if let Some(rest) = trimmed.strip_prefix("class ") {
-            if let Some((ids, class_name)) = rest.rsplit_once(char::is_whitespace)
-                && class_dashed.get(class_name.trim()).copied().unwrap_or(false)
-            {
+            if let Some((ids, class_name)) = rest.rsplit_once(char::is_whitespace) {
+                let name = class_name.trim();
+                let (dashed, color) = class_styles.get(name).copied().unwrap_or((false, None));
                 for id in ids.split(',') {
-                    dashed_nodes.insert(id.trim().to_string());
+                    let id = id.trim().to_string();
+                    if dashed {
+                        dashed_nodes.insert(id.clone());
+                    }
+                    if let Some(c) = color {
+                        colored_nodes.insert(id, c);
+                    }
                 }
             }
             continue;
@@ -208,22 +255,32 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
 
         // style id prop:value,...
         if let Some(rest) = trimmed.strip_prefix("style ") {
-            if let Some((id, props)) = rest.split_once(char::is_whitespace)
-                && props.contains("stroke-dasharray")
-            {
-                dashed_nodes.insert(id.trim().to_string());
+            if let Some((id, props)) = rest.split_once(char::is_whitespace) {
+                let id = id.trim().to_string();
+                if prop_flag(props, "stroke-dasharray") {
+                    dashed_nodes.insert(id.clone());
+                }
+                if let Some(c) = prop_color(props, "stroke") {
+                    colored_nodes.insert(id.clone(), c);
+                    colored_sgs.insert(id, c);
+                }
             }
             continue;
         }
 
-        // linkStyle 0,2 prop:value,... — dashed edges
+        // linkStyle 0,2 prop:value,... — dashed / colored edges
         if let Some(rest) = trimmed.strip_prefix("linkStyle ") {
-            if let Some((idxs, props)) = rest.split_once(char::is_whitespace)
-                && props.contains("stroke-dasharray")
-            {
+            if let Some((idxs, props)) = rest.split_once(char::is_whitespace) {
+                let dashed = prop_flag(props, "stroke-dasharray");
+                let color = prop_color(props, "stroke");
                 for idx in idxs.split(',') {
                     if let Ok(i) = idx.trim().parse::<usize>() {
-                        dashed_links.insert(i);
+                        if dashed {
+                            dashed_links.insert(i);
+                        }
+                        if let Some(c) = color {
+                            colored_links.insert(i, c);
+                        }
                     }
                 }
             }
@@ -245,6 +302,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     fn build_subgraph_tree(
         flat: &[(String, Option<String>, Option<usize>, Vec<String>)],
         parent: Option<usize>,
+        colored_sgs: &std::collections::HashMap<String, Color>,
     ) -> Vec<SubgraphSpec> {
         let mut out = Vec::new();
         for (i, (id, title, p, members)) in flat.iter().enumerate() {
@@ -252,8 +310,9 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 out.push(SubgraphSpec {
                     id: id.clone(),
                     title: title.clone(),
+                    color: colored_sgs.get(id).copied(),
                     nodes: members.clone(),
-                    subgraphs: build_subgraph_tree(flat, Some(i)),
+                    subgraphs: build_subgraph_tree(flat, Some(i), colored_sgs),
                 });
             }
         }
@@ -264,17 +323,23 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         .into_iter()
         .map(|sg| (sg.id, sg.title, sg.parent, sg.members))
         .collect();
-    let subgraphs = build_subgraph_tree(&flat_tuples, None);
+    let subgraphs = build_subgraph_tree(&flat_tuples, None, &colored_sgs);
 
     // Apply deferred style marks (class/style lines may precede node defs)
     for node in &mut nodes {
         if dashed_nodes.contains(&node.id) {
             node.dashed_border = true;
         }
+        if let Some(c) = colored_nodes.get(&node.id) {
+            node.color = Some(*c);
+        }
     }
     for (i, edge) in edges.iter_mut().enumerate() {
         if dashed_links.contains(&i) {
             edge.dashed = true;
+        }
+        if let Some(c) = colored_links.get(&i) {
+            edge.color = Some(*c);
         }
     }
 
@@ -511,6 +576,7 @@ where
                     arrow,
                     dashed: is_dashed,
                     thick: is_thick,
+                    color: None,
                 });
             }
         }
@@ -545,6 +611,7 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
             p_list.push(ParticipantSpec {
                 id: id.to_string(),
                 label,
+                color: None,
             });
         }
     };
@@ -688,6 +755,7 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
         name: clean_root.to_string(),
         annotation: None,
         children: Vec::new(),
+        color: None,
     };
 
     // Stack of (indent_level, node)
@@ -719,6 +787,7 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
             name,
             annotation: ann,
             children: Vec::new(),
+            color: None,
         };
 
         while stack.len() > 1 && stack.last().unwrap().0 >= indent {
@@ -811,6 +880,7 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             label,
             address_or_id: addr,
             description: desc,
+            color: None,
         });
     }
 
@@ -892,6 +962,7 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
 
     Ok(DiagramSpec::Table(TableSpec {
         style: default_style,
+        color: None,
         headers,
         rows,
         alignments,
@@ -969,6 +1040,25 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_subgraph_style_color() {
+        let dsl = "graph TB
+            subgraph prod [Production]
+                A --> B
+            end
+            C --> A
+            style prod stroke:red";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.subgraphs.len(), 1);
+                assert_eq!(f.subgraphs[0].color, Some(Color::Red), "subgraph colored");
+                assert_eq!(f.subgraphs[0].nodes.len(), 2, "members collected");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
     fn test_parse_class_and_style_directives() {
         let dsl = "graph TB
             A[Entry] --> B[Core]
@@ -984,6 +1074,55 @@ mod tests {
                 let b = f.nodes.iter().find(|n| n.id == "B").unwrap();
                 assert!(a.dashed_border, "class with dasharray");
                 assert!(b.dashed_border, "style with dasharray");
+                assert_eq!(a.color, None, "fill-only classDef leaves no color");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_classdef_stroke_color() {
+        let dsl = "graph TB
+            A[Entry] --> B[Core] --> C[Edge]
+            classDef hot stroke:red
+            classDef warn stroke:#ff8800,fill:#eee
+            class A hot
+            class B warn
+            style C stroke:green";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                let b = f.nodes.iter().find(|n| n.id == "B").unwrap();
+                let c = f.nodes.iter().find(|n| n.id == "C").unwrap();
+                assert_eq!(a.color, Some(Color::Red));
+                assert_eq!(b.color, Some(Color::Hex(255, 136, 0)));
+                assert_eq!(c.color, Some(Color::Green));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_link_style_color() {
+        let dsl = "graph TB; A --> B; B --> C; linkStyle 1 stroke:red";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges[0].color, None);
+                assert_eq!(f.edges[1].color, Some(Color::Red));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stroke_width_not_a_color() {
+        let dsl = "graph TB; A --> B; style A stroke-width:2px";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes[0].color, None, "stroke-width is not stroke");
             }
             _ => panic!("Expected flowchart"),
         }
@@ -1034,7 +1173,11 @@ mod tests {
                 assert_eq!(f.subgraphs.len(), 1, "one root subgraph");
                 let outer = &f.subgraphs[0];
                 assert_eq!(outer.title.as_deref(), Some("Outer Group"));
-                assert_eq!(outer.nodes, vec!["A", "B"], "declared-inside members in order");
+                assert_eq!(
+                    outer.nodes,
+                    vec!["A", "B"],
+                    "declared-inside members in order"
+                );
                 assert_eq!(outer.subgraphs.len(), 1, "nested subgraph kept");
                 let inner = &outer.subgraphs[0];
                 assert_eq!(inner.title.as_deref(), Some("inner"));

@@ -1,4 +1,5 @@
 use crate::canvas::{Canvas, Direction, Rect};
+use crate::color::Color;
 use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, SubgraphSpec};
 use crate::theme::{BoxStyle, Theme};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -17,6 +18,8 @@ pub(super) struct LayoutNode {
     shape: NodeShape,
     /// Propagated from `NodeSpec::dashed_border` (Mermaid `stroke-dasharray`)
     dashed_border: bool,
+    /// Propagated from `NodeSpec::color` (Mermaid `stroke:<name|hex>`)
+    color: Option<Color>,
     width: usize,
     height: usize,
     x: usize,
@@ -36,14 +39,19 @@ impl<'a> FlowchartRenderer<'a> {
     }
 
     #[must_use]
-    pub fn render(&self) -> String {
+    pub fn render(&self, colored: bool) -> String {
         if self.spec.nodes.is_empty() {
             return String::new();
         }
 
-        match self.spec.direction {
-            LayoutDirection::LR | LayoutDirection::RL => self.render_lr(),
-            _ => self.render_tb(),
+        let is_lr = matches!(
+            self.spec.direction,
+            LayoutDirection::LR | LayoutDirection::RL
+        );
+        if is_lr {
+            self.render_lr(colored)
+        } else {
+            self.render_tb(colored)
         }
     }
 
@@ -118,6 +126,7 @@ impl<'a> FlowchartRenderer<'a> {
                 label_lines: lines,
                 shape: node.shape,
                 dashed_border: node.dashed_border,
+                color: node.color,
                 width,
                 height,
                 x: 0,
@@ -143,7 +152,12 @@ impl<'a> FlowchartRenderer<'a> {
     /// group rects) expanded by padding, with the title embedded in the top
     /// border. Drawn after nodes so borders land on empty cells; edges crossing
     /// a border render as junctions.
-    pub(super) fn draw_subgraphs(&self, canvas: &mut Canvas, nodes: &[LayoutNode], idx: &HashMap<&str, usize>) {
+    pub(super) fn draw_subgraphs(
+        &self,
+        canvas: &mut Canvas,
+        nodes: &[LayoutNode],
+        idx: &HashMap<&str, usize>,
+    ) {
         let (pad_x, pad_top, pad_bottom) = (2usize, 2usize, 1usize);
 
         fn group_rect(
@@ -195,53 +209,81 @@ impl<'a> FlowchartRenderer<'a> {
             nodes: &[LayoutNode],
             idx: &HashMap<&str, usize>,
             pad: (usize, usize, usize),
-            out: &mut Vec<(Rect, String)>,
+            out: &mut Vec<(Rect, String, Option<Color>)>,
         ) {
             for sg in sgs {
                 if let Some(r) = group_rect(sg, nodes, idx, pad) {
-                    out.push((r, sg.title.clone().unwrap_or_else(|| sg.id.clone())));
+                    out.push((
+                        r,
+                        sg.title.clone().unwrap_or_else(|| sg.id.clone()),
+                        sg.color,
+                    ));
                 }
                 collect(&sg.subgraphs, nodes, idx, pad, out);
             }
         }
 
-        let mut groups: Vec<(Rect, String)> = Vec::new();
-        collect(&self.spec.subgraphs, nodes, idx, (pad_x, pad_top, pad_bottom), &mut groups);
+        let mut groups: Vec<(Rect, String, Option<Color>)> = Vec::new();
+        collect(
+            &self.spec.subgraphs,
+            nodes,
+            idx,
+            (pad_x, pad_top, pad_bottom),
+            &mut groups,
+        );
         // Outer boxes first so nested borders layer cleanly
-        groups.sort_by_key(|(r, _)| std::cmp::Reverse(r.width * r.height));
+        groups.sort_by_key(|(r, _, _)| std::cmp::Reverse(r.width * r.height));
 
-        for (r, title) in groups {
+        for (r, title, color) in groups {
             let right = r.x + r.width - 1;
             let bottom = r.y + r.height - 1;
+            canvas.set_pen(color);
             canvas.draw_hline(r.x, right, r.y);
             canvas.draw_hline(r.x, right, bottom);
             canvas.draw_vline(r.x, r.y, bottom);
             canvas.draw_vline(right, r.y, bottom);
-            canvas.draw_corner(r.x, r.y, crate::canvas::LineConn {
-                south: true,
-                east: true,
-                ..Default::default()
-            });
-            canvas.draw_corner(right, r.y, crate::canvas::LineConn {
-                south: true,
-                west: true,
-                ..Default::default()
-            });
-            canvas.draw_corner(r.x, bottom, crate::canvas::LineConn {
-                north: true,
-                east: true,
-                ..Default::default()
-            });
-            canvas.draw_corner(right, bottom, crate::canvas::LineConn {
-                north: true,
-                west: true,
-                ..Default::default()
-            });
+            canvas.draw_corner(
+                r.x,
+                r.y,
+                crate::canvas::LineConn {
+                    south: true,
+                    east: true,
+                    ..Default::default()
+                },
+            );
+            canvas.draw_corner(
+                right,
+                r.y,
+                crate::canvas::LineConn {
+                    south: true,
+                    west: true,
+                    ..Default::default()
+                },
+            );
+            canvas.draw_corner(
+                r.x,
+                bottom,
+                crate::canvas::LineConn {
+                    north: true,
+                    east: true,
+                    ..Default::default()
+                },
+            );
+            canvas.draw_corner(
+                right,
+                bottom,
+                crate::canvas::LineConn {
+                    north: true,
+                    west: true,
+                    ..Default::default()
+                },
+            );
             let label = format!(" {title} ");
             let label_w = UnicodeWidthStr::width(label.as_str());
             if r.width > label_w + 2 {
                 canvas.draw_text(r.x + 2, r.y, &label);
             }
+            canvas.set_pen(None);
         }
     }
 
@@ -349,6 +391,7 @@ impl<'a> FlowchartRenderer<'a> {
     #[allow(clippy::too_many_lines, reason = "one branch per node shape")]
     fn draw_node(&self, canvas: &mut Canvas, node: &LayoutNode) {
         let is_ascii = self.theme.box_style == BoxStyle::Ascii;
+        canvas.set_pen(node.color);
         // Mermaid `class`/`style` `stroke-dasharray` → dashed border
         let node_box = |canvas: &mut Canvas, theme: &Theme, title: Option<&str>| {
             if node.dashed_border {
@@ -531,5 +574,6 @@ impl<'a> FlowchartRenderer<'a> {
                 }
             }
         }
+        canvas.set_pen(None);
     }
 }

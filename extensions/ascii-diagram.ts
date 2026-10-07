@@ -148,6 +148,12 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 						"Flowchart orientation: 'TB' (Top-to-Bottom) or 'LR' (Left-to-Right).",
 				}),
 			),
+			color: Type.Optional(
+				Type.Boolean({
+					description:
+						"Render node/edge emphasis colors (from classDef/class/style stroke:red or #hex) as ANSI colors. Default: true. Set false for plain output.",
+				}),
+			),
 		}),
 
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
@@ -176,6 +182,11 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			const args: string[] = [];
 			if (params.style) {
 				args.push("--style", params.style);
+			}
+			// Colors on by default in the TUI (binary auto-detects TTY, but we are
+			// piping — force always unless the agent opted out or NO_COLOR is set)
+			if (params.color !== false && !process.env.NO_COLOR) {
+				args.push("--color", "always");
 			}
 
 			try {
@@ -210,14 +221,18 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 		},
 
 		renderResult(result, { expanded }, theme) {
-			if (result.details?.error) {
+			const details = (result.details ?? {}) as {
+				error?: string;
+				diagram?: string;
+			};
+			if (details.error) {
 				return new Text(
-					theme.fg("error", `✗ Diagram Error: ${result.details.error}`),
+					theme.fg("error", `✗ Diagram Error: ${details.error}`),
 					0,
 					0,
 				);
 			}
-			const diagram = (result.details?.diagram as string) || "";
+			const diagram = details.diagram || "";
 			if (!diagram) {
 				return new Text(theme.fg("dim", "(no diagram)"), 0, 0);
 			}
@@ -244,7 +259,7 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 
 			if (!trimmedArgs) {
 				ctx.ui.notify(
-					"Usage: /diagram <mermaid-dsl> or /diagram --example [flowchart|sequence|stack|tree]",
+					"Usage: /diagram [--color] <mermaid-dsl> or /diagram --example [flowchart|sequence|stack|tree]",
 					"info",
 				);
 				return;
@@ -253,10 +268,19 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			let cmdArgs: string[] = [];
 			let input = trimmedArgs;
 
-			if (trimmedArgs.startsWith("--example")) {
-				const parts = trimmedArgs.split(/\s+/);
+			// Opt-in ANSI colors: survives the markdown code fence unless the
+			// active theme sets highlightCode (which would re-tokenize the lines)
+			if (input.startsWith("--color")) {
+				if (!process.env.NO_COLOR) {
+					cmdArgs.push("--color", "always");
+				}
+				input = input.slice("--color".length).trim();
+			}
+
+			if (input.startsWith("--example")) {
+				const parts = input.split(/\s+/);
 				const exampleType = parts[1] || "flowchart";
-				cmdArgs = ["example", exampleType];
+				cmdArgs.push("example", exampleType);
 				input = "";
 			}
 

@@ -1,3 +1,4 @@
+use crate::color::Color;
 use crate::theme::BoxStyle;
 use serde::{Deserialize, Serialize};
 
@@ -32,9 +33,12 @@ pub struct NodeSpec {
     #[serde(default)]
     pub shape: NodeShape,
     /// Dashed border, set via Mermaid `class`/`style` `stroke-dasharray`.
-    /// Colors have no channel in a monochrome grid; dash patterns do.
     #[serde(default)]
     pub dashed_border: bool,
+    /// Border color, set via Mermaid `class`/`style` `stroke:<name|hex>`.
+    /// Applied to border/line glyphs only — label text stays default.
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -59,6 +63,9 @@ pub struct EdgeSpec {
     pub dashed: bool,
     #[serde(default)]
     pub thick: bool,
+    /// Edge line + arrow color, via `linkStyle N stroke:<name|hex>` or JSON.
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -66,6 +73,9 @@ pub struct SubgraphSpec {
     pub id: String,
     #[serde(default)]
     pub title: Option<String>,
+    /// Group-box border color, via `style <subgraph-id> stroke:<color>` or JSON.
+    #[serde(default)]
+    pub color: Option<Color>,
     /// Direct member node ids
     #[serde(default)]
     pub nodes: Vec<String>,
@@ -93,6 +103,9 @@ pub struct ParticipantSpec {
     pub id: String,
     #[serde(default)]
     pub label: Option<String>,
+    /// Participant box border + lifeline color (JSON `color` field).
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -157,6 +170,10 @@ pub struct TreeNodeSpec {
     pub name: String,
     #[serde(default)]
     pub annotation: Option<String>,
+    /// Branch-glyph color (JSON only — tree DSL has no color syntax).
+    /// Children continuation glyphs inherit the nearest colored ancestor.
+    #[serde(default)]
+    pub color: Option<Color>,
     #[serde(default)]
     pub children: Vec<TreeNodeSpec>,
 }
@@ -181,6 +198,9 @@ pub enum TextAlign {
 pub struct TableSpec {
     #[serde(default)]
     pub style: BoxStyle,
+    /// Grid/border color for the whole table (JSON only).
+    #[serde(default)]
+    pub color: Option<Color>,
     pub headers: Vec<String>,
     pub rows: Vec<Vec<String>>,
     #[serde(default)]
@@ -194,6 +214,9 @@ pub struct StackLayerSpec {
     pub address_or_id: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// Layer box border color (JSON only).
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -223,6 +246,9 @@ pub struct LeafComponent {
     pub name: String,
     #[serde(default)]
     pub properties: Vec<(String, String)>,
+    /// Component border color (JSON `color` field).
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -238,6 +264,8 @@ pub struct ContainerSpec {
     pub title: String,
     #[serde(default)]
     pub layout: ContainerLayout,
+    #[serde(default)]
+    pub color: Option<Color>,
     #[serde(default)]
     pub items: Vec<ContainerItem>,
 }

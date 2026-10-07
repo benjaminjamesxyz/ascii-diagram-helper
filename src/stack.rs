@@ -1,6 +1,15 @@
+use crate::color::Color;
 use crate::schema::StackSpec;
 use crate::theme::Theme;
 use unicode_width::UnicodeWidthStr;
+
+/// Paints `s` when `colored` and a color is set; otherwise returns it plain.
+fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
+    match (colored, color) {
+        (true, Some(c)) => c.paint(s),
+        _ => s.to_string(),
+    }
+}
 
 pub struct StackRenderer<'a> {
     spec: &'a StackSpec,
@@ -14,7 +23,7 @@ impl<'a> StackRenderer<'a> {
     }
 
     #[allow(clippy::too_many_lines, reason = "single linear pass stacking layers")]
-    pub fn render(&self) -> String {
+    pub fn render(&self, colored: bool) -> String {
         if self.spec.layers.is_empty() {
             return String::new();
         }
@@ -84,7 +93,8 @@ impl<'a> StackRenderer<'a> {
             }
         };
 
-        // Top line
+        // Top line (first layer's color owns it)
+        let first_color = self.spec.layers.first().and_then(|l| l.color);
         let first_addr = self
             .spec
             .layers
@@ -93,9 +103,21 @@ impl<'a> StackRenderer<'a> {
         let top_border = format!(
             "{} {}{}{}",
             prefix_pad(first_addr),
-            self.theme.top_left_corner(),
-            self.theme.horizontal_line().to_string().repeat(box_w - 2),
-            self.theme.top_right_corner()
+            paint(
+                colored,
+                first_color,
+                &self.theme.top_left_corner().to_string()
+            ),
+            paint(
+                colored,
+                first_color,
+                &self.theme.horizontal_line().to_string().repeat(box_w - 2)
+            ),
+            paint(
+                colored,
+                first_color,
+                &self.theme.top_right_corner().to_string()
+            )
         );
         lines.push(top_border);
 
@@ -109,11 +131,19 @@ impl<'a> StackRenderer<'a> {
             let row = format!(
                 "{} {}{}{}{}{}",
                 " ".repeat(addr_w),
-                self.theme.vertical_line(),
+                paint(
+                    colored,
+                    layer.color,
+                    &self.theme.vertical_line().to_string()
+                ),
                 " ".repeat(left_pad),
                 layer.label,
                 " ".repeat(right_pad),
-                self.theme.vertical_line()
+                paint(
+                    colored,
+                    layer.color,
+                    &self.theme.vertical_line().to_string()
+                )
             );
             lines.push(row);
 
@@ -126,36 +156,61 @@ impl<'a> StackRenderer<'a> {
                 let desc_row = format!(
                     "{} {}{}{}{}{}",
                     " ".repeat(addr_w),
-                    self.theme.vertical_line(),
+                    paint(
+                        colored,
+                        layer.color,
+                        &self.theme.vertical_line().to_string()
+                    ),
                     " ".repeat(d_left),
                     desc,
                     " ".repeat(d_right),
-                    self.theme.vertical_line()
+                    paint(
+                        colored,
+                        layer.color,
+                        &self.theme.vertical_line().to_string()
+                    )
                 );
                 lines.push(desc_row);
             }
 
-            // Separator or bottom
+            // Separator or bottom (upper layer owns its bottom edge)
             if i + 1 < num_layers {
                 let next_addr = self.spec.layers[i + 1].address_or_id.as_deref();
                 let sep = format!(
                     "{} {}{}{}",
                     prefix_pad(next_addr),
-                    self.theme.tee_right(),
-                    self.theme.horizontal_line().to_string().repeat(box_w - 2),
-                    self.theme.tee_left()
+                    paint(colored, layer.color, &self.theme.tee_right().to_string()),
+                    paint(
+                        colored,
+                        layer.color,
+                        &self.theme.horizontal_line().to_string().repeat(box_w - 2)
+                    ),
+                    paint(colored, layer.color, &self.theme.tee_left().to_string())
                 );
                 lines.push(sep);
             }
         }
 
-        // Bottom line
+        // Bottom line (last layer's color owns it)
+        let last_color = self.spec.layers.last().and_then(|l| l.color);
         let bottom_border = format!(
             "{} {}{}{}",
             prefix_pad(self.spec.bottom_address.as_deref()),
-            self.theme.bottom_left_corner(),
-            self.theme.horizontal_line().to_string().repeat(box_w - 2),
-            self.theme.bottom_right_corner()
+            paint(
+                colored,
+                last_color,
+                &self.theme.bottom_left_corner().to_string()
+            ),
+            paint(
+                colored,
+                last_color,
+                &self.theme.horizontal_line().to_string().repeat(box_w - 2)
+            ),
+            paint(
+                colored,
+                last_color,
+                &self.theme.bottom_right_corner().to_string()
+            )
         );
         lines.push(bottom_border);
 
@@ -179,16 +234,19 @@ mod tests {
                     label: "Stack".to_string(),
                     address_or_id: Some("0xFFFF".to_string()),
                     description: Some("grows down".to_string()),
+                    color: None,
                 },
                 StackLayerSpec {
                     label: "Heap".to_string(),
                     address_or_id: Some("0x1000".to_string()),
                     description: Some("grows up".to_string()),
+                    color: None,
                 },
                 StackLayerSpec {
                     label: "Text / Code".to_string(),
                     address_or_id: Some("0x0000".to_string()),
                     description: None,
+                    color: None,
                 },
             ],
             bottom_address: None,
@@ -196,11 +254,47 @@ mod tests {
         };
 
         let renderer = StackRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render();
+        let out = renderer.render(false);
         assert!(out.contains("Process Memory Layout"));
         assert!(out.contains("0xFFFF"));
         assert!(out.contains("Stack"));
         assert!(out.contains("Heap"));
         assert!(out.contains("0x0000"));
+        assert!(!out.contains('\u{1b}'), "plain stack has no ANSI");
+    }
+
+    #[test]
+    fn test_stack_layer_color() {
+        let spec = StackSpec {
+            style: BoxStyle::Sharp,
+            title: None,
+            layers: vec![
+                StackLayerSpec {
+                    label: "Kernel".to_string(),
+                    address_or_id: Some("0xFFFF".to_string()),
+                    description: None,
+                    color: Some(crate::color::Color::Red),
+                },
+                StackLayerSpec {
+                    label: "User".to_string(),
+                    address_or_id: None,
+                    description: None,
+                    color: Some(crate::color::Color::Green),
+                },
+            ],
+            bottom_address: Some("0x0000".to_string()),
+            grows_down: true,
+        };
+        let renderer = StackRenderer::new(&spec, Theme::new(BoxStyle::Sharp));
+        let plain = renderer.render(false);
+        let colored = renderer.render(true);
+        assert_eq!(
+            crate::color::Color::strip_ansi(&colored),
+            plain,
+            "color never shifts layout"
+        );
+        assert!(colored.contains("\u{1b}[31m"), "kernel layer red");
+        assert!(colored.contains("\u{1b}[32m"), "user layer green");
+        assert!(!colored.contains("[31mKernel"), "label text not painted");
     }
 }

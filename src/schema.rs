@@ -49,9 +49,10 @@ pub struct NodeSpec {
     /// (maps to ANSI foreground — readable on any terminal background).
     #[serde(default)]
     pub fill_color: Option<Color>,
-    /// Thicker border glyphs, set via `stroke-width:2px` or higher.
+    /// Border weight from `stroke-width`: `0` default, `1` heavy `┏━┓`
+    /// (≥2px), `2` double `╔═╗` (≥3px).
     #[serde(default)]
-    pub thick_border: bool,
+    pub border_level: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

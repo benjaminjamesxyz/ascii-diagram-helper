@@ -57,7 +57,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 
 ### Known Limitations
 
-- `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width:>=2px` renders the node border with heavy glyphs (`┏━┓`); `stroke-width:1px` and other widths are treated as default. `linkStyle` `fill` is aliased to the edge line color (Mermaid links have no fill)
+- `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width` is graduated: `2px` → heavy glyphs (`┏━┓`), `3px`+ → double (`╔═╗`); `1px` and fractional widths below 2 are treated as default. `linkStyle` `fill` is aliased to the edge line color (Mermaid links have no fill)
 - Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border (per-subgraph `direction` applies only to edge-isolated subgraphs — subgraphs with edges crossing their border use the global direction)
 - Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
   - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched

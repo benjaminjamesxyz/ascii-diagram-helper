@@ -21,7 +21,15 @@ struct ClassStyle {
 fn prop_border_level(props: &str, name: &str) -> u8 {
     prop_value(props, name)
         .and_then(|v| v.trim_end_matches("px").trim().parse::<f64>().ok())
-        .map(|w| if w >= 3.0 { 2 } else if w >= 2.0 { 1 } else { 0 })
+        .map(|w| {
+            if w >= 3.0 {
+                2
+            } else if w >= 2.0 {
+                1
+            } else {
+                0
+            }
+        })
         .unwrap_or(0)
 }
 
@@ -1346,7 +1354,11 @@ mod tests {
         let dsl = "graph TB; A --> B; B --> C; linkStyle 1 fill:red";
         match parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap() {
             DiagramSpec::Flowchart(f) => {
-                assert_eq!(f.edges[1].color, Some(Color::Red), "fill aliases to edge color");
+                assert_eq!(
+                    f.edges[1].color,
+                    Some(Color::Red),
+                    "fill aliases to edge color"
+                );
             }
             _ => panic!("Expected flowchart"),
         }

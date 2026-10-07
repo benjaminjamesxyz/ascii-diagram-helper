@@ -152,6 +152,9 @@ impl<'a> FlowchartRenderer<'a> {
 
         let mut loop_track_x = max_w + 3 + sg_margin;
         let mut multi_jump_track_x = max_w + 3 + sg_margin;
+        // Left-corridor cursor: usize::MAX until the first left track claims it,
+        // then subsequent left tracks stack leftward (floored at 0)
+        let mut multi_jump_track_left_x = usize::MAX;
 
         // Bend edges to the next rank share one band row (mid_y). When two
         // parents' horizontal spans overlap there, their trunk lines merge and
@@ -232,23 +235,48 @@ impl<'a> FlowchartRenderer<'a> {
                     continue;
                 };
                 let su = &nodes[sui];
+                let su_cx = su.x + su.width / 2;
                 let mut max_bound_x = su.x + su.width;
+                let mut min_bound_x = su.x;
                 let mut depth_y = 0;
+                let (mut left_targets, mut right_targets) = (0usize, 0usize);
                 for &ei in &members {
                     let edge = &self.spec.edges[ei];
                     let Some(&vi) = idx.get(edge.to.as_str()) else {
                         continue;
                     };
                     let v = &nodes[vi];
+                    // Corridor side by target majority: fewer/shorter
+                    // horizontal runs and fewer band crossings
+                    if v.x + v.width / 2 < su_cx {
+                        left_targets += 1;
+                    } else {
+                        right_targets += 1;
+                    }
                     for layer in &layers[(su.rank + 1)..v.rank] {
                         for &ni in layer {
                             max_bound_x = max_bound_x.max(nodes[ni].x + nodes[ni].width);
+                            min_bound_x = min_bound_x.min(nodes[ni].x);
                         }
                     }
                     depth_y = depth_y.max(v.y.saturating_sub(2));
                 }
-                let track = (max_bound_x + 3).max(multi_jump_track_x);
-                multi_jump_track_x = track + 4;
+                let track = if left_targets > right_targets {
+                    // Left corridor: clear intermediate nodes' left edges;
+                    // multiple left sources stack leftward, floored at 0
+                    let candidate = if min_bound_x == su.x {
+                        su.x.saturating_sub(3)
+                    } else {
+                        min_bound_x.saturating_sub(3)
+                    };
+                    let t = candidate.min(multi_jump_track_left_x.saturating_sub(4));
+                    multi_jump_track_left_x = t;
+                    t
+                } else {
+                    let track = (max_bound_x + 3).max(multi_jump_track_x);
+                    multi_jump_track_x = track + 4;
+                    track
+                };
                 jump_tracks.insert(src, (track, depth_y));
             }
         }

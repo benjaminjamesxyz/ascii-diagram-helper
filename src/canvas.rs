@@ -1019,8 +1019,12 @@ impl Canvas {
                     continue;
                 }
                 if colored && cell.color != current {
+                    // Close with default-fg only (39m), not full reset (0m):
+                    // Pi paints tool output with a theme background, and a
+                    // full reset would strip it mid-line, leaving patchy
+                    // background bands around colored runs
                     if current.is_some() {
-                        out.push_str("\u{1b}[0m");
+                        out.push_str("\u{1b}[39m");
                     }
                     if let Some(c) = cell.color {
                         out.push_str(&format!("\u{1b}[{}m", c.sgr()));
@@ -1034,9 +1038,9 @@ impl Canvas {
                 }
             }
             // Close any open color run before trimming/pushing the newline so
-            // SGR state never leaks across rows
+            // SGR state never leaks across rows (default-fg only, see above)
             if colored && current.is_some() {
-                out.push_str("\u{1b}[0m");
+                out.push_str("\u{1b}[39m");
                 current = None;
             }
             // Trim trailing spaces of this line

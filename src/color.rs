@@ -99,10 +99,11 @@ impl Color {
         }
     }
 
-    /// Wraps `text` in SGR color + reset codes.
+    /// Wraps `text` in SGR color + default-fg reset (`39m`, not `0m` — a full
+    /// reset would strip host-application backgrounds painted around output).
     #[must_use]
     pub fn paint(&self, text: &str) -> String {
-        format!("\u{1b}[{}m{text}\u{1b}[0m", self.sgr())
+        format!("\u{1b}[{}m{text}\u{1b}[39m", self.sgr())
     }
 
     /// Strips ANSI SGR sequences — proves color output is layout-identical.
@@ -227,7 +228,7 @@ mod tests {
         assert_eq!(Color::Red.sgr(), "31");
         assert_eq!(Color::BrightBlack.sgr(), "90");
         assert_eq!(Color::Hex(1, 2, 3).sgr(), "38;2;1;2;3");
-        assert_eq!(Color::Green.paint("ab"), "\u{1b}[32mab\u{1b}[0m");
+        assert_eq!(Color::Green.paint("ab"), "\u{1b}[32mab\u{1b}[39m");
     }
 
     #[test]

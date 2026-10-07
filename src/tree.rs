@@ -172,7 +172,7 @@ mod tests {
         // leaf inherits red from "dir": its branch glyph is painted
         // (prefix and branch are separate paint runs — reset between them)
         assert!(
-            colored.contains("\u{1b}[31m└── \u{1b}[0mleaf"),
+            colored.contains("\u{1b}[31m└── \u{1b}[39mleaf"),
             "inherited color: {colored:?}"
         );
     }

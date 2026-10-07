@@ -165,9 +165,7 @@ pub fn parse_datastructure_dsl(
         }
         "btree" => {
             if rest.is_empty() {
-                return Err(format!(
-                    "ds btree needs a root key list; {DS_DSL_HINT}"
-                ));
+                return Err(format!("ds btree needs a root key list; {DS_DSL_HINT}"));
             }
             let mut levels = rest.split('|');
             let mut root = DsNode {
@@ -210,9 +208,7 @@ pub fn parse_datastructure_dsl(
                 ..DataStructureSpec::default()
             }))
         }
-        other => Err(format!(
-            "unknown `ds` kind `{other}`; {DS_DSL_HINT}"
-        )),
+        other => Err(format!("unknown `ds` kind `{other}`; {DS_DSL_HINT}")),
     }
 }
 
@@ -1752,11 +1748,8 @@ mod tests {
 
     #[test]
     fn test_ds_btree_shorthand_bfs_children() {
-        let spec = match parse_dsl_or_json(
-            "ds btree 10,20 | 3,5 12,15 25,30",
-            BoxStyle::Rounded,
-        )
-        .unwrap()
+        let spec = match parse_dsl_or_json("ds btree 10,20 | 3,5 12,15 25,30", BoxStyle::Rounded)
+            .unwrap()
         {
             DiagramSpec::DataStructure(ds) => ds,
             other => panic!("Expected datastructure, got {other:?}"),
@@ -1772,11 +1765,9 @@ mod tests {
                 vec!["25".to_string(), "30".to_string()],
             ]
         );
-        let out = ds_render(&parse_dsl_or_json(
-            "ds btree 10,20 | 3,5 12,15 25,30",
-            BoxStyle::Sharp,
-        )
-        .unwrap());
+        let out = ds_render(
+            &parse_dsl_or_json("ds btree 10,20 | 3,5 12,15 25,30", BoxStyle::Sharp).unwrap(),
+        );
         assert!(out.contains("│ 10 │ 20 │"));
         assert!(out.contains("│ 25 │ 30 │"));
     }
@@ -1804,33 +1795,24 @@ mod tests {
 
     #[test]
     fn test_ds_btree_three_levels() {
-        let spec = match parse_dsl_or_json(
-            "ds btree 10 | 3 20 | 1 7 15 30",
-            BoxStyle::Rounded,
-        )
-        .unwrap()
-        {
-            DiagramSpec::DataStructure(ds) => ds,
-            other => panic!("Expected datastructure, got {other:?}"),
-        };
+        let spec =
+            match parse_dsl_or_json("ds btree 10 | 3 20 | 1 7 15 30", BoxStyle::Rounded).unwrap() {
+                DiagramSpec::DataStructure(ds) => ds,
+                other => panic!("Expected datastructure, got {other:?}"),
+            };
         let root = spec.btree_root.as_ref().unwrap();
         assert_eq!(root.keys, vec!["10".to_string()]);
         assert_eq!(root.children.len(), 2);
         assert_eq!(root.children[0].children.len(), 2);
         assert_eq!(root.children[1].children.len(), 2);
-        assert_eq!(
-            root.children[1].children[1].keys,
-            vec!["30".to_string()]
-        );
+        assert_eq!(root.children[1].children[1].keys, vec!["30".to_string()]);
     }
 
     #[test]
     fn test_ds_btree_extra_cells_nest_deeper() {
         // Permissive arity cuts both ways: 1-key root takes 2 cells, the
         // third cell fills the first child's second slot (BFS order).
-        let spec = match parse_dsl_or_json("ds btree 10 | 3 5 7", BoxStyle::Rounded)
-            .unwrap()
-        {
+        let spec = match parse_dsl_or_json("ds btree 10 | 3 5 7", BoxStyle::Rounded).unwrap() {
             DiagramSpec::DataStructure(ds) => ds,
             other => panic!("Expected datastructure, got {other:?}"),
         };

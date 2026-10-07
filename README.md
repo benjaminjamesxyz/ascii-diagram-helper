@@ -53,6 +53,10 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - B-trees: `btree_root` nodes with `keys` cells (`│ 10 │ 20 │`) and fan-out `children`; keyless nodes fall back to `value`
   - Boxes centered over subtrees with `┴`/`┬` branch bars and per-child descenders; optional centered `title`
   - Example: `{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6"]}` (see `ascii-diagram example datastructure`)
+  - Linked lists: `nodes` chain rendered as two-cell boxes (`value │ ●`) with `head_label` (default `head`) and a `∅` terminator (ASCII `NULL`)
+  - Arrays: `values` as one boxed cell row with a centered index ruler above
+  - DSL shorthand: `ds tree 8 3 10 1 6` (BST) and `ds btree 10,20 | 3,5 12,15 25,30` (pipe-separated levels, comma-separated keys) — same render as the JSON spec
+  - Node colors: `color` on any node (`DsNode`) paints its box border + connector glyphs; descendants inherit the nearest colored ancestor unless overridden; label text stays terminal-default
 - **Multiple Styling Modes**:
   - `rounded`: `╭ ─ ╮ │ │ ╰ ─ ╯` (modern smooth terminal look)
   - `sharp`: `┌ ─ ┐ │ │ └ ─ ┘` (classic box-drawing)

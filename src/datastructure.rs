@@ -1,6 +1,15 @@
+use crate::color::Color;
 use crate::schema::{DataStructureSpec, DsKind, DsNode};
 use crate::theme::{BoxStyle, Theme};
 use unicode_width::UnicodeWidthStr;
+
+/// Paints `s` when `colored` and a color is set; otherwise returns it plain.
+fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
+    match (colored, color) {
+        (true, Some(c)) => c.paint(s),
+        _ => s.to_string(),
+    }
+}
 
 /// A laid-out subtree: rendered lines (all equal display width), the display
 /// width, and the column of the subtree root's box center.
@@ -34,7 +43,7 @@ impl<'a> DataStructureRenderer<'a> {
     /// Returns `Err` when the spec carries nothing renderable: `tree` needs
     /// `root` or `values`, `btree` needs `btree_root`, `linkedlist` needs
     /// `nodes`, and `array` needs `values`.
-    pub fn render(&self) -> Result<String, String> {
+    pub fn render(&self, colored: bool) -> Result<String, String> {
         let (mut lines, width) = match self.spec.kind {
             DsKind::LinkedList => self.render_linkedlist()?,
             DsKind::Array => self.render_array()?,
@@ -45,10 +54,9 @@ impl<'a> DataStructureRenderer<'a> {
                     .clone()
                     .or_else(|| build_bst(&self.spec.values))
                     .ok_or_else(|| {
-                        "tree diagram needs a `root` node or a `values` insertion order"
-                            .to_string()
+                        "tree diagram needs a `root` node or a `values` insertion order".to_string()
                     })?;
-                let block = self.render_node(&root);
+                let block = self.render_node(&root, None, colored);
                 (block.lines, block.width)
             }
             DsKind::BTree => {
@@ -57,7 +65,7 @@ impl<'a> DataStructureRenderer<'a> {
                     .btree_root
                     .clone()
                     .ok_or_else(|| "btree diagram needs a `btree_root` node".to_string())?;
-                let block = self.render_node(&root);
+                let block = self.render_node(&root, None, colored);
                 (block.lines, block.width)
             }
         };
@@ -77,9 +85,12 @@ impl<'a> DataStructureRenderer<'a> {
     }
 
     /// Lays out a node box centered over its laid-out children, connected by
-    /// a descender row, a branch bar, and child descenders.
-    fn render_node(&self, node: &DsNode) -> Block {
-        let (box_lines, box_w) = self.node_box(node);
+    /// a descender row, a branch bar, and child descenders. The node's own
+    /// color overrides the inherited one for its box border and for the
+    /// connector glyphs its subtree owns.
+    fn render_node(&self, node: &DsNode, inherited: Option<Color>, colored: bool) -> Block {
+        let effective = node.color.or(inherited);
+        let (box_lines, box_w) = self.node_box(node, effective, colored);
 
         let child_nodes: Vec<&DsNode> = match self.spec.kind {
             DsKind::Tree => [node.left.as_deref(), node.right.as_deref()]
@@ -91,7 +102,10 @@ impl<'a> DataStructureRenderer<'a> {
             // Linear kinds render their own single-row layouts.
             DsKind::LinkedList | DsKind::Array => Vec::new(),
         };
-        let child_blocks: Vec<Block> = child_nodes.iter().map(|c| self.render_node(c)).collect();
+        let child_blocks: Vec<Block> = child_nodes
+            .iter()
+            .map(|c| self.render_node(c, effective, colored))
+            .collect();
 
         if child_blocks.is_empty() {
             return Block {
@@ -124,10 +138,18 @@ impl<'a> DataStructureRenderer<'a> {
         // Connector rows. A single aligned child is one `│` row; any other
         // shape gets a descender, a branch bar, and child descenders.
         if centers.len() == 1 && centers[0] == parent_center {
-            lines.push(spaced_row(parent_center, self.theme.vertical_line(), sub_w));
+            lines.push(painted_row(
+                colored,
+                effective,
+                &spaced_row(parent_center, self.theme.vertical_line(), sub_w),
+            ));
         } else {
             // Descender under the parent box
-            lines.push(spaced_row(parent_center, self.theme.vertical_line(), sub_w));
+            lines.push(painted_row(
+                colored,
+                effective,
+                &spaced_row(parent_center, self.theme.vertical_line(), sub_w),
+            ));
 
             let mut bar = vec![' '; sub_w];
             let min = centers
@@ -159,14 +181,16 @@ impl<'a> DataStructureRenderer<'a> {
                     self.theme.tee_down()
                 };
             }
-            lines.push(bar.into_iter().collect());
+            let bar: String = bar.into_iter().collect();
+            lines.push(painted_row(colored, effective, &bar));
 
             // Descenders into each child
             let mut drops = vec![' '; sub_w];
             for &c in &centers {
                 drops[c] = self.theme.vertical_line();
             }
-            lines.push(drops.into_iter().collect());
+            let drops: String = drops.into_iter().collect();
+            lines.push(painted_row(colored, effective, &drops));
         }
 
         // Paste child blocks side by side beneath the connectors
@@ -206,7 +230,11 @@ impl<'a> DataStructureRenderer<'a> {
         }
         let head = self.spec.head_label.as_deref().unwrap_or("head");
         let is_ascii = self.theme.box_style == BoxStyle::Ascii;
-        let (pointer, null) = if is_ascii { ("X", "NULL") } else { ("●", "∅") };
+        let (pointer, null) = if is_ascii {
+            ("X", "NULL")
+        } else {
+            ("●", "∅")
+        };
 
         // Uniform value-cell width keeps the chain boxes visually level.
         let value_w = self
@@ -229,7 +257,7 @@ impl<'a> DataStructureRenderer<'a> {
                     pointer
                 };
                 let ws = [value_w, UnicodeWidthStr::width(ptr).max(1)];
-                self.cells_box_widths(&[v.as_str(), ptr], &ws)
+                self.cells_box_widths(&[v.as_str(), ptr], &ws, None, false)
             })
             .collect();
 
@@ -284,7 +312,7 @@ impl<'a> DataStructureRenderer<'a> {
             })
             .collect();
         let cells: Vec<&str> = values.iter().map(String::as_str).collect();
-        let (box_lines, _) = self.cells_box_widths(&cells, &widths);
+        let (box_lines, _) = self.cells_box_widths(&cells, &widths, None, false);
 
         // Ruler indices centered in each cell block (` w `), with a blank
         // over every `│` separator column.
@@ -314,8 +342,9 @@ impl<'a> DataStructureRenderer<'a> {
 
     /// Builds the 3-line node box: `┌────┐ / │ 10 │ 20 │ / └────┘`. Binary
     /// nodes render their single `value`; B-tree nodes render `keys` cells
-    /// separated by the theme's vertical glyph.
-    fn node_box(&self, node: &DsNode) -> (Vec<String>, usize) {
+    /// separated by the theme's vertical glyph. Border glyphs (corners,
+    /// bars, cell separators) take `color`; label text stays default.
+    fn node_box(&self, node: &DsNode, color: Option<Color>, colored: bool) -> (Vec<String>, usize) {
         let cells: Vec<&str> = match self.spec.kind {
             DsKind::Tree => vec![&node.value],
             // B-tree nodes render `keys`; a keyless node falls back to its
@@ -335,14 +364,22 @@ impl<'a> DataStructureRenderer<'a> {
             .unwrap_or(0)
             .max(1);
         let ws = vec![cell_w; cells.len()];
-        self.cells_box_widths(&cells, &ws)
+        self.cells_box_widths(&cells, &ws, color, colored)
     }
 
     /// Builds the 3-line box around `cells` laid out at the per-cell widths
     /// in `widths` (parallel to `cells`), separated by the theme's vertical
-    /// glyph: `┌──┬──┐ / │ c1 │ c2 │ / └──┴──┘`.
-    fn cells_box_widths(&self, cells: &[&str], widths: &[usize]) -> (Vec<String>, usize) {
-        let sep = self.theme.vertical_line().to_string();
+    /// glyph: `┌──┬──┐ / │ c1 │ c2 │ / └──┴──┘`. Border glyphs (corners,
+    /// bars, separators) are painted `color` when `colored`; cell text is
+    /// never painted, so labels stay terminal-default.
+    fn cells_box_widths(
+        &self,
+        cells: &[&str],
+        widths: &[usize],
+        color: Option<Color>,
+        colored: bool,
+    ) -> (Vec<String>, usize) {
+        let sep = paint(colored, color, &self.theme.vertical_line().to_string());
         let inner = cells
             .iter()
             .zip(widths)
@@ -364,9 +401,19 @@ impl<'a> DataStructureRenderer<'a> {
         let bar: String = std::iter::repeat_n(h, box_w - 2).collect();
         (
             vec![
-                format!("{tl}{bar}{tr}"),
-                format!("{}{inner}{}", sep, sep),
-                format!("{bl}{bar}{br}"),
+                format!(
+                    "{}{}{}",
+                    paint(colored, color, &tl.to_string()),
+                    paint(colored, color, &bar),
+                    paint(colored, color, &tr.to_string())
+                ),
+                format!("{sep}{inner}{sep}"),
+                format!(
+                    "{}{}{}",
+                    paint(colored, color, &bl.to_string()),
+                    paint(colored, color, &bar),
+                    paint(colored, color, &br.to_string())
+                ),
             ],
             box_w,
         )
@@ -378,6 +425,38 @@ fn spaced_row(x: usize, ch: char, width: usize) -> String {
     let mut row = vec![' '; width];
     row[x] = ch;
     row.into_iter().collect()
+}
+
+/// Paints every glyph run in a connector row with `color` (when `colored`).
+/// Contiguous non-space glyphs belong to the node that drew the row, so
+/// wrapping each run keeps the SGR reset between glyphs and adjacent
+/// children's own colors intact; zero-width escapes never shift layout.
+fn painted_row(colored: bool, color: Option<Color>, row: &str) -> String {
+    if !colored {
+        return row.to_string();
+    }
+    match color {
+        None => row.to_string(),
+        Some(c) => {
+            let mut out = String::with_capacity(row.len());
+            let mut run = String::new();
+            for ch in row.chars() {
+                if ch == ' ' {
+                    if !run.is_empty() {
+                        out.push_str(&c.paint(&run));
+                        run.clear();
+                    }
+                    out.push(ch);
+                } else {
+                    run.push(ch);
+                }
+            }
+            if !run.is_empty() {
+                out.push_str(&c.paint(&run));
+            }
+            out
+        }
+    }
 }
 
 /// Builds a binary search tree from an insertion order. Values that parse as
@@ -440,7 +519,7 @@ mod tests {
             ..DataStructureSpec::default()
         };
         let out = DataStructureRenderer::new(&spec, Theme::ascii())
-            .render()
+            .render(false)
             .unwrap();
         assert!(out.contains("| 8 |"));
         assert!(out.contains("| 1 |"));
@@ -458,7 +537,8 @@ mod tests {
             right: Some(Box::new(DsNode::leaf("10"))),
             ..DsNode::default()
         };
-        let out = DataStructureRenderer::new(&spec(DsKind::Tree, root), Theme::ascii()).render();
+        let out =
+            DataStructureRenderer::new(&spec(DsKind::Tree, root), Theme::ascii()).render(false);
         let out = out.unwrap();
         assert!(out.contains('+'), "ASCII theme uses ASCII glyphs");
         assert!(!out.contains('│'), "ASCII theme has no Unicode glyphs");
@@ -487,7 +567,7 @@ mod tests {
         };
         let out =
             DataStructureRenderer::new(&spec(DsKind::BTree, root), Theme::new(BoxStyle::Sharp))
-                .render()
+                .render(false)
                 .unwrap();
         assert!(out.contains("│ 10 │ 20 │"));
         assert!(out.contains("│ 3 │ 5 │"));
@@ -507,7 +587,7 @@ mod tests {
             },
             Theme::new(BoxStyle::Sharp),
         )
-        .render()
+        .render(false)
         .unwrap();
         let first = out.lines().next().unwrap();
         assert_eq!(first.trim(), "BST");
@@ -522,7 +602,7 @@ mod tests {
         };
         assert!(
             DataStructureRenderer::new(&tree, Theme::ascii())
-                .render()
+                .render(false)
                 .is_err()
         );
         let btree = DataStructureSpec {
@@ -532,7 +612,7 @@ mod tests {
         };
         assert!(
             DataStructureRenderer::new(&btree, Theme::ascii())
-                .render()
+                .render(false)
                 .is_err()
         );
     }
@@ -548,7 +628,7 @@ mod tests {
             ..DataStructureSpec::default()
         };
         let out = DataStructureRenderer::new(&spec, Theme::ascii())
-            .render()
+            .render(false)
             .unwrap();
         let row_of = |needle: &str| {
             out.lines()
@@ -585,7 +665,7 @@ mod tests {
             &linked_spec(&["10", "20", "30"]),
             Theme::new(BoxStyle::Sharp),
         )
-        .render()
+        .render(false)
         .unwrap();
         assert!(out.contains("│ 10 │ ● │"), "two-cell node box: {out}");
         assert!(out.contains("∅"), "last pointer cell is the NULL glyph");
@@ -594,8 +674,7 @@ mod tests {
         assert_eq!(out.matches("head").count(), 1, "default head label");
         assert_eq!(out.lines().count(), 3, "single-row layout");
         assert!(
-            out.find("head").unwrap()
-                < out.find("│ 10 │").unwrap()
+            out.find("head").unwrap() < out.find("│ 10 │").unwrap()
                 && out.find("│ 10 │").unwrap() < out.find("│ 30 │").unwrap()
                 && out.find("│ 30 │").unwrap() < out.find("∅").unwrap(),
             "head → chain → NULL order"
@@ -604,10 +683,9 @@ mod tests {
 
     #[test]
     fn test_linkedlist_ascii_fallback() {
-        let out =
-            DataStructureRenderer::new(&linked_spec(&["10", "20"]), Theme::ascii())
-                .render()
-                .unwrap();
+        let out = DataStructureRenderer::new(&linked_spec(&["10", "20"]), Theme::ascii())
+            .render(false)
+            .unwrap();
         assert!(out.contains("| 10 | X |"), "ascii pointer cell: {out}");
         assert!(out.contains("NULL"), "ascii NULL terminator");
         assert!(out.contains("->"), "ascii arrow");
@@ -623,10 +701,9 @@ mod tests {
             head_label: Some("front".into()),
             ..linked_spec(&["1"])
         };
-        let out =
-            DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
-                .render()
-                .unwrap();
+        let out = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap();
         assert!(out.contains("front ─► │ 1 │ ∅ │"), "{out}");
         assert!(!out.contains("head"));
     }
@@ -635,19 +712,17 @@ mod tests {
     fn test_linkedlist_needs_nodes() {
         assert!(
             DataStructureRenderer::new(&linked_spec(&[]), Theme::ascii())
-                .render()
+                .render(false)
                 .is_err()
         );
     }
 
     #[test]
     fn test_array_ruler_and_cells() {
-        let out = DataStructureRenderer::new(
-            &array_spec(&["a", "b", "c"]),
-            Theme::new(BoxStyle::Sharp),
-        )
-        .render()
-        .unwrap();
+        let out =
+            DataStructureRenderer::new(&array_spec(&["a", "b", "c"]), Theme::new(BoxStyle::Sharp))
+                .render(false)
+                .unwrap();
         assert!(out.contains("│ a │ b │ c │"), "boxed cell row: {out}");
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines.len(), 4, "ruler row + 3 box lines");
@@ -667,19 +742,22 @@ mod tests {
     #[test]
     fn test_array_ascii_fallback() {
         let out = DataStructureRenderer::new(&array_spec(&["a", "b"]), Theme::ascii())
-            .render()
+            .render(false)
             .unwrap();
         assert!(out.contains("| a | b |"), "ascii cells: {out}");
         assert!(out.contains('+') && out.contains('-'), "ascii box");
         assert!(out.contains('0') && out.contains('1'), "index ruler");
-        assert!(!out.contains('│') && !out.contains('┌'), "no Unicode glyphs");
+        assert!(
+            !out.contains('│') && !out.contains('┌'),
+            "no Unicode glyphs"
+        );
     }
 
     #[test]
     fn test_array_needs_values() {
         assert!(
             DataStructureRenderer::new(&array_spec(&[]), Theme::ascii())
-                .render()
+                .render(false)
                 .is_err()
         );
     }
@@ -690,8 +768,115 @@ mod tests {
             let ds = DiagramSpec::DataStructure(spec);
             let plain = crate::render_diagram_colored(&ds, false).unwrap();
             let colored = crate::render_diagram_colored(&ds, true).unwrap();
-            assert_eq!(plain, colored, "no color support yet — identical output");
+            assert_eq!(
+                plain, colored,
+                "linear kinds carry no color source — identical output"
+            );
             assert!(!plain.contains('\x1b'), "plain render has zero ANSI");
         }
+    }
+
+    /// Root 8 (red), left leaf 3 (inherits red), right leaf 10 (blue).
+    fn color_tree() -> DsNode {
+        DsNode {
+            value: "8".into(),
+            color: Some(Color::Red),
+            left: Some(Box::new(DsNode::leaf("3"))),
+            right: Some(Box::new(DsNode {
+                value: "10".into(),
+                color: Some(Color::Blue),
+                ..DsNode::default()
+            })),
+            ..DsNode::default()
+        }
+    }
+
+    #[test]
+    fn test_plain_render_has_no_ansi() {
+        let tree = spec(DsKind::Tree, color_tree());
+        let out = DataStructureRenderer::new(&tree, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap();
+        assert!(
+            !out.contains('\u{1b}'),
+            "plain render must stay byte-identical (zero ANSI)"
+        );
+    }
+
+    #[test]
+    fn test_colored_render_emits_sgr_and_keeps_layout() {
+        let tree = spec(DsKind::Tree, color_tree());
+        let renderer = DataStructureRenderer::new(&tree, Theme::new(BoxStyle::Sharp));
+        let plain = renderer.render(false).unwrap();
+        let colored = renderer.render(true).unwrap();
+        assert_eq!(
+            crate::color::Color::strip_ansi(&colored),
+            plain,
+            "color never shifts layout"
+        );
+        // Root box border painted red: corner + bar as separate SGR runs.
+        assert!(
+            colored.contains("\u{1b}[31m\u{250c}\u{1b}[39m\u{1b}[31m"),
+            "root border red: {colored:?}"
+        );
+        // Root connector glyphs (owned by its subtree) painted red too.
+        assert!(
+            colored.contains("\u{1b}[31m\u{250c}\u{2500}"),
+            "connector run red"
+        );
+        // Label text stays default: no SGR run starts inside a cell.
+        assert!(!colored.contains("[31m 8 "), "label text unpainted");
+    }
+
+    #[test]
+    fn test_color_inheritance_and_override() {
+        let tree = spec(DsKind::Tree, color_tree());
+        let renderer = DataStructureRenderer::new(&tree, Theme::new(BoxStyle::Sharp));
+        let colored = renderer.render(true).unwrap();
+        // Left leaf inherits red from the root: its box separators are red.
+        assert!(
+            colored.contains("\u{1b}[39m 3 \u{1b}[31m"),
+            "inherited color on child border: {colored:?}"
+        );
+        // Right leaf overrides blue: blue separators around its own label.
+        assert!(
+            colored.contains("\u{1b}[34m\u{2502}\u{1b}[39m 10 "),
+            "per-node override wins: {colored:?}"
+        );
+    }
+
+    #[test]
+    fn test_uncolored_spec_render_identical_when_colored() {
+        let spec = DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Tree,
+            values: vec!["8".into(), "3".into(), "10".into()],
+            ..DataStructureSpec::default()
+        };
+        let renderer = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp));
+        assert_eq!(
+            renderer.render(true).unwrap(),
+            renderer.render(false).unwrap(),
+            "no colors set means colored render is byte-identical"
+        );
+    }
+
+    #[test]
+    fn test_btree_node_color() {
+        let root = DsNode {
+            keys: vec!["10".into(), "20".into()],
+            color: Some(Color::Red),
+            ..DsNode::default()
+        };
+        let btree = spec(DsKind::BTree, root);
+        let colored = DataStructureRenderer::new(&btree, Theme::new(BoxStyle::Sharp))
+            .render(true)
+            .unwrap();
+        // Cell separators painted; key text stays default.
+        assert!(
+            colored.contains("\u{1b}[31m\u{2502}\u{1b}[39m 10 "),
+            "btree separators red, keys default: {colored:?}"
+        );
+        assert!(!colored.contains("[31m 20 "), "key text unpainted");
     }
 }

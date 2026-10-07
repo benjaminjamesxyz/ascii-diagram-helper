@@ -333,6 +333,11 @@ pub struct DsNode {
     /// `keys.len() + 1` children; fewer is rendered as-is).
     #[serde(default)]
     pub children: Vec<DsNode>,
+    /// Node box border + connector color (JSON only). Descendants inherit
+    /// the nearest colored ancestor unless they set their own; label text
+    /// stays default.
+    #[serde(default)]
+    pub color: Option<Color>,
 }
 
 impl DsNode {

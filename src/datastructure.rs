@@ -95,8 +95,7 @@ impl<'a> DataStructureRenderer<'a> {
                 // (a 3000-value heap renders a 1.4 MB, 16k-column diagram).
                 if self.spec.values.len() > MAX_HEAP_NODES {
                     return Err(format!(
-                        "heap diagram exceeds the maximum node count ({MAX_HEAP_NODES}); "
-                        "a complete binary tree renders 2^depth wide rows — use fewer values"
+                        "heap diagram exceeds the maximum node count ({MAX_HEAP_NODES}); a complete binary tree renders 2^depth wide rows - use fewer values"
                     ));
                 }
                 let root = build_heap(&self.spec.values)

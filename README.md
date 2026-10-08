@@ -57,6 +57,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Arrays: `values` as one boxed cell row with a centered index ruler above
   - DSL shorthand: `ds tree 8 3 10 1 6` (BST) and `ds btree 10,20 | 3,5 12,15 25,30` (pipe-separated levels, comma-separated keys) — same render as the JSON spec
   - Node colors: `color` on any node (`DsNode`) paints its box border + connector glyphs; descendants inherit the nearest colored ancestor unless overridden; label text stays terminal-default
+  - Queues, heaps, graphs: `kind: "queue"` renders `nodes` as a single row of single-cell boxes with an arrow from `front_label` (default `front`) into the first box and from the last box to `rear_label` (default `rear`) — doubles as a deque; `kind: "heap"` builds a complete binary tree from `values` (children at `2i+1`/`2i+2`) through the tree layout; `kind: "graph"` renders `nodes`/`edges` as a textbook adjacency-bucket list — one source-box row per bucket with an arrow into a chain of duplicated neighbor boxes, self-loops appear as the source's own cell in its chain (`│ a │ ─► │ a │`), and unknown edge endpoints are a clear error
 - **Multiple Styling Modes**:
   - `rounded`: `╭ ─ ╮ │ │ ╰ ─ ╯` (modern smooth terminal look)
   - `sharp`: `┌ ─ ┐ │ │ └ ─ ┘` (classic box-drawing)

@@ -29,6 +29,11 @@ const SIBLING_GAP: usize = 4;
 /// pre-fix.
 const MAX_RENDER_DEPTH: usize = 2048;
 
+/// Maximum node count for `kind: "heap"`. A heap is a complete binary tree
+/// (depth = log2 n), so the depth-based MAX_RENDER_DEPTH guard is
+/// unreachable; heaps are bounded by value count instead.
+const MAX_HEAP_NODES: usize = 2048;
+
 /// Renders textbook-style data-structure diagrams: binary trees
 /// (`kind: "tree"`), B-trees (`kind: "btree"`), linked lists
 /// (`kind: "linkedlist"`), arrays (`kind: "array"`), queues
@@ -84,9 +89,16 @@ impl<'a> DataStructureRenderer<'a> {
             DsKind::Heap => {
                 // A heap is a complete binary tree: children of the value at
                 // index `i` sit at `2i + 1` and `2i + 2`. Building and
-                // rendering go through the same tree layout as `tree`;
-                // depth grows logarithmically, so the MAX_RENDER_DEPTH
-                // guard applies naturally.
+                // rendering go through the same tree layout as `tree`.
+                // Depth grows logarithmically, so MAX_RENDER_DEPTH can never
+                // fire here — heaps are bounded by NODE COUNT instead
+                // (a 3000-value heap renders a 1.4 MB, 16k-column diagram).
+                if self.spec.values.len() > MAX_HEAP_NODES {
+                    return Err(format!(
+                        "heap diagram exceeds the maximum node count ({MAX_HEAP_NODES}); "
+                        "a complete binary tree renders 2^depth wide rows — use fewer values"
+                    ));
+                }
                 let root = build_heap(&self.spec.values)
                     .ok_or_else(|| "heap diagram needs a `values` list".to_string())?;
                 let block = self.render_node(&root, None, colored, 0)?;
@@ -1662,5 +1674,36 @@ mod tests {
                 .render(false)
                 .unwrap();
         assert!(heavy.contains('╋'), "heavy style cross junction: {heavy}");
+    }
+
+    #[test]
+    fn test_heap_over_node_count_errors_cleanly() {
+        let spec = DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Heap,
+            values: (0..2049).map(|i| i.to_string()).collect(),
+            ..DataStructureSpec::default()
+        };
+        let err = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap_err();
+        assert!(
+            err.contains("maximum node count (2048)"),
+            "clean count-based error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_heap_at_node_count_limit_renders() {
+        let spec = DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Heap,
+            values: (0..2048).map(|i| i.to_string()).collect(),
+            ..DataStructureSpec::default()
+        };
+        let out = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap();
+        assert!(out.contains("│ 0 │"), "boundary heap renders");
     }
 }

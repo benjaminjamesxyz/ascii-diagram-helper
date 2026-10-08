@@ -1,3 +1,93 @@
+# Sprint v0.10.0 — Backlog Features: Data-Structure Family Expansion
+
+**Goal:** clear the feature backlog: three new data-structure kinds (queue,
+heap, graph), `ds linkedlist` / `ds array` shorthand, README Known
+Limitations for the v0.9.0 rejected findings, and the tester checklist
+promoted to a reusable QA skill.
+**Integration branch:** `sprint/v0.10.0` (from `master`, post-v0.9.0)
+**Merge order:** A → B → C → D → version bump → `master`, tag `v0.10.0`
+**Test gate per branch:** `cargo test` + `cargo clippy --all-targets` (7
+pre-existing baseline warnings tolerated) + `cargo fmt --check`.
+
+## Parallel-work contract
+
+One `git worktree` per branch. File ownership is disjoint; README and
+skills/ are single-owner branches. Features are pre-specified below —
+devs implement directly, then per-deliverable tester→reviewer pairs verify
+(fix rounds capped at 2) before the release gate.
+
+| Branch | Files owned | Conflicts with |
+|---|---|---|
+| `feat/ds-kinds` | `src/schema.rs` (DataStructure region), `src/datastructure.rs`, `src/main.rs` (example arms only), tests | none (sole schema/datastructure owner this sprint) |
+| `feat/ds-shorthand2` | `src/parser.rs` ONLY inside `parse_datastructure_dsl` + `DS_DSL_HINT`, ds parser tests | none |
+| `docs/limitations` | `README.md` | none |
+| `skill/qa-checklist` | `skills/ascii-diagram-qa/**` (new) | none |
+
+## Branch A — `feat/ds-kinds` — queue, heap, graph kinds
+Pre-specified (follow existing datastructure patterns — see linkedlist/array
+render fns):
+1. **queue**: `{"kind":"queue","nodes":["a","b","c"],"front_label":"front",
+   "rear_label":"rear"}` (labels optional, defaults `front`/`rear`; serves
+   deque when both ends labeled). Single row of single-cell boxes; arrow
+   into the first box from the front label, arrow from the last box to the
+   rear label. Empty `nodes` → clear Err.
+2. **heap**: `{"kind":"heap","values":[...]}` — complete binary tree from
+   `values` by index (children `2i+1`, `2i+2`), rendered through the
+   existing tree layout (build `DsNode` tree programmatically, reuse
+   `render_node`). Deep inputs (> 2048 nodes) hit the existing depth guard.
+3. **graph**: `{"kind":"graph","nodes":["a","b"],"edges":[["a","b"],["a","c"]]}`
+   — adjacency-bucket layout: one row of source node boxes; each source has
+   an arrow to a chain of neighbor boxes (duplicated per bucket — textbook
+   adjacency list). Unknown edge endpoints → clear `Err` naming them.
+   Self-loops render as a loop-back arrow to the same box (or an explicit
+   `(self)` cell — pick simpler, document).
+4. `example queue|heap|graph` arms in main.rs + README datastructure bullet
+   (README edits confined to this branch's own bullet append).
+**Accept:** all three kinds render per spec in unicode + ascii styles; unit
++ render tests per kind; existing 193 tests stay green.
+
+## Branch B — `feat/ds-shorthand2` — `ds linkedlist` / `ds array`
+Extend `parse_datastructure_dsl`: `ds linkedlist 10 20 30` → kind linkedlist
+`nodes`; `ds array a b c` → kind array `values`. Optional trailing
+`@Title`? — no, keep minimal. Update `DS_DSL_HINT` to list all four forms
+(`ds tree|btree|linkedlist|array ...`). Tests per form incl. malformed.
+**Files:** `src/parser.rs` (parse_datastructure_dsl region only), tests.
+
+## Branch C — `docs/limitations` — README Known Limitations
+Compile the v0.9.0 reviewer-rejected findings + deferred nits into README
+Known Limitations: NO_COLOR vs explicit `--color always` precedence (flag
+wins, no-color.org compliant); `A | B; no pipe here` single-pipe dsl falls
+to tree; lone `color:` directive passes through; tree `(y) x` paren-first
+renders empty-name node; header-only diagram policy per type; BT/RL and
+subgraph-direction notes (already present — keep). Prose only, NO code.
+**Files:** `README.md`.
+
+## Branch D — `skill/qa-checklist` — tester checklist as reusable skill
+New `skills/ascii-diagram-qa/SKILL.md` (+ frontmatter: name, description
+with trigger phrases) encoding the v0.9.0 tester methodology: per-type probe
+matrix (valid/malformed/edge/CJK-emoji/5 styles/markdown/color modes/input
+modes/example), findings format (id, severity, repro, expected, observed),
+reviewer audit protocol (re-run repros, reject false positives with reasons,
+severity rubric, satisfaction verdict). Distilled from the sprint tester
+prompts; no code.
+**Files:** `skills/ascii-diagram-qa/**`.
+
+## Integration & loop
+1. Merge A → B → C → D into `sprint/v0.10.0` (`--no-ff`); full gate
+2. Per-deliverable tester → reviewer pairs (4 pairs) verify acceptance
+   criteria + regression on the integration build
+3. Fix rounds capped at 2; then gate report → **human approval** → bump
+   `0.10.0`, `npm run sync:pi`, merge `--no-ff` to `master`, tag `v0.10.0`
+
+## Post-sprint backlog (not this sprint)
+- `--strict` flag (opt out of lenient sequence frame auto-commit)
+- `Option<BoxStyle>` specs (true explicit-style precedence)
+- Renderer warnings channel (Vec<String> instead of eprintln)
+- BT/RL mirrored layouts; mixed-direction clusters; global crossing minimization
+- `ds queue|heap|graph` shorthand (needs Branch A kinds first)
+
+---
+
 # Sprint v0.9.0 — Ultimate Test: Multi-Agent Hardening Loop
 
 **OUTCOME (cycle 3, converged):** 50 findings accepted across 7 types

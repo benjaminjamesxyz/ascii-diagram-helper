@@ -1,230 +1,509 @@
-# ASCII Diagram Helper for Pi AI Agent
+# ascii-diagram v0.11.0
 
-A high-precision, Rust-powered ASCII & Unicode diagramming tool and Pi extension designed to solve the common issue where LLMs break terminal diagrams (jagged box borders, misaligned connector lines, font width anomalies, and broken ASCII art).
+High-precision, Rust-powered terminal ASCII & Unicode diagram generator for humans and AI agents.
 
----
-
-## Why LLM-Generated Diagrams Break in Terminals
-
-When Large Language Models attempt to draw box-drawing character diagrams directly as text tokens:
-
-1. **Multi-byte character width misalignment**: Unicode box characters (`─`, `│`, `┌`, `┐`, `└`, `┘`, `┼`, `►`) take 3 bytes in UTF-8, but 1 terminal cell. Variable tokenization causes the LLM to miscount character columns across lines.
-2. **Autoregressive limitations**: Drawing a 2D box requires the closing vertical bar `│` on line N to be aligned with line 1 before the model knows the length of words on lines 2..N-1.
-3. **Complex routing**: Orthogonal bends (Manhattan routing), branching (`┬`, `┴`), crossing (`┼`), and parallel lifelines require global geometric coordination that token-by-token generation cannot guarantee.
-
-### The Solution
-
-Instead of forcing the LLM to output character coordinates, the LLM provides **Mermaid DSL** (which models already generate with near-100% syntactic precision) or **declarative JSON**. The Rust engine:
-
-- Computes exact topological layering (Sugiyama layout algorithm)
-- Dynamically allocates cell grid space using `unicode-width`
-- Reroutes connectors orthogonally with smart junction resolution (`─` meeting `│` automatically becomes `┬`, `┴`, `├`, `┤`, or `┼`)
-- Renders character-perfect Unicode or 7-bit ASCII diagrams with zero skew
-
----
-
-## Features
-
-- **Flowcharts & Graphs (`flowchart` / `graph`)**:
-  - Directions: `TB` (Top to Bottom) and `LR` (Left to Right); direction `BT` currently renders identical to `TB` and `RL` identical to `LR` (mirrored layouts future work; no error emitted)
-  - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`, Circle `((text))`, Hexagon `{{text}}`, DoubleCircle `(((text)))`, Parallelogram `[/text/]` and `\[text\]`, Trapezoid `[/text\]` and `\[text/]` — non-rectangular shapes render as solid boxes with an identifying badge glyph embedded in the top border (`⬡`, `◎`, `▱`, `/__\`; ASCII fallbacks `<h>`, `(oo)`, `/_/`, `/__\`)
-  - Subgraphs: `subgraph id [Title]` ... `end` render as labeled group boxes (nesting supported); members are nodes first declared inside the block; per-subgraph `direction TB|LR|RL|BT` is applied when the subgraph is edge-isolated from the rest of the diagram (rendered in its own orientation as a self-contained block, Mermaid parity) — otherwise the global direction wins
-  - Orthogonal routing with smart junction merging (`┬`, `┴`, `┼`, `├`, `┤`)
-  - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs
-  - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
-  - Chained edges (`A --> B --> C`), edge labels (`-->|label|`), dotted lines (`-.->`), loops
-  - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`, `<==`), thick (`==>`, `<==>`, `<==` — heavy glyphs `━ ┃` in Unicode styles, `=` in ASCII style)
-  - Style directives: `classDef`, `class`, `style` and `linkStyle` are parsed — `stroke-dasharray` maps to dashed node borders / dashed edges, `stroke:<color>` maps to border/line emphasis colors, `fill:<color>` colorizes node label text (colored mode), and `stroke-width:>=2px` renders heavy border glyphs
-- **Sequence Diagrams (`sequenceDiagram`)**:
-  - Synchronous calls (`->`, `->>`), asynchronous messages (`-->`, `-->>`), bidirectional (`<->`)
-  - Self loops (`A -> A: msg`)
-  - Control-flow frames: `alt`/`else`, `opt`, `loop`, `par`/`and`, `critical`, `break` — rendered as labeled group boxes with branch dividers
-  - Dynamic lifeline column spacing preventing label overflow
-- **Architecture & Container Diagrams**:
-  - Hierarchical nesting, `row` and `column` layouts
-  - Component property badges (`Port: 8080`, `Protocol: gRPC`)
-  - Corridor routing: connections spanning multiple containers route through the right-margin corridor instead of slicing through unrelated containers
-- **Hierarchy & Directory Trees**:
-  - Classic `├──`, `└──`, `│` formatting with annotations
-- **Memory & Protocol Stacks**:
-  - Memory layouts with address offsets (`0xFFFF`) and growth direction indicators
-- **Data Structures (JSON `type: "datastructure"`)**:
-  - Binary trees: explicit `root` nodes (`value`/`left`/`right`) or a `values` insertion order (auto-built BST — numeric strings compare numerically, others lexicographically)
-  - B-trees: `btree_root` nodes with `keys` cells (`│ 10 │ 20 │`) and fan-out `children`; keyless nodes fall back to `value`
-  - Boxes centered over subtrees with `┴`/`┬` branch bars and per-child descenders; optional centered `title`
-  - Example: `{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6"]}` (see `ascii-diagram example datastructure`)
-  - Linked lists: `nodes` chain rendered as two-cell boxes (`value │ ●`) with `head_label` (default `head`) and a `∅` terminator (ASCII `NULL`)
-  - Arrays: `values` as one boxed cell row with a centered index ruler above
-  - DSL shorthand: `ds tree 8 3 10 1 6` (BST) and `ds btree 10,20 | 3,5 12,15 25,30` (pipe-separated levels, comma-separated keys) — same render as the JSON spec
-  - Node colors: `color` on any node (`DsNode`) paints its box border + connector glyphs; descendants inherit the nearest colored ancestor unless overridden; label text stays terminal-default
-  - Queues, heaps, graphs: `kind: "queue"` renders `nodes` as a single row of single-cell boxes with an arrow from `front_label` (default `front`) into the first box and from the last box to `rear_label` (default `rear`) — doubles as a deque; `kind: "heap"` builds a complete binary tree from `values` (children at `2i+1`/`2i+2`) through the tree layout; `kind: "graph"` renders `nodes`/`edges` as a textbook adjacency-bucket list — one source-box row per bucket with an arrow into a chain of duplicated neighbor boxes, self-loops appear as the source's own cell in its chain (`│ a │ ─► │ a │`), and unknown edge endpoints are a clear error
-- **Multiple Styling Modes**:
-  - `rounded`: `╭ ─ ╮ │ │ ╰ ─ ╯` (modern smooth terminal look)
-  - `sharp`: `┌ ─ ┐ │ │ └ ─ ┘` (classic box-drawing)
-  - `double`: `╔ ═ ╗ ║ ║ ╚ ═ ╝` (double lines)
-  - `heavy`: `┏ ━ ┓ ┃ ┃ ┗ ━ ┛` (bold lines)
-  - `ascii`: `+ - + | | + - +` (pure 7-bit ASCII safe for all terminals)
-
-### Known Limitations
-
-- `classDef` / `class` / `style` `fill:<name|#hex>` colorizes **label text** (rendered as ANSI foreground, colored mode only) and `stroke-width` is graduated: `2px` → heavy glyphs (`┏━┓`), `3px`+ → double (`╔═╗`); `1px` and fractional widths below 2 are treated as default. `linkStyle` `fill` is aliased to the edge line color (Mermaid links have no fill)
-- Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border. Per-subgraph `direction` boundary:
-  - **Applies** when the subgraph (including all nested members) has no edges crossing its border — rendered as a self-contained block in its own orientation, pasted beside/below the main graph
-  - **Applies to nested children** whose own member set is edge-isolated, even when the parent subgraph has external edges (the child moves out; the parent's group box wraps only its remaining members)
-  - **Falls back to global direction** as soon as any edge crosses the subgraph boundary (an endpoint outside the block), even if all internal edges agree with the subgraph direction (Mermaid parity — full mixed-direction cluster layout is future work)
-- Header-only diagrams (`flowchart TD` with no nodes or edges) render empty output and exit 0. This leniency is per parser: a bare `sequenceDiagram` header behaves the same (empty output, exit 0) and bare `tree` substitutes a `Root` placeholder, while strict parsers reject header-only input with a named error and exit 1 (`table`, `stack`)
-- Ambiguous single-pipe input falls to the tree parser: `A | B; no pipe here` (one pipe-carrying line, no table markers) renders as a tree, not a table. Table detection requires the `table` keyword, a leading `|`, a `color:` directive followed by a table-shaped line, or ≥2 pipe-carrying lines; tree labels containing `|` (e.g. `cmd1 | filter`) are protected because tree-shaped input is checked before the pipe heuristic
-- Degenerate paren-first tree input like `(y) x` parses as an empty-name node with the parenthesized text and trailing text merged into one annotation (`(y x)`) — all input text is preserved, there is just no node name
-- `NO_COLOR` vs explicit `--color always`: the flag wins. `NO_COLOR` only forces colors off in the default `auto` mode (as documented by `--help`); the no-color.org standard explicitly allows per-instance arguments to override the environment variable, so `NO_COLOR=1 ascii-diagram --color always ...` still colorizes
-- A lone `color: red` directive with no table rows is not table input: it falls through to the tree parser and passes through verbatim as a single node, exit 0 (only `table` followed by a directive with no rows errors)
-- Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
-  - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched
-  - Table: `color: <name|#hex>` directive line before the rows (whole-table grid color)
-  - Stack: trailing `@<name|#hex>` tag on a layer line — `0xFFFF: ISR vector @red`
-
-### Tips for Dense Graphs
-
-Cross-branch edges (watchdog kicks, config broadcasts, debug taps) render correctly at any density and converge on a single arrowhead column per target — no adjacent `▼▼` pairs when a target is fed from both a direct edge and a supervisory feed. They still get visually busy past a threshold, so:
-
-- **Limit cross-branch edges per source to ≤ 2.** Beyond that, every edge still renders (shared corridor track per source); dash runs cross more bands — crossings render as `┼` junctions with both strokes continuous, but the picture stays busier
-- **Prefer one fan-out over many hops**: `WDG -.-> A` + `WDG -.-> B` renders cleaner than routing a kick through intermediate tasks
-- **Split by concern**: put watchdog/telemetry/config wiring in a companion diagram instead of overlaying it on the main dataflow — the task graph stays readable and the cross-branch view gets its own clear picture
-- **Use dashed style (`-.->`) for supervisory edges** — visually separates control-plane from data-plane at a glance
+```text
+      ╭──────────────╮
+      │  User / TUI  │
+      ╰──────────────╯
+              │
+              │ Request
+              │
+              ▼
+       ╭─────────────╮
+       │ Pi AI Agent │
+       ╰─────────────╯
+              │
+              │ draw_diagram
+              │
+              ▼
+  ╭──────────────────────╮
+  │ ascii-diagram Engine │
+  ╰──────────────────────╯
+              │
+              ▼
+╭──────────────────────────╮
+│ Sugiyama Router & Canvas │
+╰──────────────────────────╯
+              │
+              ▼
+    ╭──────── ▱ ────────╮
+    │  Terminal Output  │
+    ╰───────────────────╯
+```
 
 ---
 
-## Installation
+## ⚡ 10-Second Quick Start
 
-The extension and skill are pure TypeScript/markdown, but the diagram engine is a compiled Rust binary. Install order matters: **build the binary first**, then install the Pi package so the extension can find it.
-
-### 1. Build the binary
-
-Requires [Rust](https://rustup.rs) and Node.js 20+:
+### 1. Build & Install CLI
 
 ```bash
 git clone https://github.com/benjaminjamesxyz/ascii-diagram-helper.git
 cd ascii-diagram-helper
-npm install
-npm run build
+npm install && npm run build
 ```
 
-Then put the binary on the extension's search path — `~/.local/bin` is the standard choice:
+### 2. Instant Diagram Generation
 
 ```bash
-mkdir -p ~/.local/bin
-cp bin/ascii-diagram ~/.local/bin/
+# Render a Flowchart
+./bin/ascii-diagram "graph LR; Client --> Gateway --> Database"
+
+# Render a Data Structure using shorthand
+./bin/ascii-diagram "ds tree 8 3 10 1 6 14 4"
+
+# Render built-in reference examples
+./bin/ascii-diagram example sequence
 ```
-
-(Ensure `~/.local/bin` is on your `PATH`. Alternatively, set `ASCII_DIAGRAM_BIN=/full/path/to/ascii-diagram` in your environment.)
-
-Every later `npm run build` automatically refreshes `~/.local/bin/ascii-diagram` (best-effort — skipped with a note if the directory cannot be created), so the installed copy never goes stale.
-
-### 2. Install the Pi package
-
-```bash
-pi install git:github.com/benjaminjamesxyz/ascii-diagram-helper
-```
-
-Verify with `pi list`. The extension auto-discovers the binary in this order:
-
-1. `ASCII_DIAGRAM_BIN` environment variable
-2. `bin/` or `target/{release,debug}/` inside the installed package
-3. `~/.local/bin/ascii-diagram`
-4. `bin/` or `target/{release,debug}/` relative to the current working directory
-5. `ascii-diagram` on `PATH`
 
 ---
 
-## Pi AI Agent Integration
+## 🎨 Visual Showcase (7 Diagram Types)
 
-### 1. `draw_diagram` Tool
+### 1. Flowcharts & Graphs (`flowchart` / `graph`)
 
-Registered into Pi's tool registry. The agent uses this tool whenever it needs to explain a concept visually:
+Supports Mermaid `graph TD` / `graph LR`, custom node shapes (`[]`, `()`, `{}`, `[()]`, `([])`, `[[]]`), styled edges (`-->`, `-.->`, `==>`, `<-->`), subgraphs, and `classDef`/`style` colors.
 
+**DSL Input:**
+```mermaid
+graph LR
+  subgraph Client [Frontend Layer]
+    Web[Web App]
+    Mobile[Mobile App]
+  end
+  subgraph Server [Backend Cluster]
+    Gateway{API Gateway}
+    Auth[(User Auth DB)]
+  end
+  Web --> Gateway
+  Mobile --> Gateway
+  Gateway -->|Token Check| Auth
+```
+
+**Rendered Output:**
+```text
+ ╭─ Frontend Layer ─╮
+ │                  │
+ │ ╭─────────╮      ├─ Backend Cluster ──────────────────────────────────╮
+ │ │ Web App │─────╮│                                                    │
+ │ ╰─────────╯     ││                                 ╭────────────────╮ │
+ │                 ││ ╭────── ◇ ──────╮  Token Check  (                ) │
+ │                 ├┼►├  API Gateway  ┤──────────────►(  User Auth DB  ) │
+ │ ╭────────────╮  ││ ╰───────────────╯               (                ) │
+ │ │ Mobile App │──╯│                                 ╰────────────────╯ │
+ │ ╰────────────╯   ├────────────────────────────────────────────────────╯
+ ╰──────────────────╯
+```
+
+---
+
+### 2. Sequence Diagrams (`sequenceDiagram`)
+
+Supports lifelines, synchronous calls (`->`), asynchronous messages (`-->`), self-loops (`A -> A`), and control frames (`alt`, `opt`, `loop`, `par`, `critical`, `break`).
+
+**DSL Input:**
+```mermaid
+sequenceDiagram
+  participant Client as Web Client
+  participant Gateway as API Gateway
+  participant Auth as Auth Service
+  Client -> Gateway: POST /login
+  Gateway -> Auth: Verify Credentials
+  Auth --> Gateway: 200 OK (JWT Token)
+  Gateway --> Client: 200 OK (Token)
+```
+
+**Rendered Output:**
+```text
+╭────────────╮    ╭─────────────╮      ╭──────────────╮
+│ Web Client │    │ API Gateway │      │ Auth Service │
+╰──────┬─────╯    ╰──────┬──────╯      ╰───────┬──────╯
+       │                 │                     │
+       │  POST /login    │                     │
+       ├────────────────►│                     │
+       │                 │ Verify Credentials  │
+       │                 ├────────────────────►│
+       │                 │ 200 OK (JWT Token)  │
+       │                 │◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
+       │ 200 OK (Token)  │                     │
+       │◄╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│                     │
+       │                 │                     │
+╭──────┴─────╮    ╭──────┴──────╮      ╭───────┴──────╮
+│ Web Client │    │ API Gateway │      │ Auth Service │
+╰────────────╯    ╰─────────────╯      ╰──────────────╯
+```
+
+---
+
+### 3. Architecture & Container Diagrams (`architecture`)
+
+Declarative JSON specifications with row/column layouts, component property badges (`Port`, `Protocol`), and margin corridor routing.
+
+**JSON Spec:**
 ```json
 {
-  "dsl": "graph TD\n  Client[Web App] -->|HTTPS| Gateway[API Gateway]\n  Gateway --> Auth[Auth Service]\n  Gateway --> Orders[Order Service]\n  Orders --> DB[(PostgreSQL)]",
-  "style": "rounded"
+  "type": "architecture",
+  "title": "Cloud System Architecture",
+  "containers": [
+    {
+      "id": "c1",
+      "title": "Production VPC",
+      "layout": "row",
+      "items": [
+        {"id": "api", "name": "API Server", "properties": [["Port", "8080"], ["Lang", "Rust"]]},
+        {"id": "db", "name": "Database", "properties": [["Engine", "PostgreSQL"], ["Port", "5432"]]}
+      ]
+    }
+  ],
+  "connections": [
+    {"from": "api", "to": "db", "label": "SQL Query"}
+  ]
 }
 ```
 
-Output received by Pi:
+**Rendered Output:**
+```text
+               Cloud System Architecture
+
+╭─────────────────── Production VPC ───────────────────╮
+│                                                      │
+│ ╭────────────╮                ╭────────────────────╮ │
+│ │ API Server │                │      Database      │ │
+│ ├────────────┤   SQL Query    ├────────────────────┤ │
+│ │ Port: 8080 │───────────────►│ Engine: PostgreSQL │ │
+│ │ Lang: Rust │                │ Port: 5432         │ │
+│ ╰────────────╯                ╰────────────────────╯ │
+│                                                      │
+╰──────────────────────────────────────────────────────╯
+```
+
+---
+
+### 4. Directory & Hierarchy Trees (`tree`)
+
+Clean tree structures using indented lines, parenthetical annotations, and inline `@color` tags.
+
+**DSL Input:**
+```text
+tree
+src/
+  main.rs (CLI Entrypoint) @cyan
+  canvas.rs (2D Grid Engine)
+  flowchart.rs (Sugiyama Layout)
+  datastructure.rs (BST & B-Tree) @green
+Cargo.toml @yellow
+```
+
+**Rendered Output:**
+```text
+src/
+├── main.rs (CLI Entrypoint)
+├── canvas.rs (2D Grid Engine)
+├── flowchart.rs (Sugiyama Layout)
+├── datastructure.rs (BST & B-Tree)
+└── Cargo.toml
+```
+
+---
+
+### 5. Memory & Protocol Stacks (`stack`)
+
+Memory segment layouts with hex address offsets (`0xFFFF:`), growth direction indicators, and region tinting.
+
+**DSL Input:**
+```text
+stack
+0xFFFF: Kernel Memory @red
+0xC000: User Stack (grows down) @cyan
+Shared Libraries
+Heap Space (grows up) @green
+0x0000: Executable Code / Text
+```
+
+**Rendered Output:**
+```text
+0xFFFF ╭──────────────────────────╮
+       │      Kernel Memory       │
+0xC000 ├──────────────────────────┤
+       │        User Stack        │
+       │        grows down        │
+       ├──────────────────────────┤
+       │     Shared Libraries     │
+       ├──────────────────────────┤
+       │        Heap Space        │
+       │         grows up         │
+0x0000 ├──────────────────────────┤
+       │  Executable Code / Text  │
+       ╰──────────────────────────╯
+```
+
+---
+
+### 6. Tables (`table`)
+
+Markdown pipe tables with alignment specifiers (`:---`, `:---:`, `---:`) and custom grid color directives.
+
+**DSL Input:**
+```text
+table
+color: cyan
+| Service | Port | Protocol | Status |
+| :--- | :---: | :---: | ---: |
+| Gateway | 8080 | HTTP | Active |
+| Auth DB | 5432 | TCP | Active |
+| Cache | 6379 | RESP | Idle |
+```
+
+**Rendered Output:**
+```text
+╭─────────┬──────┬──────────┬────────╮
+│ Service │ Port │ Protocol │ Status │
+├─────────┼──────┼──────────┼────────┤
+│ Gateway │ 8080 │   HTTP   │ Active │
+│ Auth DB │ 5432 │   TCP    │ Active │
+│ Cache   │ 6379 │   RESP   │   Idle │
+╰─────────┴──────┴──────────┴────────╯
+```
+
+---
+
+### 7. Data Structures (`datastructure`)
+
+Renders standard Computer Science data structures via JSON specs or instant `ds` CLI commands.
+
+---
+
+## 🌳 Complete Data Structures Guide
+
+Supports all 7 core data structure visualizers via JSON specifications, with instant CLI `ds` shorthand for trees, B-trees, linked lists, and arrays.
+
+### 1. Binary Search Tree (BST)
+- **CLI Shorthand:** `ascii-diagram "ds tree 8 3 10 1 6 14 4"`
+- **JSON Spec:** `{"type":"datastructure","kind":"tree","values":["8","3","10","1","6","14","4"]}`
 
 ```text
-             ╭─────────╮
-             │ Web App │
-             ╰─────────╯
-                  │
-                  │ HTTPS
-                  │
-                  ▼
-         ╭────────────────╮
-         │ Cloudflare CDN │
-         ╰────────────────╯
-                  │
-                  ▼
-           ╭─────────────╮
-           │ API Gateway │
-           ╰─────────────╯
-                  │
-        ╭─────────┴─────────╮
-        │                   │
-        ▼                   ▼
-╭──────────────╮    ╭───────────────╮
-│ Auth Service │    │ Order Service │
-╰──────────────╯    ╰───────────────╯
-                            │
-                  ╭─────────╯
-                  │
-                  ▼
-           ╭────────────╮
-           ├────────────┤
-           │ PostgreSQL │
-           ╰────────────╯
+         ╭───╮
+         │ 8 │
+         ╰───╯
+           │
+      ╭────┴─────────╮
+      │              │
+    ╭───╮         ╭────╮
+    │ 3 │         │ 10 │
+    ╰───╯         ╰────╯
+      │              │
+  ╭───┴────╮      ╭────╮
+  │        │      │ 14 │
+╭───╮    ╭───╮    ╰────╯
+│ 1 │    │ 6 │
+╰───╯    ╰───╯
+           │
+         ╭───╮
+         │ 4 │
+         ╰───╯
 ```
 
-### 2. Interactive `/diagram` Command
+### 2. B-Tree
+- **CLI Shorthand:** `ascii-diagram "ds btree 10,20 | 3,5 12,15 25,30"`
+- **JSON Spec:** `{"type":"datastructure","kind":"btree","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30"]}]}}`
 
-Users can render diagrams interactively inside Pi's TUI:
-
-```bash
-/diagram graph TD; Client --> Server
-/diagram --example sequence
-/diagram --example stack
+```text
+              ╭─────────╮
+              │ 10 │ 20 │
+              ╰─────────╯
+                   │
+    ╭─────────────┬┴─────────────╮
+    │             │              │
+╭───────╮    ╭─────────╮    ╭─────────╮
+│ 3 │ 5 │    │ 12 │ 15 │    │ 25 │ 30 │
+╰───────╯    ╰─────────╯    ╰─────────╯
 ```
 
-### 3. Prompt Guidelines & Progressive Disclosure Skill
+### 3. Linked List
+- **CLI Shorthand:** `ascii-diagram "ds linkedlist 10 20 30"`
+- **JSON Spec:** `{"type":"datastructure","kind":"linkedlist","nodes":["10","20","30"]}`
 
-The bundled skill (`skills/ascii-diagram/SKILL.md`) instructs the agent to reach for `draw_diagram` instead of raw ASCII art when generating diagrams.
+```text
+        ╭────────╮    ╭────────╮    ╭────────╮
+head ─► │ 10 │ ● │ ─► │ 20 │ ● │ ─► │ 30 │ ∅ │
+        ╰────────╯    ╰────────╯    ╰────────╯
+```
+
+### 4. Array with Index Ruler
+- **CLI Shorthand:** `ascii-diagram "ds array 10 20 30 40"`
+- **JSON Spec:** `{"type":"datastructure","kind":"array","values":["10","20","30","40"]}`
+
+```text
+  0    1    2    3
+╭───────────────────╮
+│ 10 │ 20 │ 30 │ 40 │
+╰───────────────────╯
+```
+
+### 5. Queue & Deque
+- **JSON Spec:** `{"type":"datastructure","kind":"queue","title":"Job Queue","nodes":["build","test","deploy"]}`
+
+```text
+                       Job Queue
+
+         ╭────────╮    ╭────────╮    ╭────────╮
+front ─► │ build  │ ─► │ test   │ ─► │ deploy │ ─► rear
+         ╰────────╯    ╰────────╯    ╰────────╯
+```
+
+### 6. Complete Min/Max Heap
+- **JSON Spec:** `{"type":"datastructure","kind":"heap","title":"Min-Heap","values":[1,3,2,6,4,5]}`
+
+```text
+       Min-Heap
+
+         ╭───╮
+         │ 1 │
+         ╰───╯
+           │
+      ╭────┴────────╮
+      │             │
+    ╭───╮         ╭───╮
+    │ 3 │         │ 2 │
+    ╰───╯         ╰───╯
+      │             │
+  ╭───┴────╮      ╭───╮
+  │        │      │ 5 │
+╭───╮    ╭───╮    ╰───╯
+│ 6 │    │ 4 │
+╰───╯    ╰───╯
+```
+
+### 7. Graph Adjacency List
+- **JSON Spec:** `{"type":"datastructure","kind":"graph","title":"Adjacency List","nodes":["a","b","c","d"],"edges":[["a","b"],["a","c"],["b","d"],["c","d"],["d","a"],["d","d"]]}`
+
+```text
+    Adjacency List
+
+╭───╮    ╭───╮    ╭───╮
+│ a │ ─► │ b │ ─► │ c │
+╰───╯    ╰───╯    ╰───╯
+
+╭───╮    ╭───╮
+│ b │ ─► │ d │
+╰───╯    ╰───╯
+
+╭───╮    ╭───╮
+│ c │ ─► │ d │
+╰───╯    ╰───╯
+
+╭───╮    ╭───╮    ╭───╮
+│ d │ ─► │ a │ ─► │ d │
+╰───╯    ╰───╯    ╰───╯
+```
 
 ---
 
-## CLI Usage
+## 🛠️ Multi-Style & ANSI Color Showcase
 
-The compiled Rust binary can also be run directly from the command line:
+### 5 Border Styles (`-s / --style`)
 
-```bash
-# Render inline Mermaid DSL
-./bin/ascii-diagram dsl "graph LR; Client --> Server --> DB"
+Choose from 5 distinct box-drawing character sets:
 
-# Render from stdin with ASCII styling
-echo "graph TD; A --> B" | ./bin/ascii-diagram --style ascii
-
-# Render sequence diagram example
-./bin/ascii-diagram example sequence
-
-# Output wrapped in markdown code fence
-./bin/ascii-diagram --markdown example flowchart
+#### `rounded` (Default)
+```text
+╭────────╮     ╭────────╮
+│ Client │────►│ Server │
+╰────────╯     ╰────────╯
 ```
+
+#### `sharp`
+```text
+┌────────┐     ┌────────┐
+│ Client │────►│ Server │
+└────────┘     └────────┘
+```
+
+#### `double`
+```text
+╔════════╗     ╔════════╗
+║ Client ║════►║ Server ║
+╚════════╝     ╚════════╝
+```
+
+#### `heavy`
+```text
+┏━━━━━━━━┓     ┏━━━━━━━━┓
+┃ Client ┃━━━━►┃ Server ┃
+┗━━━━━━━━┛     ┗━━━━━━━━┛
+```
+
+#### `ascii` (Pure 7-bit ASCII)
+```text
++--------+     +--------+
+| Client |---->| Server |
++--------+     +--------+
+```
+
+### ANSI SGR Colors
+
+`ascii-diagram` generates truecolor (24-bit hex `#RRGGBB`) or theme-adaptive ANSI 16 colors for borders, connections, and labels:
+
+- **Flowcharts:** `classDef hot stroke:red`, `style Node fill:#ff8800`
+- **Trees & Stacks:** `@red`, `@cyan`, `@green`, `@yellow` trailing tags
+- **Tables:** `color: cyan` grid directive
+- **Data Structures:** `"color": "cyan"` properties on nodes
 
 ---
 
-## Testing & Building
+## 💻 CLI & Pi AI Agent Integration
 
-```bash
-# Run both Rust and Pi Extension tests
-npm test
+### CLI Subcommands
 
-# Build release binary
-npm run build
-```
+- `ascii-diagram dsl "<dsl>"`: Render inline DSL string directly.
+- `ascii-diagram render <file|->`: Render from file or stdin.
+- `ascii-diagram example <type>`: Output reference examples (`flowchart`, `sequence`, `architecture`, `tree`, `table`, `stack`, `datastructure`, `queue`, `heap`, `graph`).
+- `ascii-diagram "ds <kind> <args>"`: CLI shorthand for data structures (`tree`, `btree`, `linkedlist`, `array`).
+
+#### Global CLI Options
+
+- `-s, --style <STYLE>`: `rounded` (default), `sharp`, `double`, `heavy`, `ascii`.
+- `-m, --markdown`: Wrap output in a markdown fenced code block (` ```text `).
+- `--color <MODE>`: `auto` (default, checks TTY & `NO_COLOR`), `always` (force ANSI), `never`.
+
+---
+
+### Pi AI Agent Integration
+
+`ascii-diagram` integrates directly with the **Pi AI Agent Harness**:
+
+1. **`draw_diagram` Tool**: Agents automatically invoke `draw_diagram` to render flowcharts, sequence diagrams, architectures, stacks, tables, and data structures.
+2. **`/diagram` Interactive Command**: Users can render diagrams interactively inside Pi TUI:
+   ```bash
+   /diagram graph TD; Client --> Server
+   /diagram --example sequence
+   /diagram --style ascii ds tree 8 3 10 1 6
+   ```
+3. **Bundled Agent Skills**:
+   - `skills/ascii-diagram`: Prompts AI agents to generate structured terminal diagrams instead of breaking text layouts.
+   - `skills/ascii-diagram-qa`: Systematic QA testing probe matrix and reviewer audit protocol for diagram types.
+
+---
+
+## 📋 Known Limitations & Tips
+
+| Feature / Category | Limitation / Behavior | Recommendation / Workaround |
+|---|---|---|
+| **Subgraph Direction** | `direction` per subgraph applies when the subgraph is edge-isolated | Minimize cross-edges between subgraphs if custom subgraph direction is needed |
+| **Edge Density** | Dense cross-branch edges (>2 per node) share corridor tracks | Keep cross-branch feeds $\le 2$ per node; use dashed `-.->` lines for supervisory control |
+| **Color Support** | `stroke:<color>` colorizes borders/lines; `fill:<color>` tints text labels | Use `--color always` to override `NO_COLOR` when explicit ANSI output is required |
+| **Header-only DSL** | `flowchart TD` or `sequenceDiagram` without nodes returns empty output | Always declare at least one node or participant |
+| **Pipe Disambiguation** | Single-pipe text without headers parses as `tree`, not `table` | Use explicit `table` keyword or standard pipe headers for tables |
+
+---
+
+## ⚡ Why LLM Diagrams Break in Terminals
+
+When LLMs attempt to output ASCII art or box-drawing characters line-by-line, layout errors are unavoidable:
+
+1. **Multi-byte UTF-8 Character Widths**: Unicode box glyphs (`─`, `│`, `╭`, `╰`) consume 3 bytes in UTF-8 but occupy exactly 1 terminal column. LLMs frequently miscount column offsets.
+2. **Autoregressive 2D Constraints**: Predicting line N requires knowing the maximum text width across all subsequent lines 2..N-1 before they are generated.
+3. **Orthogonal Routing & Junctions**: Routing connector lines and resolving intersections (`┬`, `┴`, `┼`, `├`, `┤`) requires global 2D grid allocation.
+
+`ascii-diagram` solves this by consuming clean Mermaid DSL or JSON, applying the **Sugiyama topological layout algorithm**, and rendering aligned Unicode or ASCII box art.

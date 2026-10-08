@@ -242,6 +242,10 @@ impl<'a> DataStructureRenderer<'a> {
                     self.theme.top_left_corner()
                 } else if c == max {
                     self.theme.top_right_corner()
+                } else if c == parent_center {
+                    // Child aligned with parent descender: parent vertical,
+                    // horizontal bar, and child vertical all meet -> 4-way cross.
+                    self.theme.cross()
                 } else {
                     self.theme.tee_down()
                 };
@@ -1123,5 +1127,72 @@ mod tests {
         let bar = out.lines().find(|l| l.contains('┴')).unwrap();
         let tee_col = bar.chars().position(|c| c == '┴').unwrap();
         assert_eq!(tee_col, box_center, "branch bar tee at box center");
+    }
+
+    #[test]
+    fn test_btree_aligned_child_renders_cross_junction() {
+        // When a child's center column equals the parent's descender column,
+        // the branch bar renders a 4-way cross glyph instead of a tee-down.
+        let root = DsNode {
+            keys: vec!["10".into(), "20".into()],
+            children: vec![
+                DsNode {
+                    keys: vec!["5".into()],
+                    ..DsNode::default()
+                },
+                DsNode {
+                    keys: vec!["15".into()],
+                    ..DsNode::default()
+                },
+                DsNode {
+                    keys: vec!["25".into()],
+                    ..DsNode::default()
+                },
+            ],
+            ..DsNode::default()
+        };
+
+        // Rounded style: ┼
+        let rounded =
+            DataStructureRenderer::new(&spec(DsKind::BTree, root.clone()), Theme::default())
+                .render(false)
+                .unwrap();
+        assert!(
+            rounded.contains('┼'),
+            "aligned child must render cross junction: {rounded}"
+        );
+        assert_eq!(
+            rounded.matches('┬').count(),
+            0,
+            "no tee-down should appear when child aligned: {rounded}"
+        );
+
+        // Ascii style: +
+        let ascii = DataStructureRenderer::new(&spec(DsKind::BTree, root.clone()), Theme::ascii())
+            .render(false)
+            .unwrap();
+        assert!(
+            ascii.contains("+---------+---------+"),
+            "ascii cross junction: {ascii}"
+        );
+
+        // Double style: ╬
+        let double = DataStructureRenderer::new(
+            &spec(DsKind::BTree, root.clone()),
+            Theme::new(BoxStyle::Double),
+        )
+        .render(false)
+        .unwrap();
+        assert!(
+            double.contains('╬'),
+            "double style cross junction: {double}"
+        );
+
+        // Heavy style: ╋
+        let heavy =
+            DataStructureRenderer::new(&spec(DsKind::BTree, root), Theme::new(BoxStyle::Heavy))
+                .render(false)
+                .unwrap();
+        assert!(heavy.contains('╋'), "heavy style cross junction: {heavy}");
     }
 }

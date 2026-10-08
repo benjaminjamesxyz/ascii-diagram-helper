@@ -401,8 +401,9 @@ pub struct DataStructureSpec {
     /// B-tree root (`kind: "btree"`).
     #[serde(default)]
     pub btree_root: Option<DsNode>,
-    /// Value chain for `kind: "linkedlist"`, rendered head → … → ∅.
-    #[serde(default)]
+    /// Value chain for `kind: "linkedlist"`, rendered head → … → ∅. Numbers
+    /// may be given unquoted in JSON.
+    #[serde(default, deserialize_with = "string_or_number::vec")]
     pub nodes: Vec<String>,
     /// Entry label drawn before the first linked-list node (default
     /// `"head"`).
@@ -441,6 +442,22 @@ mod tests {
         let root = spec.btree_root.unwrap();
         assert_eq!(root.value, "8");
         assert_eq!(root.keys, vec!["10", "20"]);
+    }
+
+    #[test]
+    fn test_json_unquoted_linkedlist_nodes() {
+        let spec: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"linkedlist","nodes":[1,2,3]}"#).unwrap();
+        assert_eq!(spec.nodes, vec!["1", "2", "3"]);
+
+        let parsed: DiagramSpec =
+            serde_json::from_str(r#"{"type":"datastructure","kind":"linkedlist","nodes":[1,2,3]}"#)
+                .unwrap();
+        if let DiagramSpec::DataStructure(ds) = parsed {
+            assert_eq!(ds.nodes, vec!["1", "2", "3"]);
+        } else {
+            panic!("expected DataStructure variant");
+        }
     }
 
     #[test]

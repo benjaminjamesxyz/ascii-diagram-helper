@@ -1,6 +1,6 @@
 {
   "name": "ascii-diagram-helper",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Rust-based ASCII and Unicode diagram tool for Pi AI agent harness",
   "license": "MIT",
   "type": "module",

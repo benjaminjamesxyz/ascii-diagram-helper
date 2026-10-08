@@ -1,5 +1,21 @@
 # Sprint v0.10.0 — Backlog Features: Data-Structure Family Expansion
 
+**OUTCOME (cycle 2, converged):** All 4 backlog deliverables implemented
+and verified by independent tester→reviewer pairs:
+1. `feat/ds-kinds`: queue (single-cell boxes with front/rear labels, deque support),
+   heap (complete binary tree with 2048 node count guard), graph (adjacency
+   list buckets with self-loop support), CLI example arms, and styles.
+2. `feat/ds-shorthand2`: `ds linkedlist` and `ds array` shorthand forms with
+   updated `DS_DSL_HINT` and error messaging.
+3. `docs/limitations`: v0.9.0 reviewer-rejected findings compiled into README
+   Known Limitations (NO_COLOR precedence, single-pipe fallback, lone color,
+   paren-first trees, parser header-only policy).
+4. `skill/qa-checklist`: reusable `ascii-diagram-qa` skill with 7-type probe matrix,
+   findings format, reviewer audit protocol, and gates context.
+All 4 reviewer verdicts `satisfied` (cycle 2 resolved blocker B1 heap count bound).
+214 tests green (up from 193), clippy baseline-only (7 warnings), cargo fmt clean.
+Released as v0.10.0 pending approval.
+
 **Goal:** clear the feature backlog: three new data-structure kinds (queue,
 heap, graph), `ds linkedlist` / `ds array` shorthand, README Known
 Limitations for the v0.9.0 rejected findings, and the tester checklist

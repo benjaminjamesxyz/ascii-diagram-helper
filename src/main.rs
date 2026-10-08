@@ -74,7 +74,7 @@ enum Commands {
     },
     /// Generate example diagram specs for quick reference
     Example {
-        /// Type of example: flowchart, sequence, architecture, tree, table, stack, datastructure
+        /// Type of example: flowchart, sequence, architecture, tree, table, stack, datastructure, queue, heap, graph
         #[arg(value_name = "TYPE", default_value = "flowchart")]
         diagram_type: String,
     },
@@ -167,6 +167,15 @@ color: cyan
                 }
                 "bst" | "binarytree" => {
                     r#"{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6","14","4"]}"#
+                }
+                "queue" => {
+                    r#"{"type":"datastructure","kind":"queue","title":"Job Queue","nodes":["build","test","deploy"]}"#
+                }
+                "heap" => {
+                    r#"{"type":"datastructure","kind":"heap","title":"Min-Heap","values":[1,3,2,6,4,5]}"#
+                }
+                "graph" => {
+                    r#"{"type":"datastructure","kind":"graph","title":"Adjacency List","nodes":["a","b","c","d"],"edges":[["a","b"],["a","c"],["b","d"],["c","d"],["d","a"],["d","d"]]}"#
                 }
                 _ => {
                     r"graph TD

@@ -29,9 +29,16 @@ const SIBLING_GAP: usize = 4;
 /// pre-fix.
 const MAX_RENDER_DEPTH: usize = 2048;
 
+/// Maximum node count for `kind: "heap"`. A heap is a complete binary tree
+/// (depth = log2 n), so the depth-based MAX_RENDER_DEPTH guard is
+/// unreachable; heaps are bounded by value count instead.
+const MAX_HEAP_NODES: usize = 2048;
+
 /// Renders textbook-style data-structure diagrams: binary trees
 /// (`kind: "tree"`), B-trees (`kind: "btree"`), linked lists
-/// (`kind: "linkedlist"`), and arrays (`kind: "array"`).
+/// (`kind: "linkedlist"`), arrays (`kind: "array"`), queues
+/// (`kind: "queue"`), heaps (`kind: "heap"`), and graphs
+/// (`kind: "graph"`).
 pub struct DataStructureRenderer<'a> {
     spec: &'a DataStructureSpec,
     theme: Theme,
@@ -49,11 +56,15 @@ impl<'a> DataStructureRenderer<'a> {
     ///
     /// Returns `Err` when the spec carries nothing renderable: `tree` needs
     /// `root` or `values`, `btree` needs `btree_root`, `linkedlist` needs
-    /// `nodes`, and `array` needs `values`.
+    /// `nodes`, `array` needs `values`, `queue` needs `nodes`, `heap` needs
+    /// `values`, and `graph` needs `nodes` (with every edge endpoint among
+    /// them).
     pub fn render(&self, colored: bool) -> Result<String, String> {
         let (mut lines, width) = match self.spec.kind {
             DsKind::LinkedList => self.render_linkedlist()?,
             DsKind::Array => self.render_array()?,
+            DsKind::Queue => self.render_queue()?,
+            DsKind::Graph => self.render_graph()?,
             DsKind::Tree => {
                 let root = self
                     .spec
@@ -72,6 +83,23 @@ impl<'a> DataStructureRenderer<'a> {
                     .btree_root
                     .clone()
                     .ok_or_else(|| "btree diagram needs a `btree_root` node".to_string())?;
+                let block = self.render_node(&root, None, colored, 0)?;
+                (block.lines, block.width)
+            }
+            DsKind::Heap => {
+                // A heap is a complete binary tree: children of the value at
+                // index `i` sit at `2i + 1` and `2i + 2`. Building and
+                // rendering go through the same tree layout as `tree`.
+                // Depth grows logarithmically, so MAX_RENDER_DEPTH can never
+                // fire here — heaps are bounded by NODE COUNT instead
+                // (a 3000-value heap renders a 1.4 MB, 16k-column diagram).
+                if self.spec.values.len() > MAX_HEAP_NODES {
+                    return Err(format!(
+                        "heap diagram exceeds the maximum node count ({MAX_HEAP_NODES}); a complete binary tree renders 2^depth wide rows - use fewer values"
+                    ));
+                }
+                let root = build_heap(&self.spec.values)
+                    .ok_or_else(|| "heap diagram needs a `values` list".to_string())?;
                 let block = self.render_node(&root, None, colored, 0)?;
                 (block.lines, block.width)
             }
@@ -120,14 +148,14 @@ impl<'a> DataStructureRenderer<'a> {
         let (box_lines, box_w) = self.node_box(node, effective, colored);
 
         let child_nodes: Vec<&DsNode> = match self.spec.kind {
-            DsKind::Tree => [node.left.as_deref(), node.right.as_deref()]
+            DsKind::Tree | DsKind::Heap => [node.left.as_deref(), node.right.as_deref()]
                 .iter()
                 .flatten()
                 .copied()
                 .collect(),
             DsKind::BTree => node.children.iter().collect(),
             // Linear kinds render their own single-row layouts.
-            DsKind::LinkedList | DsKind::Array => Vec::new(),
+            DsKind::LinkedList | DsKind::Array | DsKind::Queue | DsKind::Graph => Vec::new(),
         };
         // Recurse in a slim stack frame: debug-build frames for the full
         // layout body are far too wide to stack 2048 deep, so the recursion
@@ -409,13 +437,170 @@ impl<'a> DataStructureRenderer<'a> {
         Ok((lines, width))
     }
 
+    /// Renders `kind: "queue"`: a single left→right row of single-cell node
+    /// boxes between the `front` and `rear` labels (`front_label`/
+    /// `rear_label`, defaults `"front"`/`"rear"`). The front label points
+    /// into the first box and the last box points at the rear label, so the
+    /// same layout doubles as a deque when both labels are set.
+    fn render_queue(&self) -> Result<(Vec<String>, usize), String> {
+        if self.spec.nodes.is_empty() {
+            return Err("queue diagram needs a `nodes` list".to_string());
+        }
+        let front = self.spec.front_label.as_deref().unwrap_or("front");
+        let rear = self.spec.rear_label.as_deref().unwrap_or("rear");
+
+        // Uniform cell width keeps the boxes visually level.
+        let cell_w = self
+            .spec
+            .nodes
+            .iter()
+            .map(|v| UnicodeWidthStr::width(v.as_str()))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let boxes: Vec<(Vec<String>, usize)> = self
+            .spec
+            .nodes
+            .iter()
+            .map(|v| self.cells_box_widths(&[v.as_str()], &[cell_w], None, false))
+            .collect();
+
+        let arrow = format!(
+            "{}{}",
+            self.theme.horizontal_line(),
+            self.theme.arrow_right()
+        );
+        let conn = format!(" {arrow} ");
+        let join_w = UnicodeWidthStr::width(conn.as_str());
+        let joiner = " ".repeat(join_w);
+        let pad = " ".repeat(UnicodeWidthStr::width(front) + join_w);
+
+        let mut top = pad.clone();
+        let mut mid = format!("{front}{conn}");
+        let mut bot = pad;
+        for (i, (lines, _)) in boxes.iter().enumerate() {
+            if i > 0 {
+                top.push_str(&joiner);
+                mid.push_str(&conn);
+                bot.push_str(&joiner);
+            }
+            top.push_str(&lines[0]);
+            mid.push_str(&lines[1]);
+            bot.push_str(&lines[2]);
+        }
+        mid.push_str(&format!("{conn}{rear}"));
+        let lines = vec![top, mid, bot];
+        let width = lines
+            .iter()
+            .map(|l| UnicodeWidthStr::width(l.as_str()))
+            .max()
+            .unwrap_or(0);
+        Ok((lines, width))
+    }
+
+    /// Renders `kind: "graph"` as a textbook adjacency list: one bucket row
+    /// per source node (in `nodes` order) — the source's single-cell box,
+    /// then a theme arrow into a chain of single-cell neighbor boxes, one
+    /// per outgoing edge, duplicated in every bucket that references them.
+    /// A self-loop renders as the source's own box in its own chain
+    /// (`│ a │ ─► │ a │`) — the adjacency-list form of a loop-back edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when `nodes` is empty, an edge is not a `[from, to]`
+    /// pair, or an edge references an unknown node (named in the error).
+    fn render_graph(&self) -> Result<(Vec<String>, usize), String> {
+        if self.spec.nodes.is_empty() {
+            return Err("graph diagram needs a `nodes` list".to_string());
+        }
+        let mut neighbors: Vec<Vec<&str>> = vec![Vec::new(); self.spec.nodes.len()];
+        let index: std::collections::HashMap<&str, usize> = self
+            .spec
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), i))
+            .collect();
+        for edge in &self.spec.edges {
+            let [from, to] = edge.as_slice() else {
+                return Err("graph edges must be [from, to] pairs".to_string());
+            };
+            let unknown: Vec<&str> = [from.as_str(), to.as_str()]
+                .into_iter()
+                .filter(|end| !index.contains_key(end))
+                .collect();
+            if !unknown.is_empty() {
+                let list = unknown
+                    .iter()
+                    .map(|n| format!("\"{n}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!("graph edge references unknown node(s): {list}"));
+            }
+            let from_idx = index[from.as_str()];
+            neighbors[from_idx].push(to.as_str());
+        }
+
+        // One uniform cell width across sources and neighbors keeps every
+        // bucket box the same size, so rows align vertically.
+        let mut labels: Vec<&str> = self.spec.nodes.iter().map(String::as_str).collect();
+        labels.extend(neighbors.iter().flatten().copied());
+        let cell_w = labels
+            .iter()
+            .map(|l| UnicodeWidthStr::width(*l))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+
+        let arrow = format!(
+            "{}{}",
+            self.theme.horizontal_line(),
+            self.theme.arrow_right()
+        );
+        let conn = format!(" {arrow} ");
+        let join_w = UnicodeWidthStr::width(conn.as_str());
+        let joiner = " ".repeat(join_w);
+
+        let mut lines: Vec<String> = Vec::new();
+        for (i, bucket) in neighbors.iter().enumerate() {
+            if i > 0 {
+                lines.push(String::new());
+            }
+            let source = self
+                .cells_box_widths(&[self.spec.nodes[i].as_str()], &[cell_w], None, false)
+                .0;
+            let chain: Vec<(Vec<String>, usize)> = bucket
+                .iter()
+                .map(|n| self.cells_box_widths(&[n], &[cell_w], None, false))
+                .collect();
+            let mut top = source[0].clone();
+            let mut mid = source[1].clone();
+            let mut bot = source[2].clone();
+            for (cell_lines, _) in &chain {
+                top.push_str(&joiner);
+                top.push_str(&cell_lines[0]);
+                mid.push_str(&conn);
+                mid.push_str(&cell_lines[1]);
+                bot.push_str(&joiner);
+                bot.push_str(&cell_lines[2]);
+            }
+            lines.extend([top, mid, bot]);
+        }
+        let width = lines
+            .iter()
+            .map(|l| UnicodeWidthStr::width(l.as_str()))
+            .max()
+            .unwrap_or(0);
+        Ok((lines, width))
+    }
+
     /// Builds the 3-line node box: `┌────┐ / │ 10 │ 20 │ / └────┘`. Binary
     /// nodes render their single `value`; B-tree nodes render `keys` cells
     /// separated by the theme's vertical glyph. Border glyphs (corners,
     /// bars, cell separators) take `color`; label text stays default.
     fn node_box(&self, node: &DsNode, color: Option<Color>, colored: bool) -> (Vec<String>, usize) {
         let cells: Vec<&str> = match self.spec.kind {
-            DsKind::Tree => vec![&node.value],
+            DsKind::Tree | DsKind::Heap => vec![&node.value],
             // B-tree nodes render `keys`; a keyless node falls back to its
             // `value` so `DsNode::leaf("5")` still renders a labeled cell.
             DsKind::BTree if !node.keys.is_empty() => {
@@ -424,7 +609,9 @@ impl<'a> DataStructureRenderer<'a> {
             DsKind::BTree if node.value.is_empty() => vec![""],
             DsKind::BTree => vec![&node.value],
             // Linear kinds build their boxes in their own render fns.
-            DsKind::LinkedList | DsKind::Array => vec![&node.value],
+            DsKind::LinkedList | DsKind::Array | DsKind::Queue | DsKind::Graph => {
+                vec![&node.value]
+            }
         };
         let cell_w = cells
             .iter()
@@ -561,6 +748,22 @@ fn less_than(a: &str, b: &str) -> bool {
         (Ok(x), Ok(y)) => x < y,
         _ => a < b,
     }
+}
+
+/// Builds a complete binary tree from `values` by index: the children of
+/// the value at `i` sit at `2i + 1` and `2i + 2`. Links are attached
+/// iteratively from the last index down, so large inputs never recurse.
+fn build_heap(values: &[String]) -> Option<DsNode> {
+    let mut nodes: Vec<DsNode> = values.iter().map(|v| DsNode::leaf(v.clone())).collect();
+    for i in (0..nodes.len()).rev() {
+        let left =
+            (2 * i + 1 < nodes.len()).then(|| Box::new(std::mem::take(&mut nodes[2 * i + 1])));
+        let right =
+            (2 * i + 2 < nodes.len()).then(|| Box::new(std::mem::take(&mut nodes[2 * i + 2])));
+        nodes[i].left = left;
+        nodes[i].right = right;
+    }
+    nodes.into_iter().next()
 }
 
 #[cfg(test)]
@@ -836,6 +1039,282 @@ mod tests {
                 .render(false)
                 .is_err()
         );
+    }
+
+    fn queue_spec(nodes: &[&str]) -> DataStructureSpec {
+        DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Queue,
+            nodes: nodes.iter().map(|s| (*s).to_string()).collect(),
+            ..DataStructureSpec::default()
+        }
+    }
+
+    fn heap_spec(values: &[&str]) -> DataStructureSpec {
+        DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Heap,
+            values: values.iter().map(|s| (*s).to_string()).collect(),
+            ..DataStructureSpec::default()
+        }
+    }
+
+    fn graph_spec(nodes: &[&str], edges: &[&[&str; 2]]) -> DataStructureSpec {
+        DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Graph,
+            nodes: nodes.iter().map(|s| (*s).to_string()).collect(),
+            edges: edges
+                .iter()
+                .map(|pair| pair.iter().map(|s| (*s).to_string()).collect())
+                .collect(),
+            ..DataStructureSpec::default()
+        }
+    }
+
+    #[test]
+    fn test_queue_row_front_to_rear() {
+        let out =
+            DataStructureRenderer::new(&queue_spec(&["a", "b", "c"]), Theme::new(BoxStyle::Sharp))
+                .render(false)
+                .unwrap();
+        assert!(
+            out.contains("front ─► │ a │"),
+            "arrow into first box: {out}"
+        );
+        assert!(
+            out.contains("│ c │ ─► rear"),
+            "arrow out of last box: {out}"
+        );
+        assert!(out.contains('►'), "theme arrow glyphs");
+        assert!(!out.contains("││"), "boxes separated by arrows: {out}");
+        assert_eq!(out.lines().count(), 3, "single-row layout");
+        let order = ["front", "│ a │", "│ b │", "│ c │", "rear"]
+            .iter()
+            .map(|needle| out.find(needle).unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "front → chain → rear order"
+        );
+        assert_eq!(out.matches("front").count(), 1);
+        assert_eq!(out.matches("rear").count(), 1);
+    }
+
+    #[test]
+    fn test_queue_ascii_fallback() {
+        let out = DataStructureRenderer::new(&queue_spec(&["a", "b"]), Theme::ascii())
+            .render(false)
+            .unwrap();
+        assert!(out.contains("front -> | a | -> | b | -> rear"), "{out}");
+        assert!(
+            !out.contains('►') && !out.contains('│') && !out.contains('─'),
+            "ascii theme has no Unicode glyphs"
+        );
+    }
+
+    #[test]
+    fn test_queue_custom_labels_double_as_deque() {
+        let spec = DataStructureSpec {
+            front_label: Some("push_back".into()),
+            rear_label: Some("push_front".into()),
+            ..queue_spec(&["1"])
+        };
+        let out = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap();
+        assert!(out.contains("push_back ─► │ 1 │ ─► push_front"), "{out}");
+        assert!(!out.contains("front ") && !out.contains(" rear"), "{out}");
+    }
+
+    #[test]
+    fn test_queue_needs_nodes() {
+        assert!(
+            DataStructureRenderer::new(&queue_spec(&[]), Theme::ascii())
+                .render(false)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_heap_complete_tree_by_index() {
+        // values [1,2,3,4,5,6,7] build a perfect tree: 1 over (2,3),
+        // 2 over (4,5), 3 over (6,7).
+        let out = DataStructureRenderer::new(
+            &heap_spec(&["1", "2", "3", "4", "5", "6", "7"]),
+            Theme::ascii(),
+        )
+        .render(false)
+        .unwrap();
+        let row_of = |needle: &str| {
+            out.lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} present: {out}"))
+        };
+        let (r1, r2, r3) = (row_of("| 1 |"), row_of("| 2 |"), row_of("| 3 |"));
+        assert!(r1 < r2 && r2 == r3, "2 and 3 share the child row: {out}");
+        assert_eq!(row_of("| 4 |"), row_of("| 5 |"), "4 and 5 share a row");
+        assert_eq!(row_of("| 6 |"), row_of("| 7 |"), "6 and 7 share a row");
+        assert!(row_of("| 4 |") > r2, "grandchildren below their parent");
+        let col = |s: &str, c: char| {
+            out.lines()
+                .nth(row_of(s))
+                .unwrap()
+                .chars()
+                .position(|ch| ch == c)
+                .unwrap()
+        };
+        assert!(col("| 2 |", '2') < col("| 1 |", '1') && col("| 1 |", '1') < col("| 3 |", '3'));
+        assert!(col("| 4 |", '4') < col("| 2 |", '2') && col("| 5 |", '5') > col("| 2 |", '2'));
+    }
+
+    #[test]
+    fn test_heap_unicode_and_ascii_glyphs() {
+        let unicode =
+            DataStructureRenderer::new(&heap_spec(&["1", "2"]), Theme::new(BoxStyle::Sharp))
+                .render(false)
+                .unwrap();
+        assert!(unicode.contains('┌') && unicode.contains('│'), "{unicode}");
+        assert!(unicode.contains("│ 1 │") && unicode.contains("│ 2 │"));
+        let ascii = DataStructureRenderer::new(&heap_spec(&["1", "2"]), Theme::ascii())
+            .render(false)
+            .unwrap();
+        assert!(ascii.contains('+') && ascii.contains('-') && ascii.contains('|'));
+        assert!(!ascii.contains('│') && !ascii.contains('┌'), "no Unicode");
+    }
+
+    #[test]
+    fn test_heap_single_value_and_odd_count() {
+        let single = DataStructureRenderer::new(&heap_spec(&["42"]), Theme::ascii())
+            .render(false)
+            .unwrap();
+        assert!(single.contains("| 42 |"), "{single}");
+        assert_eq!(single.lines().count(), 3, "lone root has no connectors");
+        // 5 values: last level partially filled — 4 and 5 are 2's children.
+        let odd =
+            DataStructureRenderer::new(&heap_spec(&["1", "2", "3", "4", "5"]), Theme::ascii())
+                .render(false)
+                .unwrap();
+        let row_of = |needle: &str| {
+            odd.lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} present: {odd}"))
+        };
+        assert_eq!(row_of("| 4 |"), row_of("| 5 |"), "both under 2");
+        assert!(row_of("| 3 |") < row_of("| 4 |"), "3's leaf row is last");
+    }
+
+    #[test]
+    fn test_heap_needs_values() {
+        assert!(
+            DataStructureRenderer::new(&heap_spec(&[]), Theme::ascii())
+                .render(false)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_graph_adjacency_buckets() {
+        let out = DataStructureRenderer::new(
+            &graph_spec(&["a", "b", "c"], &[&["a", "b"], &["a", "c"], &["b", "c"]]),
+            Theme::new(BoxStyle::Sharp),
+        )
+        .render(false)
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        // Bucket rows separated by blank lines: 3 buckets → 3*3 + 2 lines.
+        assert_eq!(lines.len(), 11, "one 3-line row per source bucket: {out}");
+        assert_eq!(lines[1], "│ a │ ─► │ b │ ─► │ c │", "a's bucket: {out}");
+        assert_eq!(lines[5], "│ b │ ─► │ c │", "b's bucket: {out}");
+        assert_eq!(lines[9], "│ c │", "edgeless source renders alone: {out}");
+        assert_eq!(
+            out.matches("│ c │").count(),
+            3,
+            "c in a's + b's buckets plus its own source box"
+        );
+        assert_eq!(out.matches("│ a │").count(), 1, "a sources only itself");
+    }
+
+    #[test]
+    fn test_graph_ascii_fallback() {
+        let out =
+            DataStructureRenderer::new(&graph_spec(&["a", "b"], &[&["a", "b"]]), Theme::ascii())
+                .render(false)
+                .unwrap();
+        assert!(out.contains("| a | -> | b |"), "{out}");
+        assert!(
+            !out.contains('►') && !out.contains('│') && !out.contains('─'),
+            "ascii theme has no Unicode glyphs"
+        );
+    }
+
+    #[test]
+    fn test_graph_self_loop_is_own_bucket_cell() {
+        let out = DataStructureRenderer::new(
+            &graph_spec(&["a", "b"], &[&["a", "a"], &["a", "b"]]),
+            Theme::new(BoxStyle::Sharp),
+        )
+        .render(false)
+        .unwrap();
+        assert!(
+            out.contains("│ a │ ─► │ a │ ─► │ b │"),
+            "self-loop renders as the source's own cell in its chain: {out}"
+        );
+    }
+
+    #[test]
+    fn test_graph_unknown_endpoint_named() {
+        let one = DataStructureRenderer::new(&graph_spec(&["a"], &[&["a", "zz"]]), Theme::ascii())
+            .render(false)
+            .unwrap_err();
+        assert!(one.contains('"'), "names the unknown node: {one}");
+        assert!(one.contains("zz"), "{one}");
+        let both = DataStructureRenderer::new(&graph_spec(&["a"], &[&["x", "y"]]), Theme::ascii())
+            .render(false)
+            .unwrap_err();
+        assert!(both.contains("x") && both.contains("y"), "{both}");
+    }
+
+    #[test]
+    fn test_graph_needs_nodes_and_valid_pairs() {
+        assert!(
+            DataStructureRenderer::new(&graph_spec(&[], &[]), Theme::ascii())
+                .render(false)
+                .is_err()
+        );
+        for bad in [vec!["a"], vec!["a", "b", "c"]] {
+            let edges: Vec<Vec<String>> = vec![bad.iter().map(|s| (*s).to_string()).collect()];
+            let spec = DataStructureSpec {
+                style: BoxStyle::Sharp,
+                kind: DsKind::Graph,
+                nodes: vec!["a".into(), "b".into()],
+                edges,
+                ..DataStructureSpec::default()
+            };
+            let err = DataStructureRenderer::new(&spec, Theme::ascii())
+                .render(false)
+                .unwrap_err();
+            assert!(err.contains("[from, to] pairs"), "{err}");
+        }
+    }
+
+    #[test]
+    fn test_queue_heap_graph_colored_matches_plain() {
+        let specs = [
+            queue_spec(&["a", "b"]),
+            heap_spec(&["1", "2", "3"]),
+            graph_spec(&["a", "b"], &[&["a", "b"]]),
+        ];
+        for spec in specs {
+            let ds = DiagramSpec::DataStructure(spec);
+            let plain = crate::render_diagram_colored(&ds, false).unwrap();
+            let colored = crate::render_diagram_colored(&ds, true).unwrap();
+            assert_eq!(
+                plain, colored,
+                "color-less kinds carry no color source — identical output"
+            );
+            assert!(!plain.contains('\x1b'), "plain render has zero ANSI");
+        }
     }
 
     #[test]
@@ -1194,5 +1673,36 @@ mod tests {
                 .render(false)
                 .unwrap();
         assert!(heavy.contains('╋'), "heavy style cross junction: {heavy}");
+    }
+
+    #[test]
+    fn test_heap_over_node_count_errors_cleanly() {
+        let spec = DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Heap,
+            values: (0..2049).map(|i| i.to_string()).collect(),
+            ..DataStructureSpec::default()
+        };
+        let err = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap_err();
+        assert!(
+            err.contains("maximum node count (2048)"),
+            "clean count-based error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_heap_at_node_count_limit_renders() {
+        let spec = DataStructureSpec {
+            style: BoxStyle::Sharp,
+            kind: DsKind::Heap,
+            values: (0..2048).map(|i| i.to_string()).collect(),
+            ..DataStructureSpec::default()
+        };
+        let out = DataStructureRenderer::new(&spec, Theme::new(BoxStyle::Sharp))
+            .render(false)
+            .unwrap();
+        assert!(out.contains("│ 0 │"), "boundary heap renders");
     }
 }

@@ -27,6 +27,18 @@ mod string_or_number {
             .map(|v| coerce(v).map_err(serde::de::Error::custom))
             .collect()
     }
+
+    /// Same coercion for the rows of `"edges":[["a","b"],[1,2]]`.
+    pub fn vec_vec<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<String>>, D::Error> {
+        Vec::<Vec<Value>>::deserialize(d)?
+            .into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|v| coerce(v).map_err(serde::de::Error::custom))
+                    .collect()
+            })
+            .collect()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -344,8 +356,10 @@ pub struct ArchitectureSpec {
 
 /// Data-structure diagram kind: `tree` (binary tree, `value`/`left`/`right`
 /// nodes or `values` insertion order), `btree` (multi-key nodes with
-/// `keys`/`children`), `linkedlist` (value chain in `nodes`), or `array`
-/// (boxed cells from `values`).
+/// `keys`/`children`), `linkedlist` (value chain in `nodes`), `array`
+/// (boxed cells from `values`), `queue` (front/rear-labeled single row of
+/// `nodes`), `heap` (complete binary tree from `values`), or `graph`
+/// (adjacency buckets over `nodes` + `edges`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DsKind {
@@ -354,6 +368,9 @@ pub enum DsKind {
     BTree,
     LinkedList,
     Array,
+    Queue,
+    Heap,
+    Graph,
 }
 
 /// A node in a data-structure diagram. Binary trees use `value`/`left`/
@@ -415,16 +432,33 @@ pub struct DataStructureSpec {
     /// B-tree root (`kind: "btree"`).
     #[serde(default)]
     pub btree_root: Option<DsNode>,
-    /// Value chain for `kind: "linkedlist"`, rendered head → … → ∅. Numbers
-    /// may be given unquoted in JSON.
+    /// Value chain for `kind: "linkedlist"` (rendered head → … → ∅), the
+    /// single-cell boxes for `kind: "queue"`, and the vertices for
+    /// `kind: "graph"`. Numbers may be given unquoted in JSON.
     #[serde(default, deserialize_with = "string_or_number::vec")]
     pub nodes: Vec<String>,
     /// Entry label drawn before the first linked-list node (default
     /// `"head"`).
     #[serde(default)]
     pub head_label: Option<String>,
+    /// Label drawn before the first queue box (`kind: "queue"`; default
+    /// `"front"`).
+    #[serde(default)]
+    pub front_label: Option<String>,
+    /// Label drawn after the last queue box (`kind: "queue"`; default
+    /// `"rear"`).
+    #[serde(default)]
+    pub rear_label: Option<String>,
+    /// Edge list for `kind: "graph"` as `[from, to]` pairs; both endpoints
+    /// must appear in `nodes`. Numbers may be given unquoted in JSON.
+    #[serde(default, deserialize_with = "string_or_number::vec_vec")]
+    pub edges: Vec<Vec<String>>,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "DataStructureSpec is plain Vec/Option fields by spec; boxing any of them to shrink the padding-driven size spread over SequenceSpec would ripple through every renderer"
+)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum DiagramSpec {
@@ -485,6 +519,31 @@ mod tests {
                 "cell {cell}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn test_json_queue_heap_graph_parse() {
+        let queue: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"queue","nodes":["a","b"]}"#).unwrap();
+        assert_eq!(queue.nodes, vec!["a", "b"]);
+        assert_eq!(queue.front_label, None, "label defaults applied at render");
+        assert_eq!(queue.rear_label, None);
+
+        let labeled: DataStructureSpec = serde_json::from_str(
+            r#"{"kind":"queue","nodes":["a"],"front_label":"head","rear_label":"tail"}"#,
+        )
+        .unwrap();
+        assert_eq!(labeled.front_label.as_deref(), Some("head"));
+        assert_eq!(labeled.rear_label.as_deref(), Some("tail"));
+
+        let heap: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"heap","values":[1,3,2]}"#).unwrap();
+        assert_eq!(heap.values, vec!["1", "3", "2"]);
+
+        let graph: DataStructureSpec =
+            serde_json::from_str(r#"{"kind":"graph","nodes":["a","b"],"edges":[["a","b"],[1,2]]}"#)
+                .unwrap();
+        assert_eq!(graph.edges, vec![vec!["a", "b"], vec!["1", "2"]]);
     }
 
     #[test]

@@ -57,6 +57,7 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - Arrays: `values` as one boxed cell row with a centered index ruler above
   - DSL shorthand: `ds tree 8 3 10 1 6` (BST) and `ds btree 10,20 | 3,5 12,15 25,30` (pipe-separated levels, comma-separated keys) — same render as the JSON spec
   - Node colors: `color` on any node (`DsNode`) paints its box border + connector glyphs; descendants inherit the nearest colored ancestor unless overridden; label text stays terminal-default
+  - Queues, heaps, graphs: `kind: "queue"` renders `nodes` as a single row of single-cell boxes with an arrow from `front_label` (default `front`) into the first box and from the last box to `rear_label` (default `rear`) — doubles as a deque; `kind: "heap"` builds a complete binary tree from `values` (children at `2i+1`/`2i+2`) through the tree layout; `kind: "graph"` renders `nodes`/`edges` as a textbook adjacency-bucket list — one source-box row per bucket with an arrow into a chain of duplicated neighbor boxes, self-loops appear as the source's own cell in its chain (`│ a │ ─► │ a │`), and unknown edge endpoints are a clear error
 - **Multiple Styling Modes**:
   - `rounded`: `╭ ─ ╮ │ │ ╰ ─ ╯` (modern smooth terminal look)
   - `sharp`: `┌ ─ ┐ │ │ └ ─ ┘` (classic box-drawing)
@@ -71,7 +72,11 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
   - **Applies** when the subgraph (including all nested members) has no edges crossing its border — rendered as a self-contained block in its own orientation, pasted beside/below the main graph
   - **Applies to nested children** whose own member set is edge-isolated, even when the parent subgraph has external edges (the child moves out; the parent's group box wraps only its remaining members)
   - **Falls back to global direction** as soon as any edge crosses the subgraph boundary (an endpoint outside the block), even if all internal edges agree with the subgraph direction (Mermaid parity — full mixed-direction cluster layout is future work)
-- Header-only diagrams (`flowchart TD` with no nodes or edges) render empty output and exit 0.
+- Header-only diagrams (`flowchart TD` with no nodes or edges) render empty output and exit 0. This leniency is per parser: a bare `sequenceDiagram` header behaves the same (empty output, exit 0) and bare `tree` substitutes a `Root` placeholder, while strict parsers reject header-only input with a named error and exit 1 (`table`, `stack`)
+- Ambiguous single-pipe input falls to the tree parser: `A | B; no pipe here` (one pipe-carrying line, no table markers) renders as a tree, not a table. Table detection requires the `table` keyword, a leading `|`, a `color:` directive followed by a table-shaped line, or ≥2 pipe-carrying lines; tree labels containing `|` (e.g. `cmd1 | filter`) are protected because tree-shaped input is checked before the pipe heuristic
+- Degenerate paren-first tree input like `(y) x` parses as an empty-name node with the parenthesized text and trailing text merged into one annotation (`(y x)`) — all input text is preserved, there is just no node name
+- `NO_COLOR` vs explicit `--color always`: the flag wins. `NO_COLOR` only forces colors off in the default `auto` mode (as documented by `--help`); the no-color.org standard explicitly allows per-instance arguments to override the environment variable, so `NO_COLOR=1 ascii-diagram --color always ...` still colorizes
+- A lone `color: red` directive with no table rows is not table input: it falls through to the tree parser and passes through verbatim as a single node, exit 0 (only `table` followed by a directive with no rows errors)
 - Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
   - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched
   - Table: `color: <name|#hex>` directive line before the rows (whole-table grid color)

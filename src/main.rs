@@ -200,7 +200,13 @@ Orders --> DB[(PostgreSQL)]"
                         std::process::exit(1);
                     });
                     render_dsl_colored(&content, style, colored)
-                } else if joined.contains('/') {
+                } else if joined.contains('/')
+                    && !joined.contains(' ')
+                    && !joined.trim_start().starts_with('{')
+                {
+                    // Path-looking single-token arg that does not exist.
+                    // JSON specs and multi-word DSL are exempt: JSON freely
+                    // contains '/' inside values (e.g. "/users" endpoints).
                     eprintln!("Error: file not found: {joined}");
                     std::process::exit(1);
                 } else {

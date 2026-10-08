@@ -117,12 +117,16 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         || first_line.starts_with("memory-map")
     {
         parse_stack_dsl(trimmed, default_style)
-    } else if is_table_dsl(trimmed) {
-        parse_table_dsl(trimmed, default_style)
     } else if first_line.starts_with("tree")
         || trimmed.lines().any(|l| l.trim_start().starts_with("- "))
     {
+        // Tree must be checked BEFORE the pipe-shape table heuristic: tree
+        // labels legitimately contain '|' (e.g. 'cmd1 | filter'), and the
+        // >=2-pipe-lines heuristic would otherwise hijack them into the
+        // table parser.
         parse_tree_dsl(trimmed, default_style)
+    } else if is_table_dsl(trimmed) {
+        parse_table_dsl(trimmed, default_style)
     } else if first_line.starts_with("datastructure") {
         Err(
             "datastructure diagrams are JSON-only, e.g. {\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\",\"3\",\"10\",\"1\",\"6\"]} — or use the `ds` shorthand, e.g. `ds tree 8 3 10 1 6`"

@@ -189,9 +189,11 @@ fn is_table_dsl(input: &str) -> bool {
 
 /// Expected `ds` syntax, appended to every malformed-input error so the
 /// message names the fix.
-const DS_DSL_HINT: &str = "expected `ds tree <value...>` or \
-    `ds btree <rootkeys> | <level cells> | ...`, e.g. \
-    `ds tree 8 3 10 1 6` or `ds btree 10,20 | 3,5 12,15 25,30`";
+const DS_DSL_HINT: &str = "expected `ds tree <value...>`, \
+    `ds btree <rootkeys> | <level cells> | ...`, \
+    `ds linkedlist <node...>`, or `ds array <value...>`, e.g. \
+    `ds tree 8 3 10 1 6`, `ds btree 10,20 | 3,5 12,15 25,30`, \
+    `ds linkedlist 10 20 30`, or `ds array a b c`";
 
 /// Parses the `ds` DSL shorthand into a [`DataStructureSpec`] diagram.
 ///
@@ -203,6 +205,10 @@ const DS_DSL_HINT: &str = "expected `ds tree <value...>` or \
 ///   are whitespace-separated. Children are assigned level-order (BFS): a
 ///   node with `n` keys consumes up to `n + 1` cells as its children, and
 ///   fewer cells render as-is (same as the JSON path).
+/// - `ds linkedlist <n...>` — linked list of the given values, e.g.
+///   `ds linkedlist 10 20 30`
+/// - `ds array <v...>` — array cells with an index ruler, e.g.
+///   `ds array a b c`
 ///
 /// # Errors
 ///
@@ -274,6 +280,32 @@ pub fn parse_datastructure_dsl(
                 style: default_style,
                 kind: DsKind::BTree,
                 btree_root: Some(root),
+                ..DataStructureSpec::default()
+            }))
+        }
+        "linkedlist" => {
+            let nodes: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
+            if nodes.is_empty() {
+                return Err(format!(
+                    "ds linkedlist needs at least one node; {DS_DSL_HINT}"
+                ));
+            }
+            Ok(DiagramSpec::DataStructure(DataStructureSpec {
+                style: default_style,
+                kind: DsKind::LinkedList,
+                nodes,
+                ..DataStructureSpec::default()
+            }))
+        }
+        "array" => {
+            let values: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
+            if values.is_empty() {
+                return Err(format!("ds array needs at least one value; {DS_DSL_HINT}"));
+            }
+            Ok(DiagramSpec::DataStructure(DataStructureSpec {
+                style: default_style,
+                kind: DsKind::Array,
+                values,
                 ..DataStructureSpec::default()
             }))
         }
@@ -2739,6 +2771,8 @@ mod tests {
             ("ds btree ,", "empty root key"),
             ("ds btree 10, | 3", "empty root key"),
             ("ds btree 10 | 3,,5", "empty level cell"),
+            ("ds linkedlist", "needs at least one node"),
+            ("ds array", "needs at least one value"),
         ] {
             let err = parse_dsl_or_json(input, BoxStyle::Rounded)
                 .err()
@@ -2746,7 +2780,68 @@ mod tests {
             assert!(err.contains(expect), "`{input}`: {err}");
             // Every error names the expected syntax so it is actionable.
             assert!(err.contains("ds btree 10,20"), "`{input}`: {err}");
+            assert!(err.contains("ds linkedlist 10 20 30"), "`{input}`: {err}");
+            assert!(err.contains("ds array a b c"), "`{input}`: {err}");
         }
+    }
+
+    #[test]
+    fn test_ds_linkedlist_shorthand() {
+        let spec = match parse_dsl_or_json("ds linkedlist 10 20 30", BoxStyle::Rounded).unwrap() {
+            DiagramSpec::DataStructure(ds) => ds,
+            other => panic!("Expected datastructure, got {other:?}"),
+        };
+        assert_eq!(spec.kind, DsKind::LinkedList);
+        assert_eq!(spec.nodes, vec!["10", "20", "30"]);
+        let out = ds_render(&DiagramSpec::DataStructure(spec));
+        assert!(out.contains("10"));
+        assert!(out.contains("∅"));
+    }
+
+    #[test]
+    fn test_ds_array_shorthand() {
+        let spec = match parse_dsl_or_json("ds array a b c", BoxStyle::Rounded).unwrap() {
+            DiagramSpec::DataStructure(ds) => ds,
+            other => panic!("Expected datastructure, got {other:?}"),
+        };
+        assert_eq!(spec.kind, DsKind::Array);
+        assert_eq!(spec.values, vec!["a", "b", "c"]);
+        let out = ds_render(&DiagramSpec::DataStructure(spec));
+        assert!(out.contains('a'));
+        // Index ruler row above the cells.
+        assert!(out.contains('0'));
+        assert!(out.contains('2'));
+    }
+
+    #[test]
+    fn test_ds_linkedlist_matches_json_render() {
+        let dsl_spec = parse_dsl_or_json("ds linkedlist 10 20 30", BoxStyle::Rounded).unwrap();
+        let json_spec = parse_dsl_or_json(
+            r#"{"type":"datastructure","kind":"linkedlist","nodes":["10","20","30"]}"#,
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        // Same spec shape, byte-identical render.
+        let DiagramSpec::DataStructure(ds) = &dsl_spec else {
+            panic!("Expected datastructure")
+        };
+        assert_eq!(ds.nodes, vec!["10", "20", "30"]);
+        assert_eq!(ds_render(&dsl_spec), ds_render(&json_spec));
+    }
+
+    #[test]
+    fn test_ds_array_matches_json_render() {
+        let dsl_spec = parse_dsl_or_json("ds array a b c", BoxStyle::Rounded).unwrap();
+        let json_spec = parse_dsl_or_json(
+            r#"{"type":"datastructure","kind":"array","values":["a","b","c"]}"#,
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        let DiagramSpec::DataStructure(ds) = &dsl_spec else {
+            panic!("Expected datastructure")
+        };
+        assert_eq!(ds.values, vec!["a", "b", "c"]);
+        assert_eq!(ds_render(&dsl_spec), ds_render(&json_spec));
     }
 
     #[test]

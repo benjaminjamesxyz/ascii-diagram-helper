@@ -94,7 +94,12 @@ fn main() {
     };
 
     let output = match cli.command {
-        Some(Commands::Dsl { dsl }) => render_dsl_colored(&dsl, style, colored),
+        Some(Commands::Dsl { dsl }) => {
+            // The --help example advertises escaped sequences ('graph TD\n A --> B'):
+            // unescape literal backslash-n / backslash-t at intake.
+            let unescaped = dsl.replace("\\n", "\n").replace("\\t", "\t");
+            render_dsl_colored(&unescaped, style, colored)
+        }
         Some(Commands::Render { path }) => {
             let content = match path {
                 Some(p) if p.to_str() != Some("-") => fs::read_to_string(&p).unwrap_or_else(|e| {
@@ -151,6 +156,15 @@ BSS Segment
                 "datastructure" | "ds" | "btree" => {
                     r#"{"type":"datastructure","kind":"btree","title":"B-Tree of order 4","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30","35"]}]}}"#
                 }
+                "table" => {
+                    r"table
+color: cyan
+| Service | Port | Protocol | Status |
+| :--- | :---: | :---: | ---: |
+| API Gateway | 8080 | HTTP | active |
+| Auth Service | 8081 | HTTP | active |
+| Database | 5432 | TCP | replica |"
+                }
                 "bst" | "binarytree" => {
                     r#"{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6","14","4"]}"#
                 }
@@ -177,15 +191,22 @@ Orders --> DB[(PostgreSQL)]"
                 render_dsl_colored(&buffer, style, colored)
             } else {
                 let joined = cli.input.join(" ");
-                // If it's a file path that exists, read it; otherwise treat as DSL
+                // If it's a file path that exists, read it; a path-looking arg
+                // (contains '/') that does NOT exist is almost certainly a typo
+                // — error instead of silently rendering it as inline DSL.
                 if std::path::Path::new(&joined).is_file() {
                     let content = fs::read_to_string(&joined).unwrap_or_else(|e| {
                         eprintln!("Error reading file {joined}: {e}");
                         std::process::exit(1);
                     });
                     render_dsl_colored(&content, style, colored)
+                } else if joined.contains('/') {
+                    eprintln!("Error: file not found: {joined}");
+                    std::process::exit(1);
                 } else {
-                    render_dsl_colored(&joined, style, colored)
+                    // Inline DSL; unescape literal \n / \t like `dsl` mode.
+                    let unescaped = joined.replace("\\n", "\n").replace("\\t", "\t");
+                    render_dsl_colored(&unescaped, style, colored)
                 }
             }
         }

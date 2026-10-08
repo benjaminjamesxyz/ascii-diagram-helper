@@ -85,9 +85,25 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
             .map_err(|e| format!("Invalid JSON diagram specification: {e}"));
     }
 
-    // Mermaid allows `;` as a statement separator; normalize to newlines so
-    // single-line inputs (CLI `dsl` mode) parse like multi-line input.
-    let normalized = normalize_semicolons(trimmed);
+    // Mermaid-oriented DSLs (flowchart / sequence / table) allow `;` as a
+    // statement separator; normalize to newlines so single-line inputs (CLI
+    // `dsl` mode) parse like multi-line input. Tree / stack / datastructure
+    // have no `;` statement syntax — normalizing there would split labels
+    // containing literal semicolons (`a;b`), so they bypass it. Table keeps
+    // normalization: its dsl single-line form (`table A | B; 1 | 2`) relies
+    // on the header/data split.
+    let first_raw = trimmed.lines().next().unwrap_or("").trim();
+    let no_semicolon_syntax = first_raw.starts_with("tree")
+        || first_raw.starts_with("stack")
+        || first_raw.starts_with("memory")
+        || first_raw.starts_with("datastructure")
+        || first_raw.split_whitespace().next() == Some("ds")
+        || trimmed.lines().any(|l| l.trim_start().starts_with("- "));
+    let normalized = if no_semicolon_syntax {
+        trimmed.to_string()
+    } else {
+        normalize_semicolons(trimmed)
+    };
     let trimmed = normalized.as_str();
 
     let first_line = trimmed.lines().next().unwrap_or("").trim();
@@ -101,7 +117,7 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         || first_line.starts_with("memory-map")
     {
         parse_stack_dsl(trimmed, default_style)
-    } else if first_line.starts_with("table") || first_line.starts_with('|') {
+    } else if is_table_dsl(trimmed) {
         parse_table_dsl(trimmed, default_style)
     } else if first_line.starts_with("tree")
         || trimmed.lines().any(|l| l.trim_start().starts_with("- "))
@@ -132,6 +148,39 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         // Fallback to tree
         parse_tree_dsl(trimmed, default_style)
     }
+}
+
+/// Heuristic table detection beyond the leading `table` / `|` forms: a
+/// leading `color:` directive followed by table-shaped rows, or ≥2
+/// pipe-delimited lines (with no flowchart arrows that would indicate a
+/// misfiled flowchart). Keeps markdown-style pipe tables out of the tree
+/// fallback.
+fn is_table_dsl(input: &str) -> bool {
+    let mut lines = input.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    if first.starts_with("table") || first.starts_with('|') {
+        return true;
+    }
+    if first.starts_with("color:") {
+        if let Some(second) = lines.next()
+            && (second.starts_with("table") || second.contains('|'))
+        {
+            return true;
+        }
+        return false;
+    }
+    let mut pipe_lines = 0;
+    for line in std::iter::once(first).chain(lines) {
+        if line.contains("-->") || line.contains("->") {
+            return false;
+        }
+        if line.contains('|') && line.split('|').count() >= 2 {
+            pipe_lines += 1;
+        }
+    }
+    pipe_lines >= 2
 }
 
 /// Expected `ds` syntax, appended to every malformed-input error so the

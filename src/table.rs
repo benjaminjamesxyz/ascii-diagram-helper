@@ -1,7 +1,31 @@
+use std::borrow::Cow;
+use unicode_width::UnicodeWidthStr;
+
 use crate::color::Color;
 use crate::schema::{TableSpec, TextAlign};
 use crate::theme::Theme;
-use unicode_width::UnicodeWidthStr;
+
+/// Sanitizes a table cell by stripping ANSI escape sequences, expanding tabs to
+/// 4 spaces, and removing non-printable control characters.
+///
+/// Clean strings incur zero allocations.
+#[must_use]
+pub fn sanitize_cell(s: &str) -> Cow<'_, str> {
+    if !s.chars().any(char::is_control) {
+        return Cow::Borrowed(s);
+    }
+
+    let stripped = crate::color::Color::strip_ansi(s);
+    let mut out = String::with_capacity(stripped.len());
+    for ch in stripped.chars() {
+        if ch == '\t' {
+            out.push_str("    ");
+        } else if !ch.is_control() {
+            out.push(ch);
+        }
+    }
+    Cow::Owned(out)
+}
 
 /// Paints `s` when `colored` and a color is set; otherwise returns it plain.
 fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
@@ -28,6 +52,15 @@ impl<'a> TableRenderer<'a> {
         if num_cols == 0 {
             return String::new();
         }
+
+        let headers: Vec<_> = self.spec.headers.iter().map(|h| sanitize_cell(h)).collect();
+        let rows: Vec<Vec<_>> = self
+            .spec
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|c| sanitize_cell(c)).collect())
+            .collect();
+
         let grid = self.spec.color;
         // Border glyphs only — cell text stays terminal-default
         let bar = || paint(colored, grid, &self.theme.vertical_line().to_string());
@@ -35,14 +68,14 @@ impl<'a> TableRenderer<'a> {
         // Calculate column widths
         let mut col_widths = vec![0; num_cols];
 
-        for (i, h) in self.spec.headers.iter().enumerate() {
-            col_widths[i] = UnicodeWidthStr::width(h.as_str());
+        for (i, h) in headers.iter().enumerate() {
+            col_widths[i] = UnicodeWidthStr::width(h.as_ref());
         }
 
-        for row in &self.spec.rows {
+        for row in &rows {
             for (i, cell) in row.iter().enumerate() {
                 if i < num_cols {
-                    let w = UnicodeWidthStr::width(cell.as_str());
+                    let w = UnicodeWidthStr::width(cell.as_ref());
                     if w > col_widths[i] {
                         col_widths[i] = w;
                     }
@@ -86,14 +119,14 @@ impl<'a> TableRenderer<'a> {
         // Header row
         let mut header_line = String::new();
         header_line.push_str(&bar());
-        for (i, h) in self.spec.headers.iter().enumerate() {
+        for (i, h) in headers.iter().enumerate() {
             let align = self
                 .spec
                 .alignments
                 .get(i)
                 .copied()
                 .unwrap_or(TextAlign::Center);
-            header_line.push_str(&Self::format_cell(h, col_widths[i], align));
+            header_line.push_str(&Self::format_cell(h.as_ref(), col_widths[i], align));
             header_line.push_str(&bar());
         }
         lines.push(header_line);
@@ -117,11 +150,11 @@ impl<'a> TableRenderer<'a> {
         lines.push(sep);
 
         // Data rows
-        for row in &self.spec.rows {
+        for row in &rows {
             let mut row_line = String::new();
             row_line.push_str(&bar());
             for (i, &w) in col_widths.iter().enumerate() {
-                let cell = row.get(i).map_or("", std::string::String::as_str);
+                let cell = row.get(i).map_or("", |c| c.as_ref());
                 let align = self
                     .spec
                     .alignments
@@ -248,5 +281,70 @@ mod tests {
         );
         assert!(colored.contains("\u{1b}[34m"), "grid painted blue");
         assert!(!colored.contains("[34m1"), "cell text not painted");
+    }
+
+    #[test]
+    fn test_table_sanitize_tab() {
+        let spec = TableSpec {
+            style: BoxStyle::Rounded,
+            color: None,
+            headers: vec!["Header".to_string()],
+            rows: vec![vec!["A\tB".to_string()], vec!["A    B".to_string()]],
+            alignments: vec![TextAlign::Left],
+        };
+        let renderer = TableRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("A    B"));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[3].len(), lines[4].len());
+        assert_eq!(sanitize_cell("A\tB"), "A    B");
+    }
+
+    #[test]
+    fn test_table_sanitize_ansi_escape() {
+        let spec = TableSpec {
+            style: BoxStyle::Rounded,
+            color: None,
+            headers: vec!["Status".to_string()],
+            rows: vec![
+                vec!["\x1b[31mAlert\x1b[0m".to_string()],
+                vec!["Alert".to_string()],
+            ],
+            alignments: vec![TextAlign::Left],
+        };
+        let renderer = TableRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("Alert"));
+        assert!(!out.contains("\x1b[31m"));
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[3], lines[4],
+            "ANSI row renders identically to plain row"
+        );
+        assert_eq!(sanitize_cell("\x1b[31mAlert\x1b[0m"), "Alert");
+    }
+
+    #[test]
+    fn test_table_sanitize_control_chars() {
+        let spec = TableSpec {
+            style: BoxStyle::Rounded,
+            color: None,
+            headers: vec!["Sound".to_string()],
+            rows: vec![vec!["\x07beep\0\r".to_string()], vec!["beep".to_string()]],
+            alignments: vec![TextAlign::Left],
+        };
+        let renderer = TableRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[3], lines[4]);
+        assert_eq!(sanitize_cell("\x07beep\0\r"), "beep");
+    }
+
+    #[test]
+    fn test_table_clean_cells_unmodified() {
+        let input = "Clean UTF-8 text: 🚀 (test)";
+        let sanitized = sanitize_cell(input);
+        assert!(matches!(sanitized, Cow::Borrowed(_)));
+        assert_eq!(sanitized, input);
     }
 }

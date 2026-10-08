@@ -1471,17 +1471,26 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
 ///
 /// # Errors
 ///
-/// Returns `Err` if no valid table rows are found.
+/// Returns `Err` if a table row is missing the `'|'` delimiter or if no valid
+/// table rows are found.
 pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
     let mut headers = Vec::new();
     let mut rows = Vec::new();
     let mut alignments = Vec::new();
     let mut table_color = None;
 
-    for line in input.lines() {
+    let mut is_first_line = true;
+    for (line_idx, line) in input.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("table") {
+        if trimmed.is_empty() {
             continue;
+        }
+
+        if is_first_line {
+            is_first_line = false;
+            if trimmed.eq_ignore_ascii_case("table") {
+                continue;
+            }
         }
 
         // `color: <name|#hex>` — grid/border color for the whole table
@@ -1492,8 +1501,11 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             continue;
         }
 
+        let line_no = line_idx + 1;
         if !trimmed.contains('|') {
-            continue;
+            return Err(format!(
+                "line {line_no}: table row missing '|' delimiter: \"{trimmed}\""
+            ));
         }
 
         let mut cells: Vec<String> = trimmed.split('|').map(|c| c.trim().to_string()).collect();
@@ -1541,7 +1553,10 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
     }
 
     if headers.is_empty() {
-        return Err("No valid table rows found".to_string());
+        return Err(
+            "No valid table rows found: table requires at least a header row with '|' delimiter"
+                .to_string(),
+        );
     }
 
     Ok(DiagramSpec::Table(TableSpec {
@@ -2224,6 +2239,69 @@ mod tests {
                 assert_eq!(t.color, Some(Color::parse("#e74c3c").unwrap()));
                 assert_eq!(t.headers, vec!["A", "B"]);
                 assert_eq!(t.rows, vec![vec!["1", "2"]]);
+            }
+            _ => panic!("Expected table"),
+        }
+    }
+
+    #[test]
+    fn test_parse_table_cell_starting_with_table() {
+        let dsl = "table\n| table_name | count |\n| tables | 42 |";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Table(t) => {
+                assert_eq!(t.headers, vec!["table_name", "count"]);
+                assert_eq!(t.rows, vec![vec!["tables", "42"]]);
+            }
+            _ => panic!("Expected table"),
+        }
+    }
+
+    #[test]
+    fn test_parse_table_semicolon_dsl() {
+        let dsl = "table A | B; 1 | 2";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Table(t) => {
+                assert_eq!(t.headers, vec!["table A", "B"]);
+                assert_eq!(t.rows, vec![vec!["1", "2"]]);
+            }
+            _ => panic!("Expected table"),
+        }
+    }
+
+    #[test]
+    fn test_parse_table_missing_pipe_error() {
+        let dsl = "table\n| A | B |\nRow without pipe\n| 1 | 2 |";
+        let res = parse_dsl_or_json(dsl, BoxStyle::Rounded);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("line 3: table row missing '|' delimiter: \"Row without pipe\""),
+            "got err: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_table_empty_directive_only() {
+        let dsl = "table\ncolor: red\n";
+        let res = parse_dsl_or_json(dsl, BoxStyle::Rounded);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(
+            err.contains("table requires at least a header row with '|' delimiter"),
+            "got err: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_table_single_column_with_pipes() {
+        let dsl = "| Item |\n| --- |\n| Value |";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Table(t) => {
+                assert_eq!(t.headers, vec!["Item"]);
+                assert_eq!(t.rows, vec![vec!["Value"]]);
             }
             _ => panic!("Expected table"),
         }

@@ -1063,34 +1063,35 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
 ///
 /// # Errors
 ///
-/// Currently always returns `Ok`; the `Result` keeps the parser signatures
-/// uniform with the other DSL parsers.
+/// Returns `Err` if no valid stack layers are found or if a layer label is empty.
 pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
-    let mut layers = Vec::new();
     let mut title = None;
-    let mut bottom_address = None;
+    let mut content_lines = Vec::new();
+    let mut is_first_non_empty = true;
 
-    for (idx, line) in input.lines().enumerate() {
+    for line in input.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
 
-        if idx == 0
-            && (trimmed.starts_with("stack")
+        if is_first_non_empty {
+            is_first_non_empty = false;
+            if trimmed.starts_with("stack")
                 || trimmed.starts_with("memory-map")
-                || trimmed.starts_with("memory"))
-        {
-            let rest = trimmed
-                .strip_prefix("memory-map")
-                .or_else(|| trimmed.strip_prefix("memory"))
-                .or_else(|| trimmed.strip_prefix("stack"))
-                .unwrap_or(trimmed)
-                .trim();
-            if !rest.is_empty() {
-                title = Some(rest.to_string());
+                || trimmed.starts_with("memory")
+            {
+                let rest = trimmed
+                    .strip_prefix("memory-map")
+                    .or_else(|| trimmed.strip_prefix("memory"))
+                    .or_else(|| trimmed.strip_prefix("stack"))
+                    .unwrap_or(trimmed)
+                    .trim();
+                if !rest.is_empty() {
+                    title = Some(rest.to_string());
+                }
+                continue;
             }
-            continue;
         }
 
         if trimmed.to_lowercase().starts_with("title:") {
@@ -1098,32 +1099,63 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             continue;
         }
 
-        // 0xFFFF: Label (description) or 0x0000: (bottom address)
-        let (addr, rest) = if let Some(col) = trimmed.find(':') {
+        content_lines.push(trimmed);
+    }
+
+    let mut bottom_address = None;
+
+    if let Some(&last_line) = content_lines.last() {
+        let (addr, rest) = if let Some(col) = last_line.find(':') {
+            let a = last_line[..col].trim();
             (
-                Some(trimmed[..col].trim().to_string()),
-                trimmed[col + 1..].trim(),
+                if a.is_empty() {
+                    None
+                } else {
+                    Some(a.to_string())
+                },
+                last_line[col + 1..].trim(),
             )
         } else {
-            (None, trimmed)
+            (None, last_line)
         };
-
         let clean_rest = rest.trim_start_matches("- ").trim();
         if clean_rest.is_empty() && addr.is_some() {
             bottom_address = addr;
-            continue;
+            content_lines.pop();
+        }
+    }
+
+    let mut layers = Vec::new();
+
+    for line in content_lines {
+        let (addr, rest) = if let Some(col) = line.find(':') {
+            let a = line[..col].trim();
+            (
+                if a.is_empty() {
+                    None
+                } else {
+                    Some(a.to_string())
+                },
+                line[col + 1..].trim(),
+            )
+        } else {
+            (None, line)
+        };
+
+        let clean_rest = rest.trim_start_matches("- ").trim();
+        if clean_rest.is_empty() {
+            return Err("Stack layer label cannot be empty".to_string());
         }
 
         // Trailing `@<color>` tag (before annotation extraction)
         let (clean_rest, layer_color) = split_trailing_color(clean_rest);
-        let (label, desc) = if let Some(start) = clean_rest.find('(') {
-            if let Some(end) = clean_rest.rfind(')') {
-                let l = clean_rest[..start].trim().to_string();
-                let d = clean_rest[start + 1..end].trim().to_string();
-                (l, Some(d))
-            } else {
-                (clean_rest.to_string(), None)
-            }
+        let (label, desc) = if let Some(start) = clean_rest.find('(')
+            && let Some(end) = clean_rest.rfind(')')
+            && end > start
+        {
+            let l = clean_rest[..start].trim().to_string();
+            let d = clean_rest[start + 1..end].trim().to_string();
+            (l, Some(d))
         } else {
             (clean_rest.to_string(), None)
         };
@@ -1134,6 +1166,10 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             description: desc,
             color: layer_color,
         });
+    }
+
+    if layers.is_empty() {
+        return Err("No valid stack layers found".to_string());
     }
 
     Ok(DiagramSpec::Stack(StackSpec {
@@ -1603,6 +1639,74 @@ mod tests {
                 assert_eq!(s.bottom_address.as_deref(), Some("0x0000"));
             }
             _ => panic!("Expected stack"),
+        }
+    }
+
+    #[test]
+    fn test_parse_stack_dsl_inverted_parens() {
+        let dsl1 = "stack\n0xFFFF: x) (y";
+        let spec1 = parse_stack_dsl(dsl1, BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec1 {
+            assert_eq!(s.layers[0].label, "x) (y");
+            assert_eq!(s.layers[0].description, None);
+        } else {
+            panic!("Expected stack diagram");
+        }
+
+        let dsl2 = "stack\nfoo) bar (baz";
+        let spec2 = parse_stack_dsl(dsl2, BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec2 {
+            assert_eq!(s.layers[0].label, "foo) bar (baz");
+            assert_eq!(s.layers[0].description, None);
+        } else {
+            panic!("Expected stack diagram");
+        }
+
+        let dsl3 = "stack\n0xC000: User Stack (grows down)";
+        let spec3 = parse_stack_dsl(dsl3, BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec3 {
+            assert_eq!(s.layers[0].label, "User Stack");
+            assert_eq!(s.layers[0].description.as_deref(), Some("grows down"));
+        } else {
+            panic!("Expected stack diagram");
+        }
+    }
+
+    #[test]
+    fn test_parse_stack_dsl_empty_and_bare_address() {
+        assert_eq!(
+            parse_stack_dsl("stack", BoxStyle::Rounded).unwrap_err(),
+            "No valid stack layers found"
+        );
+        assert_eq!(
+            parse_stack_dsl("stack\n0x0000:", BoxStyle::Rounded).unwrap_err(),
+            "No valid stack layers found"
+        );
+    }
+
+    #[test]
+    fn test_parse_stack_dsl_bottom_address_semantics() {
+        assert_eq!(
+            parse_stack_dsl("stack\n0xFFFF:\n0x8000: App", BoxStyle::Rounded).unwrap_err(),
+            "Stack layer label cannot be empty"
+        );
+        assert_eq!(
+            parse_stack_dsl(
+                "stack\n0xFFFF: Top\n0x8000:\n0x0000: Bottom",
+                BoxStyle::Rounded
+            )
+            .unwrap_err(),
+            "Stack layer label cannot be empty"
+        );
+
+        let spec = parse_stack_dsl("stack\n0xFFFF: Top\n0x0000:", BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec {
+            assert_eq!(s.layers.len(), 1);
+            assert_eq!(s.layers[0].label, "Top");
+            assert_eq!(s.layers[0].address_or_id.as_deref(), Some("0xFFFF"));
+            assert_eq!(s.bottom_address.as_deref(), Some("0x0000"));
+        } else {
+            panic!("Expected stack diagram");
         }
     }
 

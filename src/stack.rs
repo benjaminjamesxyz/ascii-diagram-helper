@@ -297,4 +297,54 @@ mod tests {
         assert!(colored.contains("\u{1b}[32m"), "user layer green");
         assert!(!colored.contains("[31mKernel"), "label text not painted");
     }
+
+    #[test]
+    fn test_stack_dsl_inverted_parens() {
+        use crate::parser::parse_stack_dsl;
+        use crate::schema::DiagramSpec;
+        let dsl = "stack\n0xFFFF: x) (y\nfoo) bar (baz\n0xC000: User Stack (grows down)\n0x0000:";
+        let spec = parse_stack_dsl(dsl, BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec {
+            assert_eq!(s.layers[0].label, "x) (y");
+            assert_eq!(s.layers[0].description, None);
+            assert_eq!(s.layers[1].label, "foo) bar (baz");
+            assert_eq!(s.layers[1].description, None);
+            assert_eq!(s.layers[2].label, "User Stack");
+            assert_eq!(s.layers[2].description.as_deref(), Some("grows down"));
+            assert_eq!(s.bottom_address.as_deref(), Some("0x0000"));
+
+            let renderer = StackRenderer::new(&s, Theme::new(BoxStyle::Rounded));
+            let out = renderer.render(false);
+            assert!(out.contains("x) (y"));
+            assert!(out.contains("foo) bar (baz"));
+            assert!(out.contains("User Stack"));
+        } else {
+            panic!("Expected stack diagram");
+        }
+    }
+
+    #[test]
+    fn test_stack_dsl_empty_and_bare_address_errors() {
+        use crate::parser::parse_stack_dsl;
+        assert_eq!(
+            parse_stack_dsl("stack", BoxStyle::Rounded).unwrap_err(),
+            "No valid stack layers found"
+        );
+        assert_eq!(
+            parse_stack_dsl("stack\n0x0000:", BoxStyle::Rounded).unwrap_err(),
+            "No valid stack layers found"
+        );
+        assert_eq!(
+            parse_stack_dsl("stack\n0xFFFF:\n0x8000: App", BoxStyle::Rounded).unwrap_err(),
+            "Stack layer label cannot be empty"
+        );
+        assert_eq!(
+            parse_stack_dsl(
+                "stack\n0xFFFF: Top\n0x8000:\n0x0000: Bottom",
+                BoxStyle::Rounded
+            )
+            .unwrap_err(),
+            "Stack layer label cannot be empty"
+        );
+    }
 }

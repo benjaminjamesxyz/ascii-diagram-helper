@@ -917,46 +917,61 @@ fn bracket_slash_open(t: &str) -> Option<(usize, char)> {
 }
 
 fn find_next_delim(text: &str) -> Option<(usize, &'static str)> {
-    // Longer variants must precede their prefixes: the earliest-position
-    // tie-break below keeps the first table entry on equal index (strict
-    // `<`), so `<-->` wins over `<--` and `<==>` over `<==` at the same
-    // occurrence. `<-.->` starts one char earlier than `-.->` at the same
-    // spot, but listing it first documents intent.
+    // Longer variants must precede their prefixes: at the same index the
+    // first table entry wins, so `<-->` beats `<--` and `<==>` beats `<==`.
+    // `<-.->` starts one char earlier than `-.->` at the same occurrence.
+    // Scanning skips spans inside quotes and bracket wrappers so arrow
+    // substrings inside quoted labels do not match (cycle-2 C2-T-2).
     let delimiters = [
         "<-.->", "<==>", "<-->", "==>", "<--", "-.->", "-->", "<==", "---",
     ];
-    let mut earliest: Option<(usize, &'static str)> = None;
+    let mut depth = 0usize;
+    let mut in_quote: Option<char> = None;
 
-    for delim in delimiters {
-        if let Some(idx) = text.find(delim) {
-            match earliest {
-                Some((min_idx, _)) if idx < min_idx => {
-                    earliest = Some((idx, delim));
+    for (idx, ch) in text.char_indices() {
+        match ch {
+            q @ ('"' | '\'') if in_quote.is_none() => {
+                in_quote = Some(q);
+            }
+            q if Some(q) == in_quote => {
+                in_quote = None;
+            }
+            '[' | '{' | '(' if in_quote.is_none() => {
+                depth += 1;
+            }
+            ']' | '}' | ')' if in_quote.is_none() => {
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+
+        if in_quote.is_none() && depth == 0 {
+            let tail = &text[idx..];
+            for delim in delimiters {
+                if tail.starts_with(delim) {
+                    return Some((idx, delim));
                 }
-                None => {
-                    earliest = Some((idx, delim));
-                }
-                _ => {}
             }
         }
     }
-    earliest
+    None
 }
 
 fn split_bracket_aware(s: &str, delimiter: char) -> Vec<&str> {
     let mut result = Vec::new();
-    let mut depth = 0;
+    let mut depth: usize = 0;
+    let mut in_quote: Option<char> = None;
     let mut last_idx = 0;
 
     for (idx, ch) in s.char_indices() {
         match ch {
-            '[' | '{' | '(' => depth += 1,
-            ']' | '}' | ')' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+            q @ ('"' | '\'') if in_quote.is_none() => in_quote = Some(q),
+            q if Some(q) == in_quote => in_quote = None,
+            '[' | '{' | '(' if in_quote.is_none() => depth += 1,
+            ']' | '}' | ')' if in_quote.is_none() => {
+                depth = depth.saturating_sub(1);
             }
-            c if c == delimiter && depth == 0 => {
+            c if c == delimiter && depth == 0 && in_quote.is_none() => {
                 let part = s[last_idx..idx].trim();
                 if !part.is_empty() {
                     result.push(part);
@@ -1920,6 +1935,53 @@ mod tests {
             }
             _ => panic!("Expected flowchart"),
         }
+    }
+
+    #[test]
+    fn test_quoted_label_with_arrow_renders() {
+        let dsl = "graph TD; A[\"hello --> world\"]";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match &spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes.len(), 1);
+                assert_eq!(f.nodes[0].id, "A");
+                assert_eq!(f.nodes[0].label, "hello --> world");
+                assert!(f.edges.is_empty());
+            }
+            _ => panic!("Expected flowchart"),
+        }
+        let out = crate::render_diagram(&spec);
+        assert!(
+            out.contains("hello --> world"),
+            "label rendered in box:\n{out}"
+        );
+    }
+
+    #[test]
+    fn test_quoted_label_with_arrow_and_edge_renders() {
+        let dsl = "graph TD; A[\"hello --> world\"] --> B[\"foo ==> bar\"]";
+        let spec = parse_dsl_or_json(dsl, BoxStyle::Rounded).unwrap();
+        match &spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.nodes.len(), 2);
+                assert_eq!(f.nodes[0].label, "hello --> world");
+                assert_eq!(f.nodes[1].label, "foo ==> bar");
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.edges[0].from, "A");
+                assert_eq!(f.edges[0].to, "B");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_unquoted_garbage_still_errors() {
+        assert!(parse_dsl_or_json("", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("   ", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("datastructure", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("ds invalid_kind 1 2", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("ds btree", BoxStyle::Rounded).is_err());
+        assert!(parse_dsl_or_json("{ invalid json }", BoxStyle::Rounded).is_err());
     }
 
     #[test]

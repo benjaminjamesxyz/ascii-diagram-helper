@@ -1,7 +1,21 @@
 use crate::canvas::{Canvas, Direction};
 use crate::schema::{SeqMessageType, SeqNotePosition, SequenceSpec};
 use crate::theme::{BoxStyle, Theme};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+fn truncate_to_width(s: &str, max_w: usize) -> (&str, usize) {
+    let mut cur_w = 0;
+    let mut end_byte = 0;
+    for (i, ch) in s.char_indices() {
+        let cw = ch.width().unwrap_or(0);
+        if cur_w + cw > max_w {
+            break;
+        }
+        cur_w += cw;
+        end_byte = i + ch.len_utf8();
+    }
+    (&s[..end_byte], cur_w)
+}
 
 pub struct SequenceRenderer<'a> {
     spec: &'a SequenceSpec,
@@ -242,9 +256,15 @@ impl<'a> SequenceRenderer<'a> {
                     None => frame.label.clone(),
                 };
                 let head_w = UnicodeWidthStr::width(head.as_str());
-                if head_w + 4 < fw {
+                let avail_w = fw.saturating_sub(4);
+                let (head_str, head_w) = if head_w <= avail_w {
+                    (head.as_str(), head_w)
+                } else {
+                    truncate_to_width(&head, avail_w)
+                };
+                if head_w > 0 {
                     canvas.put_char(fx + 1, top, ' ');
-                    canvas.draw_text(fx + 2, top, &head);
+                    canvas.draw_text(fx + 2, top, head_str);
                     canvas.put_char(fx + 2 + head_w, top, ' ');
                 }
                 // Bottom border
@@ -268,9 +288,14 @@ impl<'a> SequenceRenderer<'a> {
                     };
                     let dhead = format!("{} {}", div_kw, frame.branches[*bi]);
                     let dw = UnicodeWidthStr::width(dhead.as_str());
-                    if dw + 4 < fw {
+                    let (dhead_str, dw) = if dw <= avail_w {
+                        (dhead.as_str(), dw)
+                    } else {
+                        truncate_to_width(&dhead, avail_w)
+                    };
+                    if dw > 0 {
                         canvas.put_char(fx + 1, *dy, ' ');
-                        canvas.draw_text(fx + 2, *dy, &dhead);
+                        canvas.draw_text(fx + 2, *dy, dhead_str);
                         canvas.put_char(fx + 2 + dw, *dy, ' ');
                     }
                 }
@@ -278,6 +303,8 @@ impl<'a> SequenceRenderer<'a> {
         }
 
         // Draw notes (annotation boxes over or beside lifelines)
+        let fx = p_cx[0].saturating_sub(p_widths[0] / 2);
+        let fr = p_cx[num_p - 1] + p_widths[num_p - 1] / 2;
         for (ni, note) in self.spec.notes.iter().enumerate() {
             let idxs: Vec<usize> = note
                 .over
@@ -291,7 +318,7 @@ impl<'a> SequenceRenderer<'a> {
             let y = note_y[ni];
             let span_lx = p_cx[0].saturating_sub(p_widths[0] / 2);
             let span_rx = p_cx[num_p - 1] + p_widths[num_p - 1] / 2;
-            let (left_x, right_x) = match note.position {
+            let (mut left_x, mut right_x) = match note.position {
                 SeqNotePosition::Over => {
                     let min_i = idxs.iter().min().copied().unwrap_or(0);
                     let max_i = idxs.iter().max().copied().unwrap_or(0);
@@ -306,6 +333,8 @@ impl<'a> SequenceRenderer<'a> {
                     let rx = lx + text_w + 3; // text + 4 padding/borders, inclusive
                     if rx < total_w {
                         (lx, rx)
+                    } else if lx + text_w + 1 < total_w {
+                        (lx, lx + text_w + 1) // shrink padding if tight
                     } else {
                         (span_lx, span_rx) // clamped: fall back to column span
                     }
@@ -315,12 +344,29 @@ impl<'a> SequenceRenderer<'a> {
                     let rx = p_cx[idxs[0]].saturating_sub(2);
                     if rx + 1 >= text_w + 4 {
                         (rx + 1 - (text_w + 4), rx)
+                    } else if rx + 1 >= text_w + 2 {
+                        (rx + 1 - (text_w + 2), rx) // shrink padding if tight
                     } else {
                         (span_lx, span_rx) // clamped: fall back to column span
                     }
                 }
             };
-            if right_x <= left_x || right_x - left_x + 1 < 6 {
+            if !self.spec.frames.is_empty() {
+                let in_frame = self.spec.frames.iter().enumerate().any(|(fi, _)| {
+                    let top = frame_tops[fi];
+                    let bottom = frame_bottoms[fi];
+                    bottom > top && y >= top && y + 2 <= bottom
+                });
+                if in_frame {
+                    if left_x <= fx {
+                        left_x = fx + 1;
+                    }
+                    if right_x >= fr {
+                        right_x = fr.saturating_sub(1);
+                    }
+                }
+            }
+            if right_x <= left_x || right_x - left_x + 1 < 3 {
                 continue;
             }
             let y_bot = y + 2;
@@ -802,5 +848,65 @@ mod tests {
         // Each nested frame bottom is on a distinct or strictly ordered row
         assert!(bottom_rows[0] < bottom_rows[1]);
         assert!(bottom_rows[1] < bottom_rows[2]);
+    }
+
+    #[test]
+    fn test_sequence_short_single_char_note() {
+        // C2-T-1: single-char note 'note right of B: x' must not be dropped by span guard
+        let dsl = "sequenceDiagram\nA->>B: msg\nnote right of B: x";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains(" x "), "short note text 'x' rendered");
+        assert!(out.contains('┌'), "note box top border rendered");
+        assert!(out.contains('└'), "note box bottom border rendered");
+    }
+
+    #[test]
+    fn test_sequence_frame_label_longer_than_frame_width() {
+        // C2-T-2: frame label longer than frame width must be rendered (truncated) rather than dropped
+        let dsl = "sequenceDiagram\nbreak connection timed out\n  B->>A: reset\nend";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("break"), "frame label 'break' is present");
+        assert!(out.contains('┌'), "frame top border rendered");
+        assert!(out.contains('└'), "frame bottom border rendered");
+    }
+
+    #[test]
+    fn test_sequence_note_in_frame_preserves_frame_borders() {
+        // C2-T-3: full-span note over A,B inside a frame must not overwrite frame side borders
+        let dsl = "sequenceDiagram\nalt check\n  A->>B: query\n  note over A,B: note text\n  B->>A: resp\nend";
+        let DiagramSpec::Sequence(spec) =
+            crate::parser::parse_sequence_dsl(dsl, BoxStyle::Rounded).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        let renderer = SequenceRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false);
+        assert!(out.contains("note text"));
+
+        // Verify frame side borders are continuous vertical lines on note rows
+        let lines: Vec<&str> = out.lines().collect();
+        let note_row = lines.iter().position(|l| l.contains("note text")).unwrap();
+        for line in &lines[(note_row - 1)..=(note_row + 1)] {
+            assert!(
+                line.starts_with('│'),
+                "row preserves left frame border: {line}"
+            );
+            assert!(
+                line.ends_with('│'),
+                "row preserves right frame border: {line}"
+            );
+        }
     }
 }

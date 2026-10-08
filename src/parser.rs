@@ -1291,24 +1291,50 @@ fn split_trailing_color(s: &str) -> (&str, Option<Color>) {
     (s, None)
 }
 
+fn parse_tree_node_annotation(content: &str) -> (String, Option<String>) {
+    if let (Some(start), Some(end)) = (content.find('('), content.rfind(')'))
+        && start < end
+    {
+        let before = content[..start].trim();
+        let inside = content[start + 1..end].trim();
+        let trailing = content[end + 1..].trim();
+        let ann = if trailing.is_empty() {
+            inside.to_string()
+        } else if inside.is_empty() {
+            trailing.to_string()
+        } else {
+            format!("{inside} {trailing}")
+        };
+        return (before.to_string(), Some(ann));
+    }
+    (content.to_string(), None)
+}
+
+fn parse_tree_node_line(raw: &str) -> (String, Option<String>, Option<Color>) {
+    let clean = raw.trim().trim_start_matches("- ").trim();
+    let (content, color) = split_trailing_color(clean);
+    let (name, ann) = parse_tree_node_annotation(content);
+    (name, ann, color)
+}
+
 pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
     let mut lines = input.lines().filter(|l| !l.trim().is_empty());
     let Some(first) = lines.next() else {
         return Err("Empty tree specification".to_string());
     };
 
-    let root_name = if first.trim() == "tree" {
-        lines.next().unwrap_or("Root").trim()
+    let root_raw = if first.trim() == "tree" {
+        lines.next().unwrap_or("Root")
     } else {
-        first.trim()
+        first
     };
 
-    let clean_root = root_name.trim_start_matches("- ").trim();
+    let (root_name, root_ann, root_color) = parse_tree_node_line(root_raw);
     let root = TreeNodeSpec {
-        name: clean_root.to_string(),
-        annotation: None,
+        name: root_name,
+        annotation: root_ann,
         children: Vec::new(),
-        color: None,
+        color: root_color,
     };
 
     // Stack of (indent_level, node)
@@ -1320,24 +1346,14 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
             continue;
         }
 
-        // Count leading spaces
-        let indent = line.chars().take_while(|c| *c == ' ' || *c == '\t').count();
-        let content = trimmed_line.trim_start_matches("- ").trim();
+        // Count leading spaces (tabs expand to 4 columns)
+        let indent: usize = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .map(|c| if c == '\t' { 4 } else { 1 })
+            .sum();
 
-        // Trailing `@<color>` tag applies before annotation extraction so
-        // `API (port 8080) @blue` keeps both annotation and color
-        let (content, node_color) = split_trailing_color(content);
-        let (name, ann) = if let Some(start) = content.find('(') {
-            if let Some(end) = content.rfind(')') {
-                let n = content[..start].trim().to_string();
-                let a = content[start + 1..end].trim().to_string();
-                (n, Some(a))
-            } else {
-                (content.to_string(), None)
-            }
-        } else {
-            (content.to_string(), None)
-        };
+        let (name, ann, node_color) = parse_tree_node_line(trimmed_line);
 
         let node = TreeNodeSpec {
             name,
@@ -2027,6 +2043,156 @@ mod tests {
                 // `user@host` is not a color tag — label stays intact
                 assert_eq!(kids[2].name, "user@host");
                 assert!(kids[2].color.is_none());
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_inverted_parentheses_no_panic() {
+        let dsl = "root\n  x) (y";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded);
+        assert!(res.is_ok());
+        match res.unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "x) (y");
+                assert!(t.root.children[0].annotation.is_none());
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_trailing_annotation_preserved() {
+        let dsl = "root\n  main (entry) extra";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded);
+        assert!(res.is_ok());
+        match res.unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "main");
+                assert_eq!(
+                    t.root.children[0].annotation.as_deref(),
+                    Some("entry extra")
+                );
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_trailing_emoji_preserved() {
+        let dsl = "root\n  main (entry) 🚀";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap();
+        match &res {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "main");
+                assert_eq!(t.root.children[0].annotation.as_deref(), Some("entry 🚀"));
+                let renderer =
+                    crate::tree::TreeRenderer::new(t, crate::theme::Theme::new(BoxStyle::Rounded));
+                let rendered = renderer.render(false);
+                assert!(
+                    rendered.contains("main (entry 🚀)"),
+                    "rendered output contains emoji annotation: {rendered}"
+                );
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_unmatched_parentheses() {
+        let dsl = "root\n  node (unclosed\n  node unopened)";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded);
+        assert!(res.is_ok());
+        match res.unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children.len(), 2);
+                assert_eq!(t.root.children[0].name, "node (unclosed");
+                assert!(t.root.children[0].annotation.is_none());
+                assert_eq!(t.root.children[1].name, "node unopened)");
+                assert!(t.root.children[1].annotation.is_none());
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_tab_indentation() {
+        let tab_dsl = "root\n\tchild1\n\t\tgrandchild\n\tchild2";
+        let space_dsl = "root\n    child1\n        grandchild\n    child2";
+        let tab_res = parse_tree_dsl(tab_dsl, BoxStyle::Rounded).unwrap();
+        let space_res = parse_tree_dsl(space_dsl, BoxStyle::Rounded).unwrap();
+        match (tab_res, space_res) {
+            (DiagramSpec::Tree(tab_t), DiagramSpec::Tree(space_t)) => {
+                assert_eq!(tab_t.root.name, space_t.root.name);
+                assert_eq!(tab_t.root.children.len(), space_t.root.children.len());
+                assert_eq!(tab_t.root.children[0].name, space_t.root.children[0].name);
+                assert_eq!(
+                    tab_t.root.children[0].children[0].name,
+                    space_t.root.children[0].children[0].name
+                );
+                assert_eq!(tab_t.root.children[1].name, space_t.root.children[1].name);
+
+                let tab_out = crate::tree::TreeRenderer::new(
+                    &tab_t,
+                    crate::theme::Theme::new(BoxStyle::Rounded),
+                )
+                .render(false);
+                let space_out = crate::tree::TreeRenderer::new(
+                    &space_t,
+                    crate::theme::Theme::new(BoxStyle::Rounded),
+                )
+                .render(false);
+                assert_eq!(tab_out, space_out);
+            }
+            _ => panic!("Expected trees"),
+        }
+    }
+
+    #[test]
+    fn test_tree_mixed_spaces_and_tabs() {
+        let dsl = "root\n  parent\n\tchild";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap();
+        match res {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "parent");
+                assert_eq!(t.root.children[0].children.len(), 1);
+                assert_eq!(t.root.children[0].children[0].name, "child");
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_multi_level_tabs() {
+        let dsl = "root\n\tlevel1\n\t\tlevel2";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap();
+        match res {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "level1");
+                assert_eq!(t.root.children[0].children.len(), 1);
+                assert_eq!(t.root.children[0].children[0].name, "level2");
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_root_color_and_annotation_parsed() {
+        let dsl = "tree\nsrc/ (project root) @blue\n  main.rs";
+        let res = parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap();
+        match res {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.name, "src/");
+                assert_eq!(t.root.annotation.as_deref(), Some("project root"));
+                assert_eq!(t.root.color, Some(Color::Blue));
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "main.rs");
             }
             _ => panic!("Expected tree"),
         }

@@ -29,7 +29,8 @@ impl<'a> TreeRenderer<'a> {
             Some(ann) => format!("{} ({})", self.spec.root.name, ann),
             None => self.spec.root.name.clone(),
         };
-        lines.push(root_label);
+        let root_line = paint(colored, self.spec.root.color, &root_label);
+        lines.push(root_line);
 
         let num_children = self.spec.root.children.len();
         for (i, child) in self.spec.root.children.iter().enumerate() {
@@ -175,5 +176,86 @@ mod tests {
             colored.contains("\u{1b}[31m└── \u{1b}[39mleaf"),
             "inherited color: {colored:?}"
         );
+    }
+
+    #[test]
+    fn test_tree_root_color_inheritance() {
+        let spec = TreeSpec {
+            style: BoxStyle::Rounded,
+            root: TreeNodeSpec {
+                name: "src/".to_string(),
+                annotation: Some("project root".to_string()),
+                color: Some(Color::Blue),
+                children: vec![
+                    TreeNodeSpec {
+                        name: "main.rs".to_string(),
+                        annotation: None,
+                        color: None,
+                        children: vec![],
+                    },
+                    TreeNodeSpec {
+                        name: "lib.rs".to_string(),
+                        annotation: None,
+                        color: None,
+                        children: vec![],
+                    },
+                ],
+            },
+        };
+
+        let renderer = TreeRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let colored = renderer.render(true);
+        // Child branch glyph ├── inherits blue from root
+        assert!(
+            colored.contains("\u{1b}[34m├── \u{1b}[39mmain.rs"),
+            "child branch painted blue: {colored:?}"
+        );
+    }
+
+    #[test]
+    fn test_tree_root_line_colored() {
+        let spec = TreeSpec {
+            style: BoxStyle::Rounded,
+            root: TreeNodeSpec {
+                name: "src/".to_string(),
+                annotation: Some("project root".to_string()),
+                color: Some(Color::Blue),
+                children: vec![],
+            },
+        };
+
+        let renderer = TreeRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let colored = renderer.render(true);
+        assert!(
+            colored.contains("\u{1b}[34msrc/ (project root)\u{1b}[39m"),
+            "root label receives ANSI color code: {colored:?}"
+        );
+    }
+
+    #[test]
+    fn test_tree_root_plain() {
+        let spec = TreeSpec {
+            style: BoxStyle::Rounded,
+            root: TreeNodeSpec {
+                name: "src/".to_string(),
+                annotation: Some("project root".to_string()),
+                color: Some(Color::Blue),
+                children: vec![TreeNodeSpec {
+                    name: "main.rs".to_string(),
+                    annotation: None,
+                    color: None,
+                    children: vec![],
+                }],
+            },
+        };
+
+        let renderer = TreeRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let plain = renderer.render(false);
+        assert!(
+            !plain.contains('\u{1b}'),
+            "plain tree has no ANSI: {plain:?}"
+        );
+        assert!(plain.contains("src/ (project root)"));
+        assert!(plain.contains("└── main.rs"));
     }
 }

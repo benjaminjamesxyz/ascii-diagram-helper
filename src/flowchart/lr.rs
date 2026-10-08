@@ -123,7 +123,7 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
         // Below-mode clusters stack below the main graph
-        let mut cursor_y = max_h + 3;
+        let mut cursor_y = max_h + 3 + sg_margin;
         for b in &mut blocks.items {
             if b.mode != BlockMode::Below {
                 continue;

@@ -1046,23 +1046,41 @@ impl<'a> FlowchartRenderer<'a> {
                         }
                     }
                 } else {
+                    // Corners from the glyph tables too (keep the weighted
+                    // corner-skip: draw_weighted_box already resolves heavy/
+                    // double corners at render time)
                     if node.border_level == 0 {
-                        canvas.put_char(node.x, node.y, '┌');
-                        canvas.put_char(right, node.y, '┐');
-                        canvas.put_char(node.x, bottom, '└');
-                        canvas.put_char(right, bottom, '┘');
+                        canvas.put_char(node.x, node.y, self.theme.top_left_corner());
+                        canvas.put_char(right, node.y, self.theme.top_right_corner());
+                        canvas.put_char(node.x, bottom, self.theme.bottom_left_corner());
+                        canvas.put_char(right, bottom, self.theme.bottom_right_corner());
                     }
 
                     if node.width >= 6 {
+                        // Border-aware tees and inner walls so weighted
+                        // (stroke-width) subprocesses stay one glyph family
+                        let (tee_down, tee_up, wall) = if node.border_level > 0 {
+                            (
+                                self.theme.thick_tee_down(),
+                                self.theme.thick_tee_up(),
+                                self.theme.thick_vertical_line(),
+                            )
+                        } else {
+                            (
+                                self.theme.tee_down(),
+                                self.theme.tee_up(),
+                                self.theme.vertical_line(),
+                            )
+                        };
                         let left_inner_x = node.x + 1;
                         let right_inner_x = right - 1;
-                        canvas.put_char(left_inner_x, node.y, '┬');
-                        canvas.put_char(left_inner_x, bottom, '┴');
-                        canvas.put_char(right_inner_x, node.y, '┬');
-                        canvas.put_char(right_inner_x, bottom, '┴');
+                        canvas.put_char(left_inner_x, node.y, tee_down);
+                        canvas.put_char(left_inner_x, bottom, tee_up);
+                        canvas.put_char(right_inner_x, node.y, tee_down);
+                        canvas.put_char(right_inner_x, bottom, tee_up);
                         for r in (node.y + 1)..bottom {
-                            canvas.put_char(left_inner_x, r, '│');
-                            canvas.put_char(right_inner_x, r, '│');
+                            canvas.put_char(left_inner_x, r, wall);
+                            canvas.put_char(right_inner_x, r, wall);
                         }
                     }
                 }
@@ -1083,24 +1101,12 @@ impl<'a> FlowchartRenderer<'a> {
                 draw_label!(canvas, node.label_lines, node.y + 2, (1, 0));
             }
             NodeShape::Box => {
-                // Sharp rectangular technical block
-                let box_theme = if is_ascii {
-                    Theme::ascii()
-                } else {
-                    Theme::new(BoxStyle::Sharp)
-                };
-                node_box(canvas, &box_theme, None);
-                // Literal sharp corners force the block look in any theme;
-                // weighted boxes resolve corners from the glyph tables
-                if !is_ascii && node.border_level == 0 {
-                    let right = node.x + node.width - 1;
-                    let bottom = node.y + node.height - 1;
-                    // Border role so the pen color stamps the corners
-                    canvas.put_char_with_role(node.x, node.y, '┌', CellRole::Border);
-                    canvas.put_char_with_role(right, node.y, '┐', CellRole::Border);
-                    canvas.put_char_with_role(node.x, bottom, '└', CellRole::Border);
-                    canvas.put_char_with_role(right, bottom, '┘', CellRole::Border);
-                }
+                // Plain rectangular block; the whole frame — corners, edges,
+                // weighted and dashed variants — resolves from the output
+                // theme's glyph tables at render time, so every style stays
+                // one pure family (rounded ╭──╮, heavy ┏━┓┃, double ╔═╗║,
+                // sharp ┌─┐│, ascii +-+|)
+                node_box(canvas, &self.theme, None);
                 draw_label!(canvas, node.label_lines, node.y + 1, (1, 0));
             }
             _ => {

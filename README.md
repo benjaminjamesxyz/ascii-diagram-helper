@@ -26,14 +26,14 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 ## Features
 
 - **Flowcharts & Graphs (`flowchart` / `graph`)**:
-  - Directions: `TB` (Top to Bottom) and `LR` (Left to Right)
+  - Directions: `TB` (Top to Bottom) and `LR` (Left to Right); direction `BT` currently renders identical to `TB` and `RL` identical to `LR` (mirrored layouts future work; no error emitted)
   - Shapes: Box `[text]`, Rounded `(text)`, Diamond `{text}`, Database `[(text)]`, Subprocess `[[text]]`, Stadium `([text])`, Circle `((text))`, Hexagon `{{text}}`, DoubleCircle `(((text)))`, Parallelogram `[/text/]` and `\[text\]`, Trapezoid `[/text\]` and `\[text/]` — non-rectangular shapes render as solid boxes with an identifying badge glyph embedded in the top border (`⬡`, `◎`, `▱`, `/__\`; ASCII fallbacks `<h>`, `(oo)`, `/_/`, `/__\`)
   - Subgraphs: `subgraph id [Title]` ... `end` render as labeled group boxes (nesting supported); members are nodes first declared inside the block; per-subgraph `direction TB|LR|RL|BT` is applied when the subgraph is edge-isolated from the rest of the diagram (rendered in its own orientation as a self-contained block, Mermaid parity) — otherwise the global direction wins
   - Orthogonal routing with smart junction merging (`┬`, `┴`, `┼`, `├`, `┤`)
   - Shared jump tracks: multi-rank edges from one source (watchdog feeds, debug taps) share a single routing channel instead of overlapping full-width runs
   - Staggered bend bands: overlapping fan-out/fan-in trunks from sibling nodes get separate band rows, preventing adjacent junction characters
   - Chained edges (`A --> B --> C`), edge labels (`-->|label|`), dotted lines (`-.->`), loops
-  - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`), thick (`==>`, `<==>` — heavy glyphs `━ ┃` in Unicode styles, `=` in ASCII style)
+  - Edge styles: solid (`-->`), dashed (`-.->`), no arrow (`---`), bidirectional (`<-->`, `<==>`, `<-.->`), reverse (`<--`, `<==`), thick (`==>`, `<==>`, `<==` — heavy glyphs `━ ┃` in Unicode styles, `=` in ASCII style)
   - Style directives: `classDef`, `class`, `style` and `linkStyle` are parsed — `stroke-dasharray` maps to dashed node borders / dashed edges, `stroke:<color>` maps to border/line emphasis colors, `fill:<color>` colorizes node label text (colored mode), and `stroke-width:>=2px` renders heavy border glyphs
 - **Sequence Diagrams (`sequenceDiagram`)**:
   - Synchronous calls (`->`, `->>`), asynchronous messages (`-->`, `-->>`), bidirectional (`<->`)
@@ -70,7 +70,8 @@ Instead of forcing the LLM to output character coordinates, the LLM provides **M
 - Subgraphs render as group boxes; `style <subgraph-id> stroke:<color>` colorizes the group border. Per-subgraph `direction` boundary:
   - **Applies** when the subgraph (including all nested members) has no edges crossing its border — rendered as a self-contained block in its own orientation, pasted beside/below the main graph
   - **Applies to nested children** whose own member set is edge-isolated, even when the parent subgraph has external edges (the child moves out; the parent's group box wraps only its remaining members)
-  - **Falls back to global direction** when any edge crosses the subgraph's border (Mermaid parity — full mixed-direction cluster layout is future work)
+  - **Falls back to global direction** as soon as any edge crosses the subgraph boundary (an endpoint outside the block), even if all internal edges agree with the subgraph direction (Mermaid parity — full mixed-direction cluster layout is future work)
+- Header-only diagrams (`flowchart TD` with no nodes or edges) render empty output and exit 0.
 - Tree / table / stack colors (JSON `color` fields **or** DSL syntax):
   - Tree: trailing `@<name|#hex>` tag on a node line — `Server @red`, `API (port 8080) @#3498db` (branch glyphs colorize; children inherit the nearest colored ancestor). Tags only trigger on valid color names/hex, so labels like `user@host` pass through untouched
   - Table: `color: <name|#hex>` directive line before the rows (whole-table grid color)

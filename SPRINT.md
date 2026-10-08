@@ -1,5 +1,12 @@
 # Sprint v0.9.0 — Ultimate Test: Multi-Agent Hardening Loop
 
+**OUTCOME (cycle 3, converged):** 50 findings accepted across 7 types
+(2 blockers, 15 majors, ~25 minors, 8 nits); 48 fixed + verified by
+per-type tester→reviewer loops, 2 rejected as false positives (cycle 1),
+8 cycle-2 follow-up findings found and fixed. All 6 re-tested types
+verdict `satisfied` (stack clean both cycles). 193 tests green,
+clippy baseline-only, fmt clean. Released as v0.9.0 pending approval.
+
 **Goal:** test-driven quality sprint across all 7 diagram types. Tester →
 reviewer → engineer → developer per type, looping (hard cap 3 cycles) until
 every reviewer is satisfied (zero open blocker/major/minor). No new features —

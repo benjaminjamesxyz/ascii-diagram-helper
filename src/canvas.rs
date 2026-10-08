@@ -341,16 +341,27 @@ impl Canvas {
         true
     }
 
-    /// Finds the closest collision-free position for text around (`preferred_x`, `preferred_y`).
+    /// Finds the closest collision-free position for text within `bounds` around (`preferred_x`, `preferred_y`).
+    /// Returns `None` if no safe position can be found within `bounds`.
     #[must_use]
-    pub fn find_safe_text_pos(
+    pub fn find_safe_text_pos_within(
         &self,
+        bounds: Rect,
         preferred_x: usize,
         preferred_y: usize,
         text: &str,
-    ) -> (usize, usize) {
-        if self.can_place_text(preferred_x, preferred_y, text) {
-            return (preferred_x, preferred_y);
+    ) -> Option<(usize, usize)> {
+        let text_w = UnicodeWidthStr::width(text);
+        let fits_bounds = |x: usize, y: usize| -> bool {
+            let max_x = bounds.x.saturating_add(bounds.width);
+            let max_y = bounds.y.saturating_add(bounds.height);
+            y >= bounds.y && y < max_y && x >= bounds.x && x.saturating_add(text_w) <= max_x
+        };
+
+        if fits_bounds(preferred_x, preferred_y)
+            && self.can_place_text(preferred_x, preferred_y, text)
+        {
+            return Some((preferred_x, preferred_y));
         }
 
         // Test nearby offsets: 1 row up, 1 row down, side shifts
@@ -408,12 +419,29 @@ impl Canvas {
             let Some(test_y) = offset_pos(preferred_y, dy) else {
                 continue;
             };
-            if self.can_place_text(test_x, test_y, text) {
-                return (test_x, test_y);
+            if fits_bounds(test_x, test_y) && self.can_place_text(test_x, test_y, text) {
+                return Some((test_x, test_y));
             }
         }
 
-        (preferred_x, preferred_y)
+        None
+    }
+
+    /// Finds the closest collision-free position for text around (`preferred_x`, `preferred_y`).
+    #[must_use]
+    pub fn find_safe_text_pos(
+        &self,
+        preferred_x: usize,
+        preferred_y: usize,
+        text: &str,
+    ) -> (usize, usize) {
+        self.find_safe_text_pos_within(
+            Rect::new(0, 0, usize::MAX, usize::MAX),
+            preferred_x,
+            preferred_y,
+            text,
+        )
+        .unwrap_or((preferred_x, preferred_y))
     }
 
     /// Places text safely using collision detection, shifting if an obstacle or border is in the way.
@@ -424,7 +452,9 @@ impl Canvas {
         text: &str,
     ) -> (usize, usize) {
         let (safe_x, safe_y) = self.find_safe_text_pos(preferred_x, preferred_y, text);
-        self.draw_text(safe_x, safe_y, text);
+        if self.can_place_text(safe_x, safe_y, text) {
+            self.draw_text(safe_x, safe_y, text);
+        }
         (safe_x, safe_y)
     }
 
@@ -1465,6 +1495,85 @@ mod tests {
         canvas.draw_dashed_vline(5, 1, 6, &theme);
         // Placing text at x=4 spanning through x=5 ('B' hits dashed vline)
         assert!(!canvas.can_place_text(4, 3, "ABC"));
+    }
+
+    #[test]
+    fn test_find_safe_text_pos_within_respects_bounds() {
+        let mut canvas = Canvas::new(30, 20);
+        let theme = Theme::new(BoxStyle::Rounded);
+        // Box at (5, 5, 10, 5) -> top border at y=5, bottom at y=9, left at x=5, right at x=14
+        canvas.draw_box(5, 5, 10, 5, &theme, None);
+
+        // Outside the box, open area
+        let bounds = Rect::new(0, 0, 30, 5);
+        let pos = canvas.find_safe_text_pos_within(bounds, 2, 2, "OK");
+        assert_eq!(pos, Some((2, 2)));
+
+        // Preferred on top border of box at (7, 5): ladder shifts up into bounds (row 4)
+        let shifted = canvas.find_safe_text_pos_within(bounds, 7, 5, "HI");
+        assert!(shifted.is_some());
+        let (sx, sy) = shifted.unwrap();
+        assert!(sx >= bounds.x && sx + 2 <= bounds.x + bounds.width);
+        assert!(sy >= bounds.y && sy < bounds.y + bounds.height);
+        assert_eq!(sy, 4);
+
+        // Strict bounds covering only the box obstacle: no safe cell
+        let box_bounds = Rect::new(5, 5, 10, 5);
+        let none_pos = canvas.find_safe_text_pos_within(box_bounds, 7, 7, "NOFIT");
+        assert_eq!(none_pos, None);
+    }
+
+    #[test]
+    fn test_find_safe_text_pos_unbounded_unchanged() {
+        let mut canvas = Canvas::new(20, 10);
+        let theme = Theme::new(BoxStyle::Rounded);
+        canvas.draw_box(2, 2, 8, 4, &theme, None);
+        // Unbounded search shifts away from border
+        let (safe_x, safe_y) = canvas.find_safe_text_pos(2, 2, "TEST");
+        assert!(safe_y != 2 || safe_x != 2);
+        assert!(canvas.can_place_text(safe_x, safe_y, "TEST"));
+    }
+
+    #[test]
+    fn test_draw_text_safe_never_overwrites_border() {
+        let mut canvas = Canvas::new(30, 30);
+        let theme = Theme::new(BoxStyle::Rounded);
+        canvas.draw_box(5, 5, 10, 5, &theme, None);
+        // Fill entire surrounding area with obstacle so ladder cannot escape
+        canvas.add_obstacle(Rect::new(0, 0, 30, 30));
+
+        let before = canvas.render(&theme);
+        // Attempt to draw label pinned in an impossible spot (on border)
+        let (ret_x, ret_y) = canvas.draw_text_safe(5, 5, "NOFIT");
+        assert_eq!((ret_x, ret_y), (5, 5));
+        let after = canvas.render(&theme);
+        // Border must remain intact and label dropped
+        assert_eq!(before, after);
+        assert!(!after.contains("NOFIT"));
+    }
+
+    #[test]
+    fn test_draw_text_safe_resolved_unchanged() {
+        let mut canvas = Canvas::new(20, 10);
+        let theme = Theme::new(BoxStyle::Rounded);
+        canvas.draw_box(2, 2, 8, 4, &theme, None);
+        // Preferred is border at (2, 2), safe ladder finds (2, 1) or another safe cell
+        let (sx, sy) = canvas.draw_text_safe(2, 2, "SAFE");
+        assert_ne!((sx, sy), (2, 2));
+        let out = canvas.render(&theme);
+        assert!(out.contains("SAFE"));
+    }
+
+    #[test]
+    fn test_draw_text_safe_fallback_not_painted() {
+        let mut canvas = Canvas::new(30, 30);
+        let theme = Theme::new(BoxStyle::Rounded);
+        // Block whole canvas with obstacle, preferred at center so all offsets stay < 30
+        canvas.add_obstacle(Rect::new(0, 0, 30, 30));
+        let (sx, sy) = canvas.draw_text_safe(15, 15, "BLOCKED");
+        assert_eq!((sx, sy), (15, 15));
+        let out = canvas.render(&theme);
+        assert!(!out.contains("BLOCKED"));
     }
 }
 

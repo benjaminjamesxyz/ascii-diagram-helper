@@ -691,6 +691,95 @@ mod subgraph_direction_tests {
         assert_ne!(x_row, y_row, "X above Y inside the block (TB subgraph)");
         assert!(out.lines().any(|l| l.contains("cluster")));
     }
+
+    #[test]
+    fn two_subgraphs_border_rows_do_not_overlap() {
+        let dsl = "graph TD; subgraph SG1 [Cluster 1]; direction LR; A --> B; end; subgraph SG2 [Cluster 2]; C --> D; end";
+        let out = render(dsl);
+        let lines: Vec<&str> = out.lines().collect();
+
+        // Cluster 2 sits at the top (main layout), Cluster 1 below (isolated direction)
+        let sg2_top = lines
+            .iter()
+            .position(|l| l.contains("Cluster 2"))
+            .expect("Cluster 2 top border");
+        let sg2_bottom = lines[sg2_top..]
+            .iter()
+            .position(|l| l.contains('╰'))
+            .map(|p| p + sg2_top)
+            .expect("Cluster 2 bottom border");
+
+        let sg1_top = lines
+            .iter()
+            .position(|l| l.contains("Cluster 1"))
+            .expect("Cluster 1 top border");
+        let sg1_bottom = lines[sg1_top..]
+            .iter()
+            .position(|l| l.contains('╰'))
+            .map(|p| p + sg1_top)
+            .expect("Cluster 1 bottom border");
+
+        assert!(
+            sg2_bottom < sg1_top,
+            "Cluster 2 bottom (row {sg2_bottom}) must precede Cluster 1 top (row {sg1_top}):\n{out}"
+        );
+        assert!(
+            !lines[sg1_top].contains('┴') && !lines[sg2_bottom].contains('┬'),
+            "border rows must not merge:\n{out}"
+        );
+        assert!(
+            sg1_top > sg2_bottom + 1,
+            "must have clear row separation between subgraphs:\n{out}"
+        );
+        assert!(sg1_bottom > sg1_top);
+    }
+
+    #[test]
+    fn two_subgraphs_lr_mode_borders_do_not_overlap() {
+        let dsl = "graph LR; subgraph SG1 [Cluster 1]; direction TB; A --> B; end; subgraph SG2 [Cluster 2]; C --> D; end";
+        let out = render(dsl);
+        let lines: Vec<&str> = out.lines().collect();
+
+        let sg2_top = lines
+            .iter()
+            .position(|l| l.contains("Cluster 2"))
+            .expect("Cluster 2 top border");
+        let sg2_bottom = lines[sg2_top..]
+            .iter()
+            .position(|l| l.contains('╰'))
+            .map(|p| p + sg2_top)
+            .expect("Cluster 2 bottom border");
+
+        let sg1_top = lines
+            .iter()
+            .position(|l| l.contains("Cluster 1"))
+            .expect("Cluster 1 top border");
+
+        assert!(
+            sg2_bottom < sg1_top,
+            "Cluster 2 bottom (row {sg2_bottom}) must precede Cluster 1 top (row {sg1_top}) in LR mode:\n{out}"
+        );
+        assert!(
+            !lines[sg1_top].contains('┴') && !lines[sg2_bottom].contains('┬'),
+            "border rows must not merge in LR mode:\n{out}"
+        );
+    }
+
+    #[test]
+    fn quoted_node_label_containing_arrow_renders() {
+        let dsl = "graph TD; A[\"hello --> world\"]";
+        let out = render(dsl);
+        assert!(out.contains("hello --> world"), "label preserved:\n{out}");
+        assert_eq!(
+            out.lines()
+                .filter(|l| {
+                    l.contains(['┌', '╭', '┏', '╔']) || l.contains("+") && l.contains('-')
+                })
+                .count(),
+            1,
+            "exactly one box"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1205,6 +1294,102 @@ mod supernode_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_box_and_subprocess_follow_theme() {
+        // Box arm:
+        // Rounded contains ╭╮╰╯ and not ┌┏╔
+        let out_rounded = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Rounded);
+        for ch in ['╭', '╮', '╰', '╯'] {
+            assert!(
+                out_rounded.contains(ch),
+                "rounded box missing '{ch}':\n{out_rounded}"
+            );
+        }
+        for ch in ['┌', '┏', '╔'] {
+            assert!(
+                !out_rounded.contains(ch),
+                "rounded box leaked '{ch}':\n{out_rounded}"
+            );
+        }
+
+        // Heavy contains ┏┗━┃ not ┌─│
+        let out_heavy = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Heavy);
+        for ch in ['┏', '┗', '━', '┃'] {
+            assert!(
+                out_heavy.contains(ch),
+                "heavy box missing '{ch}':\n{out_heavy}"
+            );
+        }
+        for ch in ['┌', '─', '│'] {
+            assert!(
+                !out_heavy.contains(ch),
+                "heavy box leaked '{ch}':\n{out_heavy}"
+            );
+        }
+
+        // Double contains ╔╚═║ not ┌
+        let out_double = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Double);
+        for ch in ['╔', '╚', '═', '║'] {
+            assert!(
+                out_double.contains(ch),
+                "double box missing '{ch}':\n{out_double}"
+            );
+        }
+        assert!(
+            !out_double.contains('┌'),
+            "double box leaked '┌':\n{out_double}"
+        );
+
+        // Sharp contains ┌└
+        let out_sharp = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Sharp);
+        assert!(
+            out_sharp.contains('┌') && out_sharp.contains('└'),
+            "sharp box missing ┌/└:\n{out_sharp}"
+        );
+
+        // Ascii '+' corners not ┌╭┏
+        let out_ascii = render_flow_dsl("graph TD; A[Plain Box]", BoxStyle::Ascii);
+        assert!(
+            out_ascii.contains('+'),
+            "ascii box missing '+':\n{out_ascii}"
+        );
+        for ch in ['┌', '╭', '┏'] {
+            assert!(
+                !out_ascii.contains(ch),
+                "ascii box leaked '{ch}':\n{out_ascii}"
+            );
+        }
+
+        // Subprocess Heavy: ┏ + thick tees ┳/┻, no '┬'
+        let out_sub_heavy = render_flow_dsl("graph TD; A[[Subprocess]]", BoxStyle::Heavy);
+        assert!(
+            out_sub_heavy.contains('┏'),
+            "subprocess heavy missing '┏':\n{out_sub_heavy}"
+        );
+        assert!(
+            out_sub_heavy.contains('┳'),
+            "subprocess heavy missing '┳':\n{out_sub_heavy}"
+        );
+        assert!(
+            out_sub_heavy.contains('┻'),
+            "subprocess heavy missing '┻':\n{out_sub_heavy}"
+        );
+        assert!(
+            !out_sub_heavy.contains('┬'),
+            "subprocess heavy leaked '┬':\n{out_sub_heavy}"
+        );
+
+        // Dashed Box: no solid ┌ unless family glyph
+        let out_dashed_rounded = render_flow_dsl(
+            "graph TD; style A stroke-dasharray: 4; A[Dashed Box]",
+            BoxStyle::Rounded,
+        );
+        assert!(
+            !out_dashed_rounded.contains('┌'),
+            "dashed rounded box leaked solid '┌':\n{out_dashed_rounded}"
+        );
     }
 
     #[test]

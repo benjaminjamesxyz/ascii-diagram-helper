@@ -1,4 +1,4 @@
-# ascii-diagram v0.10.0
+# ascii-diagram v0.11.0
 
 High-precision, Rust-powered terminal ASCII & Unicode diagram generator for humans and AI agents.
 
@@ -276,11 +276,11 @@ Renders standard Computer Science data structures via JSON specs or instant `ds`
 
 ## 🌳 Complete Data Structures Guide
 
-Supports all 7 core data structure visualizers with both CLI `ds` shorthand and JSON formats.
+Supports all 7 core data structure visualizers via JSON specifications, with instant CLI `ds` shorthand for trees, B-trees, linked lists, and arrays.
 
 ### 1. Binary Search Tree (BST)
 - **CLI Shorthand:** `ascii-diagram "ds tree 8 3 10 1 6 14 4"`
-- **JSON Spec:** `{"type":"datastructure","kind":"tree","title":"BST","values":["8","3","10","1","6","14","4"]}`
+- **JSON Spec:** `{"type":"datastructure","kind":"tree","values":["8","3","10","1","6","14","4"]}`
 
 ```text
          ╭───╮
@@ -306,7 +306,7 @@ Supports all 7 core data structure visualizers with both CLI `ds` shorthand and 
 
 ### 2. B-Tree
 - **CLI Shorthand:** `ascii-diagram "ds btree 10,20 | 3,5 12,15 25,30"`
-- **JSON Spec:** `{"type":"datastructure","kind":"btree","title":"B-Tree","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30"]}]}}`
+- **JSON Spec:** `{"type":"datastructure","kind":"btree","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30"]}]}}`
 
 ```text
               ╭─────────╮

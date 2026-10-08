@@ -185,7 +185,7 @@ impl<'a> FlowchartRenderer<'a> {
         // Below-mode clusters stack below the main graph; origin_y leaves 2
         // rows above the content for the group-box title border drawn later
         // by draw_subgraphs.
-        let mut cursor_y = current_y + 1;
+        let mut cursor_y = current_y + 1 + sg_margin;
         for b in &mut blocks.items {
             if b.mode != BlockMode::Below {
                 continue;

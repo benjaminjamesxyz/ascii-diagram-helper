@@ -771,7 +771,11 @@ mod subgraph_direction_tests {
         let out = render(dsl);
         assert!(out.contains("hello --> world"), "label preserved:\n{out}");
         assert_eq!(
-            out.lines().filter(|l| l.contains('┌')).count(),
+            out.lines()
+                .filter(|l| {
+                    l.contains(['┌', '╭', '┏', '╔']) || l.contains("+") && l.contains('-')
+                })
+                .count(),
             1,
             "exactly one box"
         );

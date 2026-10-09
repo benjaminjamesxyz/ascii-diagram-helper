@@ -1,8 +1,7 @@
-use super::FlowchartRenderer;
 use super::edges::{
     clear_column, detour_row, edge_arrow_heads, edge_hline, edge_vline, hspan_blocked,
 };
-use super::{BlockMode, Blocks, LayoutNode};
+use super::{BlockMode, Blocks, FlowchartRenderer, LayoutNode, PendingLabel};
 use crate::canvas::{Canvas, Direction};
 use unicode_width::UnicodeWidthStr;
 
@@ -243,6 +242,7 @@ impl<'a> FlowchartRenderer<'a> {
         // borders extend `sg_depth` rows further down — clear them too
         let mut loop_track_y = max_h + 2usize.max(sg_depth + 1) + sg_margin;
 
+        let mut labels = Vec::new();
         // Draw edges (edges between members of moved blocks are baked into
         // those blocks)
         for edge in &self.spec.edges {
@@ -254,7 +254,7 @@ impl<'a> FlowchartRenderer<'a> {
                 let u = &nodes[ui];
                 let v = &nodes[vi];
                 if ui == vi {
-                    self.draw_self_loop(&mut canvas, edge, u);
+                    self.draw_self_loop(&mut canvas, edge, u, &mut labels);
                     continue;
                 }
                 let u_right = u.x + u.width - 1;
@@ -298,7 +298,7 @@ impl<'a> FlowchartRenderer<'a> {
                                 } else {
                                     (dy.saturating_sub(1), true)
                                 };
-                                self.draw_stacked_label(&mut canvas, &lines, mid, label_y, up);
+                                labels.push(PendingLabel::centered(lines, mid, label_y, up));
                             }
                         } else {
                             // Straight horizontal line
@@ -321,7 +321,7 @@ impl<'a> FlowchartRenderer<'a> {
                             let lines = self.edge_label_lines(edge);
                             if !lines.is_empty() {
                                 let mid = usize::midpoint(u_right + 1, v_left - 1);
-                                self.draw_stacked_label(&mut canvas, &lines, mid, u_cy - 1, true);
+                                labels.push(PendingLabel::centered(lines, mid, u_cy - 1, true));
                             }
                         }
                     } else {
@@ -372,7 +372,7 @@ impl<'a> FlowchartRenderer<'a> {
                         let lines = self.edge_label_lines(edge);
                         if !lines.is_empty() {
                             let label_y = if v_cy > 0 { v_cy - 1 } else { v_cy };
-                            self.draw_stacked_label(&mut canvas, &lines, mid_x, label_y, true);
+                            labels.push(PendingLabel::centered(lines, mid_x, label_y, true));
                         }
                     }
                 } else {
@@ -408,7 +408,7 @@ impl<'a> FlowchartRenderer<'a> {
                     let lines = self.edge_label_lines(edge);
                     if !lines.is_empty() {
                         let mid_x = usize::midpoint(v_ax, u_ax);
-                        self.draw_stacked_label(&mut canvas, &lines, mid_x, loop_y + 1, false);
+                        labels.push(PendingLabel::centered(lines, mid_x, loop_y + 1, false));
                         loop_track_y += 3;
                     } else {
                         loop_track_y += 2;
@@ -428,6 +428,10 @@ impl<'a> FlowchartRenderer<'a> {
 
         // Draw subgraph grouping boxes on top of empty cells
         self.draw_subgraphs(&mut canvas, &nodes, &idx, blocks);
+
+        for label in labels {
+            label.draw(self, &mut canvas);
+        }
 
         canvas.render_impl(&self.theme, colored)
     }

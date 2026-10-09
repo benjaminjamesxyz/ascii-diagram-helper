@@ -1,10 +1,41 @@
-# Sprint v0.12.1 — Firmware Review Fixes
+# Release v0.12.1 — Firmware Renderer, CLI, and Extension Polish
 
-**Status:** Implementation and integrated verification complete.
-**Integration branch:** `sprint/v0.12.1`; base `93fcae5`.
-**Coordination:** four GPT implementation workers in isolated worktrees; Scrum Master maintained the deduplicated common ledger at `local://sprint-v0.12.1-ledger.md`. Parent owned merges, final gates, runtime acceptance and release synchronization. No upstream push.
+**Status:** Verified v0.12.1 patch release. Rust/npm metadata, documentation, and the runtime version agree.
+**Release references:** `master` and annotated tag `v0.12.1`. Integration branch: `sprint/firmware-polish-20261009`; implementation checkpoint `c01b7fe`; upstream base `93fcae5` (v0.12.0).
 
-## Fix ledger
+## Release summary
+
+- **Layout and labels:** recursive group packing/padding, title detours, decision ingress, and LR separation; compact title shelves; deferred multiline flowchart labels bounded to their route corridors; architecture frame widths, sibling clearance, label margins, and joined source turns.
+- **Color:** unstyled redraws preserve stroke ownership/color, explicit colors win at shared wire cells, node borders retain their own color, and architecture property dividers receive complete component-border color.
+- **CLI and extension:** trailing options after bare input, LF-terminated markdown fences, JSON-safe default coloring, explicit `color:false` in freshly loaded extensions, command help, and ANSI/CJK-aware result framing.
+- **Verification:** final release checks are recorded below; prior implementation-stage results remain separately identified.
+- **Compactness and limits:** the original flight-control diagram fell from 54 × 181 to 54 × 158 rows × columns; architecture stayed 28 × 83. No terminal-width cap, truncation, or automatic fit-to-terminal wrapping was added.
+- **Session limitation:** the already-loaded live wrapper ignored `color:false`; the freshly loaded installed extension and CLI `--color never` honored suppression. A session reload remains unverified. Renderer changes do not establish that the stale wrapper was refreshed.
+
+For the source update/build, installed Pi synchronization, separate omp installation, and session reload steps, see [README.md](README.md#3-update-an-existing-installation).
+
+## Final release checks (2026-10-09)
+
+- All five Rust/npm version entries agree on `0.12.1`; the release binary reports `ascii-diagram 0.12.1`.
+- `cargo test --locked`: **321 tests passed**. `cargo fmt --check`, `cargo clippy --all-targets --locked`, and `cargo build --release --locked` passed. Clippy reports only the three existing warnings: `int_plus_one`, `module_inception`, and `too_many_arguments`.
+- The extension suite passed against the rebuilt release binary. A separate fresh-extension smoke exercised both original firmware diagrams in colored/plain modes, real `Text` result frames, command/help, Mermaid transformation, and JSON input containing `graph`/`flowchart` text.
+- Both original firmware specifications passed all five styles: full title/node/property/edge-label retention, blank label margins, ANSI/plain parity, 7-bit ASCII, and LF-terminated markdown fences. All **70** input-path renders were byte-identical; `Target Angle` remained between its source and target.
+- All **35** built-in example/style outputs matched the installed visual-polish baseline. Raw CLI dimensions remain **54 × 158** for the flight-control diagram and **28 × 83** for memory/bus architecture.
+- Live colored `draw_diagram` output for both original specifications exactly matched the verified native renderer. Fresh-extension plain output passed; a reload of the already-running user session remains unverified.
+- `npm pack --dry-run --ignore-scripts --json` included the required sources, documentation, extension, and skills in **33 files**, excluding build/dependency/index caches. This checks package contents; no npm registry publication is claimed.
+- All **six** paired README input/rendered-output showcases matched the release CLI. The tree showcase's stale sharp final corner was corrected to the actual rounded-style output.
+
+## Historical implementation stages
+
+The sections below preserve the validation counts, commits, local binary hashes, and synchronization observations from each implementation stage. Their “no upstream push” statements describe those stages, not a separate current publication status. Session-only coordination artifacts are not required release references.
+
+### Initial firmware review fixes
+
+**Stage status:** Implementation and integrated verification completed before the color and visual-polish follow-ups.
+**Stage integration branch:** `sprint/v0.12.1`; base `93fcae5`.
+**Coordination:** four GPT implementation workers in isolated worktrees; Scrum Master maintained a session-local deduplicated ledger. Parent owned merges, stage gates, runtime acceptance and local synchronization. No upstream push at this stage.
+
+### Initial fix ledger
 
 | Owner | Review IDs | Implemented behavior | Commits |
 |---|---|---|---|
@@ -15,14 +46,14 @@
 
 Runtime verification caught two follow-ups beyond the initially green suite: overlapping README LR groups and an unjoined narrow architecture source turn. Both are fixed and covered by actual render checks. The incidental moved-child ordering assertion was removed, retaining the original orientation/non-origin geometry invariants (`6f531d5`). The obsolete production `find_subgraph` helper was removed after LR cutover; the remaining test locates its top-level fixture groups directly.
 
-## Intentional behavior
+### Intentional behavior
 
 - CLI-OMP-02: explicit diagram colors activate CLI auto color even when piped or with `NO_COLOR`; unstyled auto honors `NO_COLOR`. Explicit `never` suppresses styles; `always` forces color. No precedence reversal.
 - COLOR-01: extended names such as `orange` legitimately use truecolor.
 - MODES-03: four-space-indented backticks cannot close a CommonMark fence.
 - ALIGN-06: sibling node widths remain content-sized; only outer architecture frames are normalized.
 
-## Observed verification
+### Initial observed verification
 
 - `cargo test`: **308 passed** (285 library, 23 CLI); targeted source-connectivity and group-containment regressions also passed.
 - `cargo clippy --all-targets`: passed with only the three existing warnings (`int_plus_one`, `module_inception`, `too_many_arguments`). `cargo fmt --check`: passed. Release build succeeded.
@@ -37,7 +68,7 @@ README flowchart/architecture examples were regenerated from the release CLI; CL
 
 **Initial release synchronization:** repository, `~/.local/bin`, Pi binary/cache and omp plugin binary copies shared SHA-256 `bfdaf3d3bf650694ae55bbe01bbb248044a1f6f8c3fba97d005d858cf710efbc`. Repository/user/Pi/omp engines reported v0.12.1 and rendered actual firmware Spec B identically. Installed omp extension also passed the real-component smoke using native binary discovery with no `ASCII_DIAGRAM_BIN` override. No upstream push was performed.
 
-## Color fidelity follow-up
+### Color fidelity follow-up
 
 - Fixed partial stroke coloring reported after the firmware review: unstyled connector/arrow redraws preserve existing color, explicit colors take precedence at shared wire cells, and node borders retain their own color.
 - Architecture property dividers now use the component border color; flowchart title bypasses inherit the crossing edge's color rather than the group color. No geometry or CLI color-precedence changes.
@@ -46,9 +77,9 @@ README flowchart/architecture examples were regenerated from the release CLI; CL
 - Extension behavior suite passed after installation synchronization. Live `draw_diagram` output for both original firmware specs exactly matches the corrected rounded, colored native renders.
 - Corrected repository/user/Pi/omp binary copies share SHA-256 `ac2099548e77470bebf4ba42bc9fd0537ddce044a35f05b7060dadb314d5bfe7`. This follow-up is local; no upstream push was performed.
 
-## Parallel visual polish follow-up
+### Parallel visual polish follow-up
 
-**Branch:** `sprint/firmware-polish-20261009`; color-preserving baseline `299df10`. Three implementation agents worked in isolated worktrees; the parent maintained `local://firmware-polish-board.md`, integrated commits, and ran final verification.
+**Stage branch:** `sprint/firmware-polish-20261009`; color-preserving baseline `299df10`. Three implementation agents worked in isolated worktrees; the parent maintained a session-local coordination board, integrated commits, and ran this stage's verification.
 
 | Track | Owner | Change | Commits |
 |---|---|---|---|

@@ -34,6 +34,16 @@ High-precision, Rust-powered terminal ASCII & Unicode diagram generator for huma
 
 ---
 
+## v0.12.1 release highlights
+
+Firmware diagrams now keep nested groups padded and separated, preserve title-crossing routes and decision ingress, and use less space for group titles. Flowchart labels are placed after routing, with multiline blocks kept in their own connection corridors. Architecture routes retain label margins, sibling clearance, and connected source turns.
+
+Stroke redraws preserve color, including complete architecture property dividers. The CLI accepts trailing options after bare input and terminates markdown fences with LF. The extension preserves JSON during automatic coloring, honors explicit `color:false` when freshly loaded, adds command help, and measures ANSI/CJK result frames by visible width.
+
+Release verification passed: **321 Rust tests**, the extension suite, both original firmware specifications in all five styles, **70 byte-identical input-path runs**, and **35 unchanged built-in example/style outputs**. The flight-control diagram measures **54 × 158** rows × columns, down from **54 × 181**; the architecture remains **28 × 83**. See [SPRINT.md](SPRINT.md) for release checks and historical implementation evidence.
+
+There is no automatic fit-to-terminal width cap: dense diagrams can still wrap. An already-running session may retain an old tool wrapper that ignores `color:false`; reload after updating. A live session reload has not yet been verified. Use CLI `--color never` when plain output is required.
+
 ## ⚡ 10-Second Quick Start
 
 ### 1. Build & Install CLI
@@ -56,6 +66,27 @@ npm install && npm run build
 # Render built-in reference examples
 ./bin/ascii-diagram example sequence
 ```
+
+### 3. Update an Existing Installation
+
+You need Rust/Cargo, Node.js, and npm. To install the tagged `v0.12.1` release, run the following in your existing repository checkout with a clean working tree:
+
+```bash
+git fetch origin --tags
+git switch --detach v0.12.1
+npm install && npm run build
+./bin/ascii-diagram --version
+```
+
+The build installs the release binary into `bin/` and attempts to copy it to `~/.local/bin`; check any skipped-install message if you use the latter on `PATH`.
+
+For an **existing Pi Git-package installation** at `~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper`, synchronize the rebuilt binary, extension, and skills from this checkout:
+
+```bash
+npm run sync:pi
+```
+
+`sync:pi` is not a first-time package installer and does **not** update omp's separate `~/.omp/plugins/node_modules/ascii-diagram-helper` copy. If you use that copy, update or re-link it through your host's package installation mechanism to the released checkout, then run `npm install && npm run build` in that package directory. Restart or reload the host session after updating either installation so it loads the new extension and tool wrapper; replacing a binary alone does not refresh loaded JavaScript. The source/tag update path does not imply npm registry publication.
 
 ---
 
@@ -214,7 +245,7 @@ src/
 ├── canvas.rs (2D Grid Engine)
 ├── flowchart.rs (Sugiyama Layout)
 ├── datastructure.rs (BST & B-Tree)
-└── Cargo.toml
+╰── Cargo.toml
 ```
 
 ---

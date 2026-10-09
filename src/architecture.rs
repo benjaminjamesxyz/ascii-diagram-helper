@@ -817,12 +817,6 @@ impl<'a> RouteGrid<'a> {
                     {
                         continue;
                     }
-                    if let Some(&(_, dst_dir)) = goals.get(&(nx, ny)) {
-                        let (gx, gy) = dir_delta(dst_dir);
-                        if (ddx, ddy) != (-gx, -gy) {
-                            continue;
-                        }
-                    }
                     visited[nidx] |= 4;
                     prev[nidx] = Some(idx as u32);
                     if let Some(&(dst_anchor, dst_dir)) = goals.get(&(nx, ny)) {
@@ -848,9 +842,11 @@ impl<'a> RouteGrid<'a> {
         if cells.len() < 2 {
             return None;
         }
-        let (x0, y0) = cells[cells.len() - 2];
-        let (x1, y1) = cells[cells.len() - 1];
-        let arrow = delta_to_dir(x1 as isize - x0 as isize, y1 as isize - y0 as isize);
+        // The last corridor cell may also be the bend into the target.
+        // Point the arrow toward its anchor, not along the preceding segment:
+        // requiring another straight cell seals narrow column corridors.
+        let (dx, dy) = dir_delta(dst_dir);
+        let arrow = delta_to_dir(-dx, -dy);
         Some(Routed {
             cells,
             src_anchor,
@@ -1235,8 +1231,19 @@ mod tests {
                 let b = &bounds[id];
                 Rect::new(b.x, b.y, b.width, b.height)
             };
-            let route = grid.route(rect("a"), rect("b")).unwrap();
+            let route = grid
+                .route(rect("a"), rect("b"))
+                .unwrap_or_else(|| panic!("no legal {layout} route (nested={nested})"));
             assert_route_clearance(&route, rect("sibling"));
+            if layout == "column" {
+                // The sibling halo leaves no room for a straight lead-in;
+                // the final arrow cell must support the perpendicular bend.
+                let before = route.cells[route.cells.len() - 2];
+                let last = *route.cells.last().unwrap();
+                assert_eq!(before.1, last.1);
+                assert_ne!(before.0, last.0);
+                assert!(matches!(route.arrow, Direction::Down));
+            }
             let out = renderer.render(false).unwrap();
             for text in ["Source", "Neighbor", "Target", "Keep: intact", "Around"] {
                 assert_eq!(out.matches(text).count(), 1, "{out}");

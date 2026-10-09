@@ -2133,8 +2133,7 @@ mod compact_group_title_regressions {
             "graph LR; subgraph G; A[A generously wide member]; end",
             BoxStyle::Rounded,
         )
-        .unwrap()
-        else {
+        .unwrap() else {
             panic!("expected flowchart");
         };
         let renderer = FlowchartRenderer::new(&spec, Theme::new(spec.style));
@@ -2177,7 +2176,10 @@ mod deferred_edge_label_regressions {
                         "blank column before {label}:\n{output}"
                     );
                     assert!(
-                        row[byte + label.len()..].chars().next().is_none_or(|ch| ch == ' '),
+                        row[byte + label.len()..]
+                            .chars()
+                            .next()
+                            .is_none_or(|ch| ch == ' '),
                         "blank column after {label}:\n{output}"
                     );
                     (display_width(&row[..byte]), y)
@@ -2262,7 +2264,10 @@ mod deferred_edge_label_regressions {
             }
             let out = canvas.render(&theme);
             let (x, y) = label_position(&out, "Signal");
-            assert!(x.abs_diff(4) + y.abs_diff(3) <= 1, "route-adjacent label:\n{out}");
+            assert!(
+                x.abs_diff(4) + y.abs_diff(3) <= 1,
+                "route-adjacent label:\n{out}"
+            );
             assert_eq!(canvas.get_cell(x, y).unwrap().color, None);
         }
     }
@@ -2272,7 +2277,11 @@ mod deferred_edge_label_regressions {
         let spec = FlowchartSpec::default();
         let theme = Theme::new(BoxStyle::Rounded);
         let renderer = FlowchartRenderer::new(&spec, theme.clone());
-        let lines = vec!["遥測値".to_string(), "Setpoints".to_string(), "終端".to_string()];
+        let lines = vec![
+            "遥測値".to_string(),
+            "Setpoints".to_string(),
+            "終端".to_string(),
+        ];
         for centered in [false, true] {
             let mut canvas = Canvas::new(32, 8);
             canvas.draw_text(4, 1, "Occupied");

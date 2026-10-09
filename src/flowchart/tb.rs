@@ -706,7 +706,11 @@ impl<'a> FlowchartRenderer<'a> {
                             &self.theme,
                         );
                         if !lines.is_empty() {
-                            labels.push(PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)));
+                            labels.push(PendingLabel::left(
+                                lines,
+                                start_x + 1,
+                                y.saturating_sub(1),
+                            ));
                         }
                     } else {
                         let y = u.y + u.height / 2;
@@ -721,7 +725,11 @@ impl<'a> FlowchartRenderer<'a> {
                             &self.theme,
                         );
                         if !lines.is_empty() {
-                            labels.push(PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)));
+                            labels.push(PendingLabel::left(
+                                lines,
+                                start_x + 1,
+                                y.saturating_sub(1),
+                            ));
                         }
                     }
                 } else {

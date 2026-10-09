@@ -64,6 +64,11 @@ impl<'a> ArchitectureRenderer<'a> {
             .map(|(_, _, w, _)| *w)
             .max()
             .unwrap_or(40);
+        // Normalize only the stacked outer frames; nested containers retain
+        // their measured widths and their children retain their placement.
+        for (_, _, width, _) in &mut top_layouts {
+            *width = max_w;
+        }
         let total_h = cur_y + 2;
 
         let mut canvas = Canvas::new(max_w + 4, total_h);
@@ -105,6 +110,7 @@ impl<'a> ArchitectureRenderer<'a> {
         );
 
         // Route and draw each connection through the corridor grid.
+        let mut labeled_routes = Vec::new();
         for conn in &self.spec.connections {
             let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to))
             else {
@@ -133,11 +139,26 @@ impl<'a> ArchitectureRenderer<'a> {
             let arrow_cell = route.cells[route.cells.len() - 1];
             canvas.draw_arrow(arrow_cell.0, arrow_cell.1, route.arrow, &self.theme);
 
-            if let Some(label) = &conn.label {
-                let cw = canvas.width;
-                let ch = canvas.height;
-                place_route_label(&mut canvas, &route.cells, u, v, &top_layouts, cw, ch, label);
+            if conn.label.is_some() {
+                labeled_routes.push((conn, u, v, route));
             }
+        }
+
+        // Labels see every routed line, so later connections cannot overwrite
+        // earlier labels or make their placement depend on draw order.
+        for (conn, u, v, route) in labeled_routes {
+            let cw = canvas.width;
+            let ch = canvas.height;
+            place_route_label(
+                &mut canvas,
+                &route.cells,
+                u,
+                v,
+                &top_layouts,
+                cw,
+                ch,
+                conn.label.as_deref().unwrap(),
+            );
         }
 
         canvas.set_pen(None);
@@ -219,6 +240,26 @@ impl<'a> ArchitectureRenderer<'a> {
     fn place_label(canvas: &mut Canvas, bounds: Rect, px: usize, py: usize, label: &str) -> bool {
         if let Some((sx, sy)) = canvas.find_safe_text_pos_within(bounds, px, py, label) {
             canvas.draw_text(sx, sy, label);
+            return true;
+        }
+        // The local search can miss a free corridor on a long vertical route.
+        // Keep the nearest safe position in the same bounded search window.
+        let label_w = UnicodeWidthStr::width(label);
+        let mut best = None;
+        if label_w <= bounds.width {
+            for y in bounds.y..bounds.y + bounds.height {
+                for x in bounds.x..=bounds.x + bounds.width - label_w {
+                    let distance = x.abs_diff(px) + y.abs_diff(py);
+                    if best.is_none_or(|(_, _, d)| distance < d)
+                        && canvas.can_place_text(x, y, label)
+                    {
+                        best = Some((x, y, distance));
+                    }
+                }
+            }
+        }
+        if let Some((x, y, _)) = best {
+            canvas.draw_text(x, y, label);
             return true;
         }
         false
@@ -554,20 +595,22 @@ struct Routed {
 /// impassable; container borders may only be crossed perpendicular to
 /// their edge (a vertical move may enter a horizontal border cell), which
 /// is what paints the junction glyph where a route pierces a wall.
-struct RouteGrid {
+struct RouteGrid<'a> {
     w: usize,
     h: usize,
     blocked: Vec<bool>,
     hborder: Vec<bool>,
     vborder: Vec<bool>,
+    containers: &'a [Rect],
+    leaves: &'a HashMap<String, BoxBounds>,
 }
 
-impl RouteGrid {
+impl<'a> RouteGrid<'a> {
     fn new(
         w: usize,
         h: usize,
-        containers: &[Rect],
-        leaves: &HashMap<String, BoxBounds>,
+        containers: &'a [Rect],
+        leaves: &'a HashMap<String, BoxBounds>,
         canvas: &Canvas,
     ) -> Self {
         let mut grid = Self {
@@ -576,6 +619,8 @@ impl RouteGrid {
             blocked: vec![false; w * h],
             hborder: vec![false; w * h],
             vborder: vec![false; w * h],
+            containers,
+            leaves,
         };
         for r in containers {
             grid.mark_container(*r);
@@ -638,6 +683,31 @@ impl RouteGrid {
         }
     }
 
+    /// Directional clearance leaves a blank cell beside unrelated boxes
+    /// without blocking perpendicular attachments or container crossings.
+    fn mark_clearance(&self, flags: &mut [u8], r: Rect) {
+        let left = r.x.saturating_sub(1);
+        let right = (r.x + r.width).min(self.w - 1);
+        let top = r.y.saturating_sub(1);
+        let bottom = (r.y + r.height).min(self.h - 1);
+        for x in left..=right {
+            if r.y > 0 {
+                flags[top * self.w + x] |= 1;
+            }
+            if r.y + r.height < self.h {
+                flags[bottom * self.w + x] |= 1;
+            }
+        }
+        for y in top..=bottom {
+            if r.x > 0 {
+                flags[y * self.w + left] |= 2;
+            }
+            if r.x + r.width < self.w {
+                flags[y * self.w + right] |= 2;
+            }
+        }
+    }
+
     /// Whether a move in direction `(dx, dy)` may land on `(x, y)`.
     fn step_ok(&self, x: usize, y: usize, dx: isize, dy: isize) -> bool {
         if x >= self.w || y >= self.h {
@@ -665,12 +735,33 @@ impl RouteGrid {
         let dx = center_x(v) as isize - center_x(u) as isize;
         let dy = center_y(v) as isize - center_y(u) as isize;
 
+        // Reuse the visitation buffer for directional clearance bits (1/2);
+        // bit 4 records BFS visitation. Endpoint boxes and their containing
+        // frames must remain accessible for attachment and wall crossings.
+        let mut visited = vec![0_u8; self.w * self.h];
+        for b in self.leaves.values() {
+            let r = Rect::new(b.x, b.y, b.width, b.height);
+            if r != u && r != v {
+                self.mark_clearance(&mut visited, r);
+            }
+        }
+        for &r in self.containers {
+            if !r.contains_point(center_x(u), center_y(u))
+                && !r.contains_point(center_x(v), center_y(v))
+            {
+                self.mark_clearance(&mut visited, r);
+            }
+        }
+
         // (seed cell, source anchor, outward direction)
         let mut seeds = Vec::new();
         for (anchor, dir) in facing_anchors(u, dx, dy) {
             if let Some(seed) = step(anchor, dir) {
                 let (ddx, ddy) = dir_delta(dir);
-                if self.step_ok(seed.0, seed.1, ddx, ddy) {
+                let mask = if ddx != 0 { 1 } else { 2 };
+                if self.step_ok(seed.0, seed.1, ddx, ddy)
+                    && visited[seed.1 * self.w + seed.0] & mask == 0
+                {
                     seeds.push((seed, anchor, dir));
                 }
             }
@@ -680,7 +771,10 @@ impl RouteGrid {
         for (anchor, dir) in facing_anchors(v, -dx, -dy) {
             if let Some(goal) = step(anchor, dir) {
                 let (ddx, ddy) = dir_delta(dir);
-                if self.step_ok(goal.0, goal.1, ddx, ddy) {
+                let mask = if ddx != 0 { 1 } else { 2 };
+                if self.step_ok(goal.0, goal.1, ddx, ddy)
+                    && visited[goal.1 * self.w + goal.0] & mask == 0
+                {
                     goals.insert(goal, (anchor, dir));
                 }
             }
@@ -691,12 +785,11 @@ impl RouteGrid {
 
         // Multi-source BFS over legal moves.
         let mut prev: Vec<Option<u32>> = vec![None; self.w * self.h];
-        let mut visited = vec![false; self.w * self.h];
         let mut roots: HashMap<usize, ((usize, usize), Direction)> = HashMap::new();
         let mut queue = std::collections::VecDeque::new();
         for (cell, anchor, dir) in seeds {
             let idx = cell.1 * self.w + cell.0;
-            visited[idx] = true;
+            visited[idx] |= 4;
             roots.insert(idx, (anchor, dir));
             queue.push_back(idx);
         }
@@ -713,14 +806,24 @@ impl RouteGrid {
                     let Some((nx, ny)) = step((x, y), dir) else {
                         continue;
                     };
-                    if !self.step_ok(nx, ny, ddx, ddy) {
+                    if !self.step_ok(x, y, ddx, ddy) || !self.step_ok(nx, ny, ddx, ddy) {
                         continue;
                     }
                     let nidx = ny * self.w + nx;
-                    if visited[nidx] {
+                    let mask = if ddx != 0 { 1 } else { 2 };
+                    if visited[nidx] & 4 != 0
+                        || visited[idx] & mask != 0
+                        || visited[nidx] & mask != 0
+                    {
                         continue;
                     }
-                    visited[nidx] = true;
+                    if let Some(&(_, dst_dir)) = goals.get(&(nx, ny)) {
+                        let (gx, gy) = dir_delta(dst_dir);
+                        if (ddx, ddy) != (-gx, -gy) {
+                            continue;
+                        }
+                    }
+                    visited[nidx] |= 4;
                     prev[nidx] = Some(idx as u32);
                     if let Some(&(dst_anchor, dst_dir)) = goals.get(&(nx, ny)) {
                         break 'search Some((nidx, dst_anchor, dst_dir));
@@ -917,6 +1020,229 @@ mod tests {
     use super::*;
     use crate::schema::*;
     use crate::theme::BoxStyle;
+
+    fn firmware_spec() -> ArchitectureSpec {
+        serde_json::from_str(
+            r#"{
+                "type": "architecture",
+                "title": "UAV STM32H7 Dual-Core Memory & Bus Architecture",
+                "containers": [
+                    {
+                        "id": "core_domain", "title": "Core Processing Domain", "layout": "row",
+                        "items": [
+                            {"id": "c0", "name": "Cortex-M7 (480 MHz)",
+                             "properties": [["Role", "1 kHz Flight Loop"], ["L1 I/D Cache", "32 KB / 32 KB"], ["TCM", "128 KB DTCM"]]},
+                            {"id": "c1", "name": "Cortex-M4 (240 MHz)",
+                             "properties": [["Role", "50 Hz Nav & Log"], ["Bus", "AXI / AHB3"], ["SRAM", "64 KB SRAM3"]]}
+                        ]
+                    },
+                    {
+                        "id": "mem_domain", "title": "Memory & Bus Interconnect", "layout": "row",
+                        "items": [
+                            {"id": "dma_sram", "name": "AXI SRAM (384 KB)",
+                             "properties": [["Buffer 1", "IMU SPI1 DMA Ring"], ["Buffer 2", "CRSF UART2 DMA"], ["Buffer 3", "Blackbox Cache"]]},
+                            {"id": "flash", "name": "QSPI Flash (16 MB)",
+                             "properties": [["Chip", "W25Q128JV"], ["Mode", "Quad-SPI XiP"], ["Sectors", "4 KB Subsector"]]}
+                        ]
+                    }
+                ],
+                "connections": [
+                    {"from": "c0", "to": "dma_sram", "label": "Direct DMA FIFO"},
+                    {"from": "c1", "to": "dma_sram", "label": "HSEM IPC Lock"},
+                    {"from": "c1", "to": "flash", "label": "Log Flush"}
+                ]
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn routing_layout(
+        renderer: &ArchitectureRenderer<'_>,
+    ) -> (Canvas, HashMap<String, BoxBounds>, Vec<Rect>) {
+        let sizes: Vec<_> = renderer
+            .spec
+            .containers
+            .iter()
+            .map(|c| renderer.measure_container(c))
+            .collect();
+        let width = sizes.iter().map(|(w, _)| *w).max().unwrap();
+        let height = sizes.iter().map(|(_, h)| h + 4).sum::<usize>() + 4;
+        let mut canvas = Canvas::new(width + 4, height);
+        let mut bounds = HashMap::new();
+        let mut containers = Vec::new();
+        let mut y = 2;
+        for (c, (_, h)) in renderer.spec.containers.iter().zip(sizes) {
+            renderer.render_container(
+                &mut canvas,
+                c,
+                Rect::new(0, y, width, h),
+                &mut bounds,
+                &mut containers,
+            );
+            y += h + 4;
+        }
+        (canvas, bounds, containers)
+    }
+
+    fn assert_route_clearance(route: &Routed, unrelated: Rect) {
+        for &(x, y) in &route.cells {
+            assert!(!unrelated.contains_point(x, y), "route enters sibling box");
+        }
+        for pair in route.cells.windows(2) {
+            let [(x0, y0), (x1, y1)] = pair else {
+                unreachable!();
+            };
+            if x0 == x1 {
+                let near_wall =
+                    x0.abs_diff(unrelated.x) == 1 || x0.abs_diff(unrelated.right()) == 1;
+                let overlaps = (*y0).min(*y1) <= unrelated.bottom() + 1
+                    && (*y0).max(*y1) + 1 >= unrelated.y;
+                assert!(!near_wall || !overlaps, "vertical route abuts sibling");
+            } else {
+                let near_wall =
+                    y0.abs_diff(unrelated.y) == 1 || y0.abs_diff(unrelated.bottom()) == 1;
+                let overlaps = (*x0).min(*x1) <= unrelated.right() + 1
+                    && (*x0).max(*x1) + 1 >= unrelated.x;
+                assert!(!near_wall || !overlaps, "horizontal route abuts sibling");
+            }
+        }
+        assert_eq!(
+            step(route.dst_anchor, route.dst_dir),
+            route.cells.last().copied(),
+            "route must terminate immediately beside its target anchor"
+        );
+        let (dx, dy) = dir_delta(route.dst_dir);
+        assert_eq!(dir_delta(route.arrow), (-dx, -dy));
+    }
+
+    #[test]
+    fn test_firmware_outer_widths_labels_and_sibling_clearance() {
+        let spec = firmware_spec();
+        for style in [
+            BoxStyle::Rounded,
+            BoxStyle::Sharp,
+            BoxStyle::Double,
+            BoxStyle::Heavy,
+            BoxStyle::Ascii,
+        ] {
+            let renderer = ArchitectureRenderer::new(&spec, Theme::new(style));
+            let width = spec
+                .containers
+                .iter()
+                .map(|c| renderer.measure_container(c).0)
+                .max()
+                .unwrap();
+            let out = renderer.render(false).unwrap();
+            for c in &spec.containers {
+                let border = out.lines().find(|line| line.contains(&c.title)).unwrap();
+                assert_eq!(UnicodeWidthStr::width(border), width, "{out}");
+                for item in &c.items {
+                    if let ContainerItem::Leaf(leaf) = item {
+                        assert!(out.contains(&leaf.name), "{out}");
+                        for (key, value) in &leaf.properties {
+                            assert!(out.contains(&format!("{key}: {value}")), "{out}");
+                        }
+                    }
+                }
+            }
+            for conn in &spec.connections {
+                assert_eq!(out.matches(conn.label.as_deref().unwrap()).count(), 1, "{out}");
+            }
+            let (canvas, bounds, containers) = routing_layout(&renderer);
+            let grid = RouteGrid::new(canvas.width, canvas.height, &containers, &bounds, &canvas);
+            let rect = |id: &str| {
+                let b = &bounds[id];
+                Rect::new(b.x, b.y, b.width, b.height)
+            };
+            for conn in &spec.connections {
+                let route = grid.route(rect(&conn.from), rect(&conn.to)).unwrap();
+                for id in bounds.keys() {
+                    if id != &conn.from && id != &conn.to {
+                        assert_route_clearance(&route, rect(id));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_outer_width_normalization_does_not_widen_nested_column() {
+        let spec: ArchitectureSpec = serde_json::from_str(
+            r#"{
+                "containers": [
+                    {"id": "small", "title": "Small", "layout": "column",
+                     "items": [{"id": "nested", "title": "Nested", "layout": "column",
+                                "items": [{"id": "a", "name": "Alpha"}, {"id": "b", "name": "Beta"}]}]},
+                    {"id": "wide", "title": "A much wider neighboring outer container",
+                     "items": [{"id": "c", "name": "Gamma"}]}
+                ],
+                "connections": [{"from": "a", "to": "b", "label": "Local"}]
+            }"#,
+        )
+        .unwrap();
+        let renderer = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+        let out = renderer.render(false).unwrap();
+        let max_width = spec
+            .containers
+            .iter()
+            .map(|c| renderer.measure_container(c).0)
+            .max()
+            .unwrap();
+        for c in &spec.containers {
+            let border = out.lines().find(|line| line.contains(&c.title)).unwrap();
+            assert_eq!(UnicodeWidthStr::width(border), max_width, "{out}");
+        }
+        let ContainerItem::SubContainer(nested) = &spec.containers[0].items[0] else {
+            panic!("nested fixture must contain a container");
+        };
+        let nested_width = renderer.measure_container(nested).0;
+        let border = out.lines().find(|line| line.contains("Nested")).unwrap();
+        assert_eq!(border.chars().position(|ch| ch == '╭'), Some(2));
+        assert_eq!(
+            border.chars().position(|ch| ch == '╮'),
+            Some(2 + nested_width - 1)
+        );
+        assert!(nested_width < max_width);
+        assert_eq!(out.matches("Local").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn test_neighboring_and_nested_route_clearance() {
+        for (layout, nested) in [("column", false), ("column", true), ("row", false)] {
+            let items = r#"[
+                {"id": "a", "name": "Source"},
+                {"id": "sibling", "name": "Neighbor", "properties": [["Keep", "intact"]]},
+                {"id": "b", "name": "Target"}
+            ]"#;
+            let items = if nested {
+                format!(
+                    r#"[{{"id": "inner", "title": "Inner", "layout": "{layout}", "items": {items}}}]"#
+                )
+            } else {
+                items.to_string()
+            };
+            let spec: ArchitectureSpec = serde_json::from_str(&format!(
+                r#"{{
+                    "containers": [{{"id": "outer", "title": "Outer", "layout": "{layout}", "items": {items}}}],
+                    "connections": [{{"from": "a", "to": "b", "label": "Around"}}]
+                }}"#
+            ))
+            .unwrap();
+            let renderer = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
+            let (canvas, bounds, containers) = routing_layout(&renderer);
+            let grid = RouteGrid::new(canvas.width, canvas.height, &containers, &bounds, &canvas);
+            let rect = |id: &str| {
+                let b = &bounds[id];
+                Rect::new(b.x, b.y, b.width, b.height)
+            };
+            let route = grid.route(rect("a"), rect("b")).unwrap();
+            assert_route_clearance(&route, rect("sibling"));
+            let out = renderer.render(false).unwrap();
+            for text in ["Source", "Neighbor", "Target", "Keep: intact", "Around"] {
+                assert_eq!(out.matches(text).count(), 1, "{out}");
+            }
+        }
+    }
 
     #[test]
     fn test_architecture_diagram() {

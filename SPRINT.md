@@ -25,6 +25,7 @@ For the source update/build, installed Pi synchronization, separate omp installa
 - `npm pack --dry-run --ignore-scripts --json` included the required sources, documentation, extension, and skills in **33 files**, excluding build/dependency/index caches. This checks package contents; no npm registry publication is claimed.
 - All **six** paired README input/rendered-output showcases matched the release CLI. The tree showcase's stale sharp final corner was corrected to the actual rounded-style output.
 - Independent release review found a new narrow-column label-loss regression. The actual three-container probe dropped `Internal link` in all five styles before repair. Column measurement now reserves display-width-aware space for the label, route, blank margins, and frame. The regression and **30** original/nested/CJK/long-label style probes pass, retaining each label exactly once with endpoint locality and ANSI/plain parity. The full gates, 70 original firmware input paths, and 35 example/style comparisons were rerun after this repair.
+- Final repository/user/Pi/cache/omp binaries share SHA-256 `cbea0c62d304fcd2cbac8716e55964dda549f6fc26ab2f85f77faef375ceb8a9`. The installed live `draw_diagram` also retains the previously missing `Internal link` and exactly matches the corrected release binary.
 
 ## Historical implementation stages
 

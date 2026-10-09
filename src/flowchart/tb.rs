@@ -1,6 +1,6 @@
 use super::edges::{clear_route_y, edge_arrow_heads, edge_hline, edge_vline};
 use super::{BlockMode, Blocks, FlowchartRenderer, PendingLabel};
-use crate::canvas::{Canvas, Direction, display_width};
+use crate::canvas::{Canvas, Direction, Rect, display_width};
 use crate::schema::SubgraphSpec;
 use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;
@@ -508,7 +508,9 @@ impl<'a> FlowchartRenderer<'a> {
                                 } else {
                                     (line_x + 2, usize::midpoint(u_bottom, v_top))
                                 };
-                                labels.push(PendingLabel::left(lines, label_x, label_y));
+                                labels.push(PendingLabel::left(lines, label_x, label_y).within(
+                                    Rect::new(0, u_bottom + 1, usize::MAX, v_top - u_bottom - 1),
+                                ));
                             }
                         } else {
                             // Orthogonal bend (Manhattan)
@@ -547,7 +549,9 @@ impl<'a> FlowchartRenderer<'a> {
                                     mid_y
                                 }
                                 .clamp(u_bottom + 1, v_top.saturating_sub(1));
-                                labels.push(PendingLabel::left(lines, label_x, label_y));
+                                labels.push(PendingLabel::left(lines, label_x, label_y).within(
+                                    Rect::new(0, u_bottom + 1, usize::MAX, v_top - u_bottom - 1),
+                                ));
                             }
                         }
                     } else {
@@ -625,11 +629,11 @@ impl<'a> FlowchartRenderer<'a> {
                                 let label_x = usize::midpoint(track_x, v_cx)
                                     .saturating_sub(lbl_w / 2)
                                     .max(v_cx.min(track_x) + 1);
-                                labels.push(PendingLabel::left(
-                                    lines,
-                                    label_x,
-                                    bottom_gap_y.saturating_sub(1),
-                                ));
+                                let label_top = bottom_gap_y.saturating_sub(lines.len());
+                                labels.push(
+                                    PendingLabel::left(lines, label_x, bottom_gap_y.saturating_sub(1))
+                                        .within(Rect::new(0, label_top, usize::MAX, v_top - label_top)),
+                                );
                             }
                         } else {
                             let mut max_bound_x = u.x + u.width;
@@ -683,11 +687,15 @@ impl<'a> FlowchartRenderer<'a> {
                                 } else {
                                     route_x + 1 + (u_cx - route_x - 1).saturating_sub(lbl_w) / 2
                                 };
-                                labels.push(PendingLabel::left(
-                                    lines,
-                                    label_x,
-                                    top_gap_y.saturating_sub(1),
-                                ));
+                                labels.push(
+                                    PendingLabel::left(lines, label_x, top_gap_y.saturating_sub(1))
+                                        .within(Rect::new(
+                                            0,
+                                            u_bottom + 1,
+                                            usize::MAX,
+                                            top_gap_y.saturating_sub(u_bottom),
+                                        )),
+                                );
                             }
                         }
                     }
@@ -706,7 +714,15 @@ impl<'a> FlowchartRenderer<'a> {
                             &self.theme,
                         );
                         if !lines.is_empty() {
-                            labels.push(PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)));
+                            labels.push(
+                                PendingLabel::left(lines, start_x + 1, y.saturating_sub(1))
+                                    .within(Rect::new(
+                                        start_x,
+                                        0,
+                                        end_x.saturating_sub(start_x) + 1,
+                                        usize::MAX,
+                                    )),
+                            );
                         }
                     } else {
                         let y = u.y + u.height / 2;
@@ -721,7 +737,15 @@ impl<'a> FlowchartRenderer<'a> {
                             &self.theme,
                         );
                         if !lines.is_empty() {
-                            labels.push(PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)));
+                            labels.push(
+                                PendingLabel::left(lines, start_x + 1, y.saturating_sub(1))
+                                    .within(Rect::new(
+                                        start_x,
+                                        0,
+                                        end_x.saturating_sub(start_x) + 1,
+                                        usize::MAX,
+                                    )),
+                            );
                         }
                     }
                 } else {
@@ -810,11 +834,19 @@ impl<'a> FlowchartRenderer<'a> {
                     );
 
                     if !lines.is_empty() {
-                        labels.push(PendingLabel::left(
-                            lines,
-                            loop_x + 1,
-                            usize::midpoint(u_center_y, v_center_y),
-                        ));
+                        labels.push(
+                            PendingLabel::left(
+                                lines,
+                                loop_x + 2,
+                                usize::midpoint(u_center_y, v_center_y),
+                            )
+                            .within(Rect::new(
+                                loop_x + 2,
+                                u_center_y.min(v_center_y),
+                                usize::MAX,
+                                u_center_y.abs_diff(v_center_y) + 1,
+                            )),
+                        );
                         loop_track_x += label_width + 3;
                     } else {
                         loop_track_x += 4;

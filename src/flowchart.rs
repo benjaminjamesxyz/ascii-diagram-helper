@@ -44,6 +44,7 @@ struct PendingLabel {
     y: usize,
     centered: bool,
     up: bool,
+    band: Option<Rect>,
 }
 
 impl PendingLabel {
@@ -54,6 +55,7 @@ impl PendingLabel {
             y,
             centered: false,
             up: false,
+            band: None,
         }
     }
 
@@ -64,14 +66,24 @@ impl PendingLabel {
             y,
             centered: true,
             up,
+            band: None,
         }
+    }
+
+    fn within(mut self, band: Rect) -> Self {
+        self.band = Some(band);
+        self
     }
 
     fn draw(self, renderer: &FlowchartRenderer<'_>, canvas: &mut Canvas) {
         if self.centered {
-            renderer.draw_stacked_label(canvas, &self.lines, self.x, self.y, self.up);
+            renderer.draw_stacked_label(
+                canvas, &self.lines, self.x, self.y, self.up, self.band,
+            );
         } else {
-            FlowchartRenderer::draw_stacked_label_left(canvas, &self.lines, self.x, self.y, true);
+            FlowchartRenderer::draw_stacked_label_left(
+                canvas, &self.lines, self.x, self.y, true, self.band,
+            );
         }
     }
 }
@@ -1354,13 +1366,14 @@ impl<'a> FlowchartRenderer<'a> {
         cx: usize,
         base_y: usize,
         up: bool,
+        band: Option<Rect>,
     ) {
         let y = if up {
             base_y.saturating_sub(lines.len().saturating_sub(1))
         } else {
             base_y
         };
-        Self::draw_label_block(canvas, lines, cx, y, true);
+        Self::draw_label_block(canvas, lines, cx, y, true, band);
     }
 
     /// Draws stacked edge-label lines left-aligned at `x` (self-loops and
@@ -1371,13 +1384,14 @@ impl<'a> FlowchartRenderer<'a> {
         x: usize,
         base_y: usize,
         down: bool,
+        band: Option<Rect>,
     ) {
         let y = if down {
             base_y
         } else {
             base_y.saturating_sub(lines.len().saturating_sub(1))
         };
-        Self::draw_label_block(canvas, lines, x, y, false);
+        Self::draw_label_block(canvas, lines, x, y, false, band);
     }
 
     /// Move a complete label to the nearest clear position, never its individual
@@ -1388,6 +1402,7 @@ impl<'a> FlowchartRenderer<'a> {
         preferred_x: usize,
         preferred_y: usize,
         centered: bool,
+        band: Option<Rect>,
     ) {
         if lines.is_empty() {
             return;
@@ -1403,6 +1418,18 @@ impl<'a> FlowchartRenderer<'a> {
             preferred_x
         };
         let clear = |x: usize, y: usize| {
+            // Adjacent-rank labels belong between their endpoint boxes, not
+            // above the source (TB) or before it (LR). If a multiline label
+            // exceeds the band, enlarge only that minimum text extent; the
+            // unbounded cross-axis still supplies a lossless clear position.
+            if let Some(band) = band
+                && (x < band.x
+                    || y < band.y
+                    || x + width > band.x.saturating_add(band.width.max(width))
+                    || y + lines.len() > band.y.saturating_add(band.height.max(lines.len())))
+            {
+                return false;
+            }
             let left = x.saturating_sub(1);
             let right = x + width;
             let bottom = y + lines.len() - 1;
@@ -1490,7 +1517,10 @@ impl<'a> FlowchartRenderer<'a> {
         // glyph so the label never abuts it (FC-EDGE-08)
         let lines = self.edge_label_lines(edge);
         if !lines.is_empty() {
-            labels.push(PendingLabel::left(lines, x1 + 2, y0));
+            labels.push(
+                PendingLabel::left(lines, x1 + 2, y0)
+                    .within(Rect::new(x1 + 2, y0, usize::MAX, y1 - y0 + 1)),
+            );
         }
     }
 

@@ -2156,6 +2156,7 @@ mod deferred_edge_label_regressions {
                 4,
                 3,
                 true,
+                None,
             );
             for (x, y, original) in strokes {
                 assert_eq!(canvas.get_cell(x, y), Some(&original));
@@ -2177,9 +2178,9 @@ mod deferred_edge_label_regressions {
             let mut canvas = Canvas::new(32, 8);
             canvas.draw_text(4, 1, "Occupied");
             if centered {
-                renderer.draw_stacked_label(&mut canvas, &lines, 8, 0, true);
+                renderer.draw_stacked_label(&mut canvas, &lines, 8, 0, true, None);
             } else {
-                FlowchartRenderer::draw_stacked_label_left(&mut canvas, &lines, 4, 0, false);
+                FlowchartRenderer::draw_stacked_label_left(&mut canvas, &lines, 4, 0, false, None);
             }
             let out = canvas.render(&theme);
             label_position(&out, "Occupied");
@@ -2197,6 +2198,92 @@ mod deferred_edge_label_regressions {
                     assert_eq!(position.0, first.0, "coherent left alignment:\n{out}");
                 }
             }
+        }
+    }
+
+    fn node_rect(output: &str, label: &str, theme: &Theme) -> Rect {
+        let (x, y) = label_position(output, label);
+        let rows: Vec<Vec<char>> = output.lines().map(|row| row.chars().collect()).collect();
+        let top = y - 1;
+        let left = (0..=x)
+            .rev()
+            .find(|&column| rows[top][column] == theme.top_left_corner())
+            .unwrap();
+        let right = (x..rows[top].len())
+            .find(|&column| rows[top][column] == theme.top_right_corner())
+            .unwrap();
+        let bottom = (y + 1..rows.len())
+            .find(|&row| rows[row].get(left) == Some(&theme.bottom_left_corner()))
+            .unwrap();
+        Rect::new(left, top, right - left + 1, bottom - top + 1)
+    }
+
+    #[test]
+    fn crowded_labels_stay_between_endpoints_not_at_another_nodes_ingress() {
+        for style in STYLES {
+            for direction in ["TD", "LR"] {
+                let dsl = format!(
+                    "graph {direction}
+                     A[Input One] -->|First Signal| C[Control]
+                     B[Input Two] -->|Second Signal| C
+                     C -->|Setpoint| D[Drive]
+                     A -.->|Watchdog| D"
+                );
+                let DiagramSpec::Flowchart(spec) =
+                    crate::parser::parse_dsl_or_json(&dsl, style).unwrap()
+                else {
+                    panic!("expected flowchart");
+                };
+                let theme = Theme::new(style);
+                let out = FlowchartRenderer::new(&spec, theme.clone()).render(false);
+                for (source, label, target) in [
+                    ("Input One", "First Signal", "Control"),
+                    ("Input Two", "Second Signal", "Control"),
+                    ("Control", "Setpoint", "Drive"),
+                ] {
+                    let source = node_rect(&out, source, &theme);
+                    let target = node_rect(&out, target, &theme);
+                    let (x, y) = label_position(&out, label);
+                    if direction == "TD" {
+                        assert!(
+                            y > source.bottom() && y < target.y,
+                            "{label} belongs in its outgoing rank band:\n{out}"
+                        );
+                    } else {
+                        assert!(
+                            x > source.right() && x + display_width(label) <= target.x,
+                            "{label} belongs in its forward connection corridor:\n{out}"
+                        );
+                    }
+                }
+                if direction == "TD" {
+                    let intermediate = node_rect(&out, "Control", &theme);
+                    let (x, y) = label_position(&out, "Watchdog");
+                    assert!(
+                        y + 1 < intermediate.y || x > intermediate.right() + 1,
+                        "skip-edge label must not look attached to Control's ingress:\n{out}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_multiline_label_keeps_its_band_origin_and_all_lines() {
+        let mut canvas = Canvas::new(30, 10);
+        let theme = Theme::new(BoxStyle::Rounded);
+        let band = Rect::new(0, 4, usize::MAX, 1);
+        canvas.draw_box(0, band.y, 12, 4, &theme, None);
+        canvas.add_obstacle(Rect::new(0, band.y, 12, 4));
+        let lines = vec!["First".to_string(), "中段".to_string(), "Last".to_string()];
+        FlowchartRenderer::draw_stacked_label_left(
+            &mut canvas, &lines, 2, band.y, true, Some(band),
+        );
+        let out = canvas.render(&theme);
+        for (i, line) in lines.iter().enumerate() {
+            let (x, y) = label_position(&out, line);
+            assert!(x > 12, "label clears the occupied band horizontally:\n{out}");
+            assert_eq!(y, band.y + i, "minimal-height lossless fallback:\n{out}");
         }
     }
 }

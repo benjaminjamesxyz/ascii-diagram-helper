@@ -85,17 +85,17 @@ graph LR
 ```text
 
 
- ╭  Frontend Layer  ──────────────────╮
- │                                    │
- │ ╭─────────╮                        │
- │ │ Web App │─────╮                  │
- │ ╰─────────╯     │                  │
- │                 │                  │
- │                 │                  │
- │ ╭────────────╮  │                  │
- │ │ Mobile App │──┤                  │
- │ ╰────────────╯  │                  │
- ╰─────────────────┼──────────────────╯
+ ╭  Frontend Layer  ───────╮
+ │                         │
+ │ ╭─────────╮             │
+ │ │ Web App │─────╮       │
+ │ ╰─────────╯     │       │
+ │                 │       │
+ │                 │       │
+ │ ╭────────────╮  │       │
+ │ │ Mobile App │──┤       │
+ │ ╰────────────╯  │       │
+ ╰─────────────────┼───────╯
                    │
                    │
                    │╭  Backend Cluster  ─────────────────────────────────╮
@@ -150,7 +150,7 @@ sequenceDiagram
 
 ### 3. Architecture & Container Diagrams (`architecture`)
 
-Declarative JSON specifications with row/column layouts, component property badges (`Port`, `Protocol`), and margin corridor routing.
+Declarative JSON specifications with row/column layouts, component property badges (`Port`, `Protocol`), and margin corridor routing. Connection labels reserve a blank display cell at each end, keeping text clear of adjacent strokes.
 
 **JSON Spec:**
 ```json
@@ -514,8 +514,9 @@ Options may precede or follow a bare file or quoted DSL input: `ascii-diagram sp
 | Feature / Category | Limitation / Behavior | Recommendation / Workaround |
 |---|---|---|
 | **Subgraph Direction** | `direction` per subgraph applies when the subgraph is edge-isolated | Minimize cross-edges between subgraphs if custom subgraph direction is needed |
-| **Group Layout Width** | Padding and whole-title separation can widen parallel subgraph layouts beyond the terminal; sibling node widths remain content-sized | Shorten group titles or split a dense firmware diagram into focused views |
+| **Group Layout Width** | Titles reuse existing member padding, but complete titles and separated groups can still exceed terminal width; sibling node widths remain content-sized | Shorten group titles or split a dense firmware diagram into focused views |
 | **Edge Density** | Dense cross-branch edges (>2 per node) share corridor tracks | Keep cross-branch feeds $\le 2$ per node; use dashed `-.->` lines for supervisory control |
+| **Edge Labels** | Labels are placed after routing, with blank horizontal margins; multiline labels move together within their connection band. Oversized labels may extend the layout rather than disappear or overwrite a route | Keep labels concise; use `<br/>` for explicit flowchart label line breaks |
 | **Color Support** | `stroke:<color>` colorizes borders/lines; `fill:<color>` tints labels. Standard ANSI names adapt to the theme; extended names (`orange`, `purple`, `brown`) and hex use truecolor | Use `--color never` for guaranteed plain output, or `--color always` to force ANSI |
 | **Header-only DSL** | `flowchart TD` or `sequenceDiagram` without nodes returns empty output | Always declare at least one node or participant |
 | **Pipe Disambiguation** | Single-pipe text without headers parses as `tree`, not `table` | Use explicit `table` keyword or standard pipe headers for tables |

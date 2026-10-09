@@ -46,6 +46,29 @@ README flowchart/architecture examples were regenerated from the release CLI; CL
 - Extension behavior suite passed after installation synchronization. Live `draw_diagram` output for both original firmware specs exactly matches the corrected rounded, colored native renders.
 - Corrected repository/user/Pi/omp binary copies share SHA-256 `ac2099548e77470bebf4ba42bc9fd0537ddce044a35f05b7060dadb314d5bfe7`. This follow-up is local; no upstream push was performed.
 
+## Parallel visual polish follow-up
+
+**Branch:** `sprint/firmware-polish-20261009`; color-preserving baseline `299df10`. Three implementation agents worked in isolated worktrees; the parent maintained `local://firmware-polish-board.md`, integrated commits, and ran final verification.
+
+| Track | Owner | Change | Commits |
+|---|---|---|---|
+| Architecture labels | ArchPolish | Bounded label search reserves one blank display cell at each end without moving components or routes | `525aa4c` |
+| Flowchart labels | FlowLabels | Defer labels until routes/nodes/groups are drawn; preserve complete multiline blocks, stroke clearance, and source/target corridor locality | `b366572`, `32a1e69` |
+| Group compactness | CompactGroups | Extend title shelves only to their required end; choose the earliest blocking anchor deterministically without allocating a sorted copy | `6d56efc` |
+
+The first render pass caught a locality regression despite green tests: `Target Angle` moved above its source, and a skip-edge label moved near an unrelated arrow. Corridor bounds now keep those labels with their own connections; new endpoint-locality regressions and actual renders pass.
+
+| Unchanged firmware input | Before | After |
+|---|---|---|
+| Flight-control flowchart | 54 rows × 181 columns | 54 rows × 158 columns |
+| Memory/bus architecture | 28 rows × 83 columns | 28 rows × 83 columns |
+
+- **321 Rust tests passed**; current-release extension suite passed; formatting passed. Clippy retains only the three existing warnings.
+- Original A/B × five styles preserve all labels/titles/node text, blank connection-label margins, and ANSI/plain parity. All 20 component/style property dividers retain complete border color.
+- Crowded TB/LR, multiline, CJK/nested, self-loop, and four/eight-motor scenarios pass in all five styles. Twenty architecture column/nested/row/CJK renders retain components, properties, and complete labels.
+- All 35 built-in example/style outputs remain byte-identical to the color-fix baseline. Five independent runs per style produce identical original-firmware flowchart output.
+- README's LR showcase was regenerated from the release CLI. The complete firmware flowchart still needs 158 columns; no truncation, terminal-width cap, or automatic wrapping was introduced. No upstream push.
+
 ---
 
 # Sprint v0.12.0 — Post-QA Hardening: 88-Defect Fix Campaign

@@ -305,7 +305,8 @@ impl<'a> FlowchartRenderer<'a> {
                                     (dy.saturating_sub(1), true)
                                 };
                                 labels.push(
-                                    PendingLabel::centered(lines, mid, label_y, up).within(label_band),
+                                    PendingLabel::centered(lines, mid, label_y, up)
+                                        .within(label_band),
                                 );
                             }
                         } else {
@@ -423,12 +424,14 @@ impl<'a> FlowchartRenderer<'a> {
                     if !lines.is_empty() {
                         let mid_x = usize::midpoint(v_ax, u_ax);
                         labels.push(
-                            PendingLabel::centered(lines, mid_x, loop_y + 1, false).within(Rect::new(
-                                v_ax.min(u_ax),
-                                loop_y + 1,
-                                v_ax.abs_diff(u_ax) + 1,
-                                usize::MAX,
-                            )),
+                            PendingLabel::centered(lines, mid_x, loop_y + 1, false).within(
+                                Rect::new(
+                                    v_ax.min(u_ax),
+                                    loop_y + 1,
+                                    v_ax.abs_diff(u_ax) + 1,
+                                    usize::MAX,
+                                ),
+                            ),
                         );
                         loop_track_y += 3;
                     } else {

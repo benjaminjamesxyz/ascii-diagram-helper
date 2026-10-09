@@ -2386,12 +2386,20 @@ mod deferred_edge_label_regressions {
         canvas.add_obstacle(Rect::new(0, band.y, 12, 4));
         let lines = vec!["First".to_string(), "中段".to_string(), "Last".to_string()];
         FlowchartRenderer::draw_stacked_label_left(
-            &mut canvas, &lines, 2, band.y, true, Some(band),
+            &mut canvas,
+            &lines,
+            2,
+            band.y,
+            true,
+            Some(band),
         );
         let out = canvas.render(&theme);
         for (i, line) in lines.iter().enumerate() {
             let (x, y) = label_position(&out, line);
-            assert!(x > 12, "label clears the occupied band horizontally:\n{out}");
+            assert!(
+                x > 12,
+                "label clears the occupied band horizontally:\n{out}"
+            );
             assert_eq!(y, band.y + i, "minimal-height lossless fallback:\n{out}");
         }
     }

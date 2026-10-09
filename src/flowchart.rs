@@ -77,12 +77,15 @@ impl PendingLabel {
 
     fn draw(self, renderer: &FlowchartRenderer<'_>, canvas: &mut Canvas) {
         if self.centered {
-            renderer.draw_stacked_label(
-                canvas, &self.lines, self.x, self.y, self.up, self.band,
-            );
+            renderer.draw_stacked_label(canvas, &self.lines, self.x, self.y, self.up, self.band);
         } else {
             FlowchartRenderer::draw_stacked_label_left(
-                canvas, &self.lines, self.x, self.y, true, self.band,
+                canvas,
+                &self.lines,
+                self.x,
+                self.y,
+                true,
+                self.band,
             );
         }
     }
@@ -1521,10 +1524,12 @@ impl<'a> FlowchartRenderer<'a> {
         // glyph so the label never abuts it (FC-EDGE-08)
         let lines = self.edge_label_lines(edge);
         if !lines.is_empty() {
-            labels.push(
-                PendingLabel::left(lines, x1 + 2, y0)
-                    .within(Rect::new(x1 + 2, y0, usize::MAX, y1 - y0 + 1)),
-            );
+            labels.push(PendingLabel::left(lines, x1 + 2, y0).within(Rect::new(
+                x1 + 2,
+                y0,
+                usize::MAX,
+                y1 - y0 + 1,
+            )));
         }
     }
 

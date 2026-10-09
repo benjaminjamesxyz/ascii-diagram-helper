@@ -631,8 +631,17 @@ impl<'a> FlowchartRenderer<'a> {
                                     .max(v_cx.min(track_x) + 1);
                                 let label_top = bottom_gap_y.saturating_sub(lines.len());
                                 labels.push(
-                                    PendingLabel::left(lines, label_x, bottom_gap_y.saturating_sub(1))
-                                        .within(Rect::new(0, label_top, usize::MAX, v_top - label_top)),
+                                    PendingLabel::left(
+                                        lines,
+                                        label_x,
+                                        bottom_gap_y.saturating_sub(1),
+                                    )
+                                    .within(Rect::new(
+                                        0,
+                                        label_top,
+                                        usize::MAX,
+                                        v_top - label_top,
+                                    )),
                                 );
                             }
                         } else {
@@ -715,13 +724,14 @@ impl<'a> FlowchartRenderer<'a> {
                         );
                         if !lines.is_empty() {
                             labels.push(
-                                PendingLabel::left(lines, start_x + 1, y.saturating_sub(1))
-                                    .within(Rect::new(
+                                PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)).within(
+                                    Rect::new(
                                         start_x,
                                         0,
                                         end_x.saturating_sub(start_x) + 1,
                                         usize::MAX,
-                                    )),
+                                    ),
+                                ),
                             );
                         }
                     } else {
@@ -738,13 +748,14 @@ impl<'a> FlowchartRenderer<'a> {
                         );
                         if !lines.is_empty() {
                             labels.push(
-                                PendingLabel::left(lines, start_x + 1, y.saturating_sub(1))
-                                    .within(Rect::new(
+                                PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)).within(
+                                    Rect::new(
                                         start_x,
                                         0,
                                         end_x.saturating_sub(start_x) + 1,
                                         usize::MAX,
-                                    )),
+                                    ),
+                                ),
                             );
                         }
                     }

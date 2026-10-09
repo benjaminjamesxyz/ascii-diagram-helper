@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import asciiDiagramExtension from "../extensions/ascii-diagram.ts";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 
 console.log("Running Pi Extension tests...");
 
@@ -84,6 +85,125 @@ const tblResult = await registeredTool.execute(
 assert.ok(tblResult.content[0].text.includes("Status"));
 assert.ok(tblResult.content[0].text.includes("Active"));
 
+// JSON labels never opt into Mermaid directives, including CLI-normalized BOM
+// and whitespace. Exercise both tool parameters and explicit plain suppression.
+const renderDiagram = (params) =>
+	registeredTool.execute("regression", params, null, null, { cwd: process.cwd() });
+const graphJson = ` \n\uFEFF ${JSON.stringify({
+	type: "architecture",
+	title: "Dual-core flowchart architecture",
+	containers: [{
+		id: "domain",
+		title: "graph domain",
+		color: "green",
+		items: [{ id: "core", name: "graph processor", color: "red" }],
+	}],
+	connections: [],
+})} \n`;
+for (const parameter of ["spec", "dsl"]) {
+	const colored = await renderDiagram({ [parameter]: graphJson, color: true });
+	const plain = await renderDiagram({ [parameter]: graphJson, color: false });
+	assert.ok(colored.details.diagram.includes("graph processor"));
+	assert.ok(colored.details.diagram.includes("flowchart architecture"));
+	assert.ok(colored.details.diagram.includes("\x1b[31m"));
+	assert.ok(!plain.details.diagram.includes("\x1b["));
+	assert.strictEqual(
+		stripTerminalSequences(colored.details.diagram),
+		plain.details.diagram,
+		"JSON color changes only ANSI styling, not diagram contents",
+	);
+}
+
+const jsonFlowchart = await renderDiagram({
+	spec: JSON.stringify({
+		type: "flowchart",
+		nodes: [{ id: "A", label: "graph label", color: "red" }],
+		edges: [],
+	}),
+	color: true,
+});
+assert.ok(jsonFlowchart.details.diagram.includes("graph label"));
+assert.ok(jsonFlowchart.details.diagram.includes("\x1b[31m"));
+const jsonTable = await renderDiagram({
+	spec: JSON.stringify({ type: "table", headers: ["graph"], rows: [["flowchart"]] }),
+});
+assert.ok(jsonTable.details.diagram.includes("graph"));
+assert.ok(jsonTable.details.diagram.includes("flowchart"));
+
+// Real non-flowchart parsers must not receive appended classDef/linkStyle
+// directives just because a label happens to mention graph or flowchart.
+for (const dsl of [
+	"sequenceDiagram\n  A -> B: graph flowchart",
+	"tree\n  graph\n    flowchart",
+	"stack\n  graph\n  flowchart",
+	"table\nKey | Value\ngraph | flowchart",
+]) {
+	const colored = await renderDiagram({ dsl, color: true });
+	const plain = await renderDiagram({ dsl, color: false });
+	assert.ok(plain.details.diagram.includes("graph"));
+	assert.ok(plain.details.diagram.includes("flowchart"));
+	assert.strictEqual(
+		stripTerminalSequences(colored.details.diagram),
+		plain.details.diagram,
+		"non-flowchart output must be unchanged by automatic flowchart styling",
+	);
+	const transformedLabel = registeredTransformer(`\`\`\`mermaid\n${dsl}\n\`\`\``, {
+		messageType: "assistant",
+		isStreaming: false,
+		availableWidth: 100,
+	});
+	assert.ok(transformedLabel.includes(colored.details.diagram));
+}
+
+// Both genuine header forms retain cyan nodes/blue edges; classes still win.
+for (const header of ["graph TD", "flowchart LR"]) {
+	const colored = await renderDiagram({ dsl: `${header}; A --> B` });
+	const plain = await renderDiagram({ dsl: `${header}; A --> B`, color: false });
+	assert.ok(colored.details.diagram.includes("\x1b[36m"), "default cyan nodes");
+	assert.ok(colored.details.diagram.includes("\x1b[34m"), "default blue edges");
+	assert.strictEqual(stripTerminalSequences(colored.details.diagram), plain.details.diagram);
+}
+const styledPlain = await renderDiagram({
+	dsl: "graph TD; A --> B; classDef hot stroke:red; class A hot",
+	color: false,
+});
+assert.ok(!styledPlain.details.diagram.includes("\x1b["), "false suppresses user class colors");
+const directStyleDsl = "graph TD; A --> B; style A stroke:red";
+const directStylePlain = await renderDiagram({ dsl: directStyleDsl, color: false });
+const directStyleColor = await renderDiagram({ dsl: directStyleDsl, color: true });
+assert.ok(!directStylePlain.details.diagram.includes("\x1b["), "false suppresses direct node styles");
+assert.ok(directStyleColor.details.diagram.includes("\x1b[31m"), "user node style retains red");
+assert.strictEqual(stripTerminalSequences(directStyleColor.details.diagram), directStylePlain.details.diagram);
+
+// Frame geometry is measured in display cells, not ANSI bytes or UTF-16 units.
+const frameTheme = {
+	fg: (role, text) => `\x1b[${role === "accent" ? 35 : 37}m${text}\x1b[0m`,
+};
+for (const value of ["x", "界".repeat(36)]) {
+	for (const color of [false, true]) {
+		const result = await renderDiagram({
+			spec: JSON.stringify({
+				type: "table",
+				headers: ["Label"],
+				rows: [[value]],
+				color: "cyan",
+			}),
+			color,
+		});
+		const diagramLines = result.details.diagram.split("\n");
+		const expectedWidth = Math.max(13, ...diagramLines.map((line) => visibleWidth(line) + 2));
+		const framed = registeredTool.renderResult(result, { expanded: false }, frameTheme)
+			.render(expectedWidth + 20)
+			.map((line) => stripTerminalSequences(line).trimEnd());
+		assert.strictEqual(visibleWidth(framed[0]), expectedWidth, "header fits diagram display width");
+		assert.strictEqual(visibleWidth(framed.at(-1)), expectedWidth, "footer matches header");
+		assert.strictEqual(framed.length, diagramLines.length + 2, "frame adds no wrapped diagram rows");
+		for (let i = 0; i < diagramLines.length; i++) {
+			assert.strictEqual(framed[i + 1], `│ ${stripTerminalSequences(diagramLines[i])}`.trimEnd());
+		}
+	}
+}
+
 // Test Markdown Transformer auto-rendering Mermaid blocks
 const sampleMarkdown = `Interrupt sequence:
 
@@ -119,6 +239,47 @@ assert.ok(sentMessages.at(-1).includes("A"), "diagram content present");
 // Test /diagram plain mode (no flag → no --color arg → binary auto = plain when piped)
 await registeredCommand.cmd.handler("graph TD; C --> D", ctxMock);
 assert.ok(sentMessages.at(-1).includes("C"), "plain diagram sent");
+assert.ok(!sentMessages.at(-1).includes("\x1b["), "unstyled command stays plain when piped");
+
+// Help is handled locally even with other leading flags, not sent to a
+// renderer. An executable that always fails makes accidental invocation fail.
+{
+	const prevBin = process.env.ASCII_DIAGRAM_BIN;
+	const messagesBeforeHelp = sentMessages.length;
+	process.env.ASCII_DIAGRAM_BIN = "/bin/false";
+	try {
+		for (const args of [
+			"--help",
+			"-h",
+			"--color --style ascii --help",
+			"--style sharp --color -h",
+			"--example tree --color -h",
+			"--help graph TD; A --> B",
+		]) {
+			const notificationsBeforeHelp = notifications.length;
+			await registeredCommand.cmd.handler(args, ctxMock);
+			assert.strictEqual(notifications.length, notificationsBeforeHelp + 1);
+			assert.strictEqual(notifications.at(-1).level, "info", "help must not run a failing binary");
+			assert.strictEqual(sentMessages.length, messagesBeforeHelp, "help sends no diagram message");
+		}
+	} finally {
+		if (prevBin === undefined) delete process.env.ASCII_DIAGRAM_BIN;
+		else process.env.ASCII_DIAGRAM_BIN = prevBin;
+	}
+}
+
+for (const dsl of [
+	'graph TD; A["--help graph"] --> B["-h flowchart"]',
+	"table\nKey | Value\ngraph | flowchart",
+	graphJson,
+]) {
+	const beforeCommand = sentMessages.length;
+	await registeredCommand.cmd.handler(`--color ${dsl}`, ctxMock);
+	assert.strictEqual(notifications.at(-1).level, "info", "colored command renders genuine input kind");
+	assert.strictEqual(sentMessages.length, beforeCommand + 1, "DSL help labels still render");
+	assert.ok(sentMessages.at(-1).includes("graph"));
+	assert.ok(sentMessages.at(-1).includes("flowchart"));
+}
 
 // Test /diagram --style pass-through (README-advertised; DOC-03): pure 7-bit ascii render
 await registeredCommand.cmd.handler("--style ascii graph TD; A --> B", ctxMock);

@@ -22,6 +22,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "B".to_string(),
@@ -31,6 +32,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![EdgeSpec {
@@ -41,6 +43,7 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                lines: Vec::new(),
             }],
         };
 
@@ -68,6 +71,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "B".to_string(),
@@ -77,6 +81,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![EdgeSpec {
@@ -87,6 +92,7 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                lines: Vec::new(),
             }],
         };
 
@@ -113,6 +119,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "B".to_string(),
@@ -122,6 +129,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "C".to_string(),
@@ -131,6 +139,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![
@@ -142,6 +151,7 @@ mod tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "B".to_string(),
@@ -151,6 +161,7 @@ mod tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
         };
@@ -183,6 +194,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "Sum".to_string(),
@@ -192,6 +204,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "PID".to_string(),
@@ -201,6 +214,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "Plant".to_string(),
@@ -210,6 +224,7 @@ mod tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![
@@ -221,6 +236,7 @@ mod tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "Sum".to_string(),
@@ -230,6 +246,7 @@ mod tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "PID".to_string(),
@@ -239,6 +256,7 @@ mod tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "Plant".to_string(),
@@ -248,6 +266,7 @@ mod tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
         };
@@ -293,6 +312,7 @@ mod self_loop_tests {
                 fill_color: None,
                 border_level: 0,
                 color: None,
+                lines: Vec::new(),
             }],
             edges: vec![EdgeSpec {
                 from: "A".to_string(),
@@ -302,6 +322,7 @@ mod self_loop_tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                lines: Vec::new(),
             }],
         }
     }
@@ -356,6 +377,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "A".into(),
@@ -365,6 +387,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "B".into(),
@@ -374,6 +397,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "C".into(),
@@ -383,6 +407,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "Z".into(),
@@ -392,6 +417,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![
@@ -403,6 +429,7 @@ mod jump_group_tests {
                     dashed: true,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "W".into(),
@@ -412,6 +439,7 @@ mod jump_group_tests {
                     dashed: true,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "W".into(),
@@ -421,6 +449,7 @@ mod jump_group_tests {
                     dashed: true,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "A".into(),
@@ -430,6 +459,7 @@ mod jump_group_tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "B".into(),
@@ -439,6 +469,7 @@ mod jump_group_tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
                 EdgeSpec {
                     from: "C".into(),
@@ -448,6 +479,7 @@ mod jump_group_tests {
                     dashed: false,
                     thick: false,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
         };
@@ -505,6 +537,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "B".into(),
@@ -514,6 +547,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![EdgeSpec {
@@ -524,6 +558,7 @@ mod jump_group_tests {
                 dashed: false,
                 thick: true,
                 color: None,
+                lines: Vec::new(),
             }],
         };
         let out = FlowchartRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render(false);
@@ -555,6 +590,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
                 NodeSpec {
                     id: "B".into(),
@@ -564,6 +600,7 @@ mod jump_group_tests {
                     fill_color: None,
                     border_level: 0,
                     color: None,
+                    lines: Vec::new(),
                 },
             ],
             edges: vec![EdgeSpec {
@@ -574,6 +611,7 @@ mod jump_group_tests {
                 dashed: false,
                 thick: true,
                 color: None,
+                lines: Vec::new(),
             }],
         };
         let out = FlowchartRenderer::new(&spec, Theme::ascii()).render(false);
@@ -803,6 +841,7 @@ mod fill_thick_tests {
                 color: None,
                 fill_color: None,
                 border_level: 1,
+                lines: Vec::new(),
             }],
             edges: Vec::new(),
         };
@@ -828,6 +867,7 @@ mod fill_thick_tests {
                 color: None,
                 fill_color: Some(crate::color::Color::Red),
                 border_level: 0,
+                lines: Vec::new(),
             }],
             edges: Vec::new(),
         };
@@ -925,6 +965,7 @@ mod border_level_tests {
                 color: None,
                 fill_color: None,
                 border_level: level,
+                lines: Vec::new(),
             }],
             edges: Vec::new(),
         };
@@ -1121,6 +1162,7 @@ mod barycenter_tests {
                     color: None,
                     fill_color: None,
                     border_level: 0,
+                    lines: Vec::new(),
                 })
                 .collect(),
             edges: vec![
@@ -1140,6 +1182,7 @@ mod barycenter_tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                lines: Vec::new(),
             })
             .collect(),
         };
@@ -1544,12 +1587,12 @@ mod band_gap_tests {
         let lines: Vec<&str> = out.lines().collect();
         let bottom = lines
             .iter()
-            .position(|l| l.contains(&format!("│ {from}")))
+            .position(|l| l.contains(from) && l.contains('│'))
             .expect(from)
             + 1; // bottom border row
         let top = lines[bottom + 1..]
             .iter()
-            .position(|l| l.contains(&format!("│ {to}")))
+            .position(|l| l.contains(to) && l.contains('│'))
             .expect(to)
             + bottom
             + 1; // target label row

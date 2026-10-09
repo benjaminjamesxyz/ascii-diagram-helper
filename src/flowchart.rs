@@ -90,8 +90,30 @@ pub(super) struct Blocks {
 /// Prefix of the phantom node standing in for a supernode cluster.
 pub(super) const PHANTOM_PREFIX: &str = "__sg_";
 
+/// Subgraph group rectangles (layout-locked once nodes are positioned) plus
+/// the set of their perimeter cells. Shared by the containment push
+/// (FC-SUB-01), border-row dodging (FC-SUB-04) and edge routing.
+pub(super) struct GroupGeo {
+    /// `(rect, subgraph id)` for every drawn group box
+    pub rects: Vec<(Rect, String)>,
+    /// Perimeter cells of every rect
+    #[allow(dead_code)]
+    pub cells: HashSet<(usize, usize)>,
+}
+
+impl GroupGeo {
+    #[allow(dead_code)]
+    pub(super) fn border_row_blocked(&self, y: usize, x1: usize, x2: usize) -> bool {
+        let (lo, hi) = (x1.min(x2), x1.max(x2));
+        self.cells
+            .iter()
+            .any(|&(cx, cy)| cy == y && cx >= lo && cx <= hi)
+    }
+}
+
 impl Blocks {
     /// No moved clusters — every node participates in the main layout.
+    #[allow(dead_code)]
     pub(super) fn empty() -> Blocks {
         Blocks {
             items: Vec::new(),
@@ -101,6 +123,7 @@ impl Blocks {
         }
     }
 
+    #[allow(dead_code)]
     fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -231,6 +254,7 @@ impl<'a> FlowchartRenderer<'a> {
                         color: None,
                         fill_color: None,
                         border_level: 0,
+                        lines: Vec::new(),
                     });
                 }
             } else {
@@ -421,15 +445,24 @@ impl<'a> FlowchartRenderer<'a> {
         let mut nodes = Vec::with_capacity(self.spec.nodes.len());
 
         for node in &self.spec.nodes {
-            let label = if node.label.is_empty() {
-                &node.id
+            // Multi-line labels: parser-filled `lines` when present (split on
+            // `\n` / `<br/>` / physical newlines), else fall back to splitting
+            // `label` itself on `\n`
+            let label = if node.label.is_empty() && node.lines.is_empty() {
+                Some(node.id.clone())
             } else {
-                &node.label
+                None
+            };
+            let source_lines: Vec<String> = if !node.lines.is_empty() {
+                node.lines.clone()
+            } else {
+                let base = label.unwrap_or_else(|| node.label.clone());
+                base.split('\n').map(str::to_string).collect()
             };
 
             // Wrap text nicely if long
             let mut lines: Vec<String> = Vec::new();
-            for part in label.split('\n') {
+            for part in &source_lines {
                 let trimmed_part = part.trim();
                 if trimmed_part.len() > 36 {
                     for wrapped in textwrap::wrap(trimmed_part, 32) {
@@ -499,6 +532,10 @@ impl<'a> FlowchartRenderer<'a> {
                 }
                 _ => {
                     let w = (max_text_w + 4).max(6);
+                    // Restore padding parity after the min-width bump: an even
+                    // box around odd text can never center (`| A  |`); widening
+                    // to odd width keeps the border padding symmetric (FC-TB-05)
+                    let w = w + (w - max_text_w) % 2;
                     let h = lines.len() + 2;
                     (w, h)
                 }
@@ -545,19 +582,14 @@ impl<'a> FlowchartRenderer<'a> {
             .collect()
     }
 
-    /// Draws subgraph grouping boxes: bounding box of member nodes (and nested
-    /// group rects) expanded by padding, with the title embedded in the top
-    /// border. Drawn after nodes so borders land on empty cells; edges crossing
-    /// a border render as junctions.
-    pub(super) fn draw_subgraphs(
+    /// Group boxes as `(rect, subgraph id, title, color)` in declaration
+    /// order — shared by `draw_subgraphs` and the layout-time geometry pass.
+    pub(super) fn collect_group_rects(
         &self,
-        canvas: &mut Canvas,
         nodes: &[LayoutNode],
         idx: &HashMap<&str, usize>,
         blocks: &Blocks,
-    ) {
-        let (pad_x, pad_top, pad_bottom) = (2usize, 2usize, 1usize);
-
+    ) -> Vec<(Rect, String, String, Option<Color>)> {
         fn group_rect(
             sg: &SubgraphSpec,
             nodes: &[LayoutNode],
@@ -614,7 +646,7 @@ impl<'a> FlowchartRenderer<'a> {
             idx: &HashMap<&str, usize>,
             pad: (usize, usize, usize),
             blocks: &Blocks,
-            out: &mut Vec<(Rect, String, Option<Color>)>,
+            out: &mut Vec<(Rect, String, String, Option<Color>)>,
         ) {
             for sg in sgs {
                 if let Some((ox, oy, w, h)) = blocks.rect_for(&sg.id) {
@@ -630,12 +662,18 @@ impl<'a> FlowchartRenderer<'a> {
                     if br - bx + 1 < min_w {
                         br = bx + min_w - 1;
                     }
-                    out.push((Rect::new(bx, by, br - bx + 1, bb - by + 1), title, sg.color));
+                    out.push((
+                        Rect::new(bx, by, br - bx + 1, bb - by + 1),
+                        sg.id.clone(),
+                        title,
+                        sg.color,
+                    ));
                     continue;
                 }
                 if let Some(r) = group_rect(sg, nodes, idx, pad, blocks) {
                     out.push((
                         r,
+                        sg.id.clone(),
                         sg.title.clone().unwrap_or_else(|| sg.id.clone()),
                         sg.color,
                     ));
@@ -644,19 +682,178 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
-        let mut groups: Vec<(Rect, String, Option<Color>)> = Vec::new();
+        let mut groups = Vec::new();
         collect(
             &self.spec.subgraphs,
             nodes,
             idx,
-            (pad_x, pad_top, pad_bottom),
+            (2usize, 2usize, 1usize),
             blocks,
             &mut groups,
         );
-        // Outer boxes first so nested borders layer cleanly
-        groups.sort_by_key(|(r, _, _)| std::cmp::Reverse(r.width * r.height));
+        groups
+    }
 
-        for (r, title, color) in groups {
+    /// Layout-time geometry of all group boxes: rects plus perimeter cells.
+    pub(super) fn compute_group_geo(
+        &self,
+        nodes: &[LayoutNode],
+        idx: &HashMap<&str, usize>,
+        blocks: &Blocks,
+    ) -> GroupGeo {
+        let rects_src = self.collect_group_rects(nodes, idx, blocks);
+        let mut cells = HashSet::new();
+        for (r, _, _, _) in &rects_src {
+            let right = r.x + r.width - 1;
+            let bottom = r.y + r.height - 1;
+            for x in r.x..=right {
+                cells.insert((x, r.y));
+                cells.insert((x, bottom));
+            }
+            for y in r.y..=bottom {
+                cells.insert((r.x, y));
+                cells.insert((right, y));
+            }
+        }
+        GroupGeo {
+            rects: rects_src.into_iter().map(|(r, id, _, _)| (r, id)).collect(),
+            cells,
+        }
+    }
+
+    /// True when `node_id` belongs to `sg` or any nested (non-moved) child —
+    /// such nodes legitimately sit inside `sg`'s group box.
+    fn subgraph_contains_node(sg: &SubgraphSpec, node_id: &str) -> bool {
+        fn rec(sg: &SubgraphSpec, node_id: &str) -> bool {
+            sg.nodes.iter().any(|n| n == node_id) || sg.subgraphs.iter().any(|c| rec(c, node_id))
+        }
+        if let Some(cluster) = node_id.strip_prefix(PHANTOM_PREFIX) {
+            // A phantom stands for a whole moved cluster: inside `sg` iff the
+            // cluster is `sg` itself or a descendant of it
+            if sg.id == cluster {
+                return true;
+            }
+            fn rec_id(sg: &SubgraphSpec, id: &str) -> bool {
+                sg.id == id || sg.subgraphs.iter().any(|c| rec_id(c, id))
+            }
+            return rec_id(sg, cluster);
+        }
+        rec(sg, node_id)
+    }
+
+    /// True when node `i` may be enclosed by `sg`'s group box.
+    fn node_in_subgraph(&self, sg: &SubgraphSpec, i: usize) -> bool {
+        Self::subgraph_contains_node(sg, &self.spec.nodes[i].id)
+    }
+
+    /// Containment pass (FC-SUB-01): group boxes are the bounding box of their
+    /// members — a non-member laid out inside that span gets the group border
+    /// stamped through it. Walk each layer along the layout axis and push any
+    /// non-member past the group rect's trailing edge; the cursor cascades the
+    /// shift to later siblings so boxes never overlap.
+    pub(super) fn push_nodes_out_of_groups(
+        &self,
+        nodes: &mut [LayoutNode],
+        layers: &[Vec<usize>],
+        geo: &GroupGeo,
+        horizontal: bool,
+        gap: usize,
+    ) {
+        for layer in layers {
+            let mut order = layer.clone();
+            order.sort_by_key(|&i| {
+                let n = &nodes[i];
+                if horizontal { (n.x, n.y) } else { (n.y, n.x) }
+            });
+            let mut cursor = 0usize;
+            for &i in &order {
+                let len = if horizontal {
+                    nodes[i].width
+                } else {
+                    nodes[i].height
+                };
+                let mut pos = if horizontal {
+                    nodes[i].x.max(cursor)
+                } else {
+                    nodes[i].y.max(cursor)
+                };
+                for (rect, sg_id) in &geo.rects {
+                    let Some(sg) = Self::find_subgraph(&self.spec.subgraphs, sg_id) else {
+                        continue;
+                    };
+                    if self.node_in_subgraph(sg, i) {
+                        continue;
+                    }
+                    let n = &nodes[i];
+                    let (along, cross) = if horizontal {
+                        (n.y..n.y + n.height, pos..pos + len)
+                    } else {
+                        (n.x..n.x + n.width, pos..pos + len)
+                    };
+                    let (r_along, r_cross) = if horizontal {
+                        (rect.y..rect.y + rect.height, rect.x..rect.x + rect.width)
+                    } else {
+                        (rect.x..rect.x + rect.width, rect.y..rect.y + rect.height)
+                    };
+                    if along.start < r_along.end
+                        && r_along.start < along.end
+                        && cross.start < r_cross.end
+                        && r_cross.start < cross.end
+                    {
+                        pos = r_cross.end;
+                    }
+                }
+                if horizontal {
+                    nodes[i].x = pos;
+                } else {
+                    nodes[i].y = pos;
+                }
+                cursor = pos + len + gap;
+            }
+        }
+    }
+
+    /// Deepest subgraph nesting level (1 for a flat top-level subgraph). Also
+    /// the maximum border-chain extent: a member at nesting depth `d` has
+    /// `d` group border rows below its box and `2*d` above (pad per level).
+    pub(super) fn max_subgraph_depth(&self) -> usize {
+        fn rec(sgs: &[SubgraphSpec]) -> usize {
+            sgs.iter()
+                .map(|sg| rec(&sg.subgraphs) + 1)
+                .max()
+                .unwrap_or(0)
+        }
+        rec(&self.spec.subgraphs)
+    }
+
+    fn find_subgraph<'b>(sgs: &'b [SubgraphSpec], id: &str) -> Option<&'b SubgraphSpec> {
+        for sg in sgs {
+            if sg.id == id {
+                return Some(sg);
+            }
+            if let Some(found) = Self::find_subgraph(&sg.subgraphs, id) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Draws subgraph grouping boxes: bounding box of member nodes (and nested
+    /// group rects) expanded by padding, with the title embedded in the top
+    /// border. Drawn after nodes so borders land on empty cells; edges crossing
+    /// a border render as junctions.
+    pub(super) fn draw_subgraphs(
+        &self,
+        canvas: &mut Canvas,
+        nodes: &[LayoutNode],
+        idx: &HashMap<&str, usize>,
+        blocks: &Blocks,
+    ) {
+        let mut groups = self.collect_group_rects(nodes, idx, blocks);
+        // Outer boxes first so nested borders layer cleanly
+        groups.sort_by_key(|(r, _, _, _)| std::cmp::Reverse(r.width * r.height));
+
+        for (r, _, title, color) in groups {
             let right = r.x + r.width - 1;
             let bottom = r.y + r.height - 1;
             canvas.set_pen(color);
@@ -893,6 +1090,69 @@ impl<'a> FlowchartRenderer<'a> {
         layers
     }
 
+    /// Splits an edge label into stacked display lines: explicit `\n` (from
+    /// the parser's `lines` population or `clean_label`) plus a defensive
+    /// `<br/>` split. Empty segments are dropped.
+    fn edge_label_lines(&self, edge: &EdgeSpec) -> Vec<String> {
+        let raw: Vec<String> = if !edge.lines.is_empty() {
+            edge.lines.clone()
+        } else {
+            edge.label
+                .as_deref()
+                .map(|l| l.split('\n').map(str::to_string).collect())
+                .unwrap_or_default()
+        };
+        raw.iter()
+            .flat_map(|l| l.split("<br/>"))
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Draws stacked edge-label lines centered at `cx`. With `up`, the block
+    /// grows upward from `base_y` (labels above the edge); otherwise downward.
+    fn draw_stacked_label(
+        &self,
+        canvas: &mut Canvas,
+        lines: &[String],
+        cx: usize,
+        base_y: usize,
+        up: bool,
+    ) {
+        let n = lines.len();
+        for (i, line) in lines.iter().enumerate() {
+            let y = if up {
+                base_y.saturating_sub(n - 1 - i)
+            } else {
+                base_y + i
+            };
+            let w = UnicodeWidthStr::width(line.as_str());
+            let x = cx.saturating_sub(w / 2);
+            canvas.draw_text_safe(x, y, line);
+        }
+    }
+
+    /// Draws stacked edge-label lines left-aligned at `x` (self-loops and
+    /// loop-back tracks, where centering would straddle the loop glyphs).
+    fn draw_stacked_label_left(
+        canvas: &mut Canvas,
+        lines: &[String],
+        x: usize,
+        base_y: usize,
+        down: bool,
+    ) {
+        let n = lines.len();
+        for (i, line) in lines.iter().enumerate() {
+            let y = if down {
+                base_y + i
+            } else {
+                base_y.saturating_sub(n - 1 - i)
+            };
+            canvas.draw_text_safe(x, y, line);
+        }
+    }
+
     /// Draws a self-referencing edge (`A --> A`) as a rectangular arc off the
     /// right wall of the box, re-entering one row lower.
     pub(super) fn draw_self_loop(&self, canvas: &mut Canvas, edge: &EdgeSpec, u: &LayoutNode) {
@@ -915,8 +1175,11 @@ impl<'a> FlowchartRenderer<'a> {
             &self.theme,
         );
 
-        if let Some(ref lbl) = edge.label {
-            canvas.draw_text_safe(x1 + 1, y0, lbl);
+        // Preferred position leaves one blank cell after the loop's corner
+        // glyph so the label never abuts it (FC-EDGE-08)
+        let lines = self.edge_label_lines(edge);
+        if !lines.is_empty() {
+            Self::draw_stacked_label_left(canvas, &lines, x1 + 2, y0, true);
         }
     }
 
@@ -966,15 +1229,22 @@ impl<'a> FlowchartRenderer<'a> {
         }
         match node.shape {
             NodeShape::Diamond => {
-                canvas.draw_decision_box(
-                    node.x,
-                    node.y,
-                    node.width,
-                    node.height,
-                    &self.theme,
-                    Some("◇"),
-                    node.dashed_border,
-                );
+                if is_ascii && !node.dashed_border {
+                    // True diamond silhouette in the documented 7-bit glyph
+                    // set (`/ \ < > ^ v`) — the unicode decision box would
+                    // leak `=`/`#`/`<?>` foreign glyphs into ascii (FC-TB-02)
+                    canvas.draw_diamond(node.x, node.y, node.width, node.height, &self.theme);
+                } else {
+                    canvas.draw_decision_box(
+                        node.x,
+                        node.y,
+                        node.width,
+                        node.height,
+                        &self.theme,
+                        Some("◇"),
+                        node.dashed_border,
+                    );
+                }
                 draw_label!(canvas, node.label_lines, node.y + 1, (1, 2));
             }
             NodeShape::Circle => {

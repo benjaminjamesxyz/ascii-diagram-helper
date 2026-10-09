@@ -33,6 +33,39 @@ fn subgraph_min_rank(
     (r != usize::MAX).then_some(r)
 }
 
+/// Widens bands crossed by a nested group's border chains (FC-SUB-02/04): a
+/// member at nesting depth `d` inside `sg` carries `2*d` rows of title
+/// borders above its box and `d` rows of bottom borders below it. Only depth
+/// ≥ 2 chains bump bands — flat subgraphs keep the historical geometry.
+fn bump_band_chains(
+    sg: &SubgraphSpec,
+    nodes: &[super::LayoutNode],
+    idx: &HashMap<&str, usize>,
+    blocks: &Blocks,
+    band_gap: &mut [usize],
+    depth: usize,
+) {
+    for id in &sg.nodes {
+        if let Some(&i) = idx.get(id.as_str()) {
+            let r = nodes[i].rank;
+            if depth >= 2 {
+                if r >= 1 {
+                    band_gap[r - 1] = band_gap[r - 1].max(2 * depth + 1);
+                }
+                if r + 1 < band_gap.len() {
+                    band_gap[r] = band_gap[r].max(depth + 2);
+                }
+            }
+        }
+    }
+    for child in &sg.subgraphs {
+        if blocks.rect_for(&child.id).is_some() {
+            continue;
+        }
+        bump_band_chains(child, nodes, idx, blocks, band_gap, depth + 1);
+    }
+}
+
 impl<'a> FlowchartRenderer<'a> {
     #[allow(
         clippy::too_many_lines,
@@ -104,6 +137,7 @@ impl<'a> FlowchartRenderer<'a> {
         // Subgraph group boxes draw their title border `pad_top` rows above
         // the top member; that border must clear the band's trunk rows
         for sg in &self.spec.subgraphs {
+            bump_band_chains(sg, &nodes, &idx, blocks, &mut band_gap, 1);
             if let Some(r) = subgraph_min_rank(sg, &nodes, &idx, blocks)
                 && r >= 1
             {

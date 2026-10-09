@@ -1,6 +1,6 @@
 use crate::color::Color;
 use crate::theme::Theme;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[allow(
@@ -83,6 +83,10 @@ impl Rect {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cell {
     pub ch: char,
+    /// Combining marks (NFD) attached to `ch`: width-0, emitted directly
+    /// after `ch` at render time. At most 2 per cell; a longer mark chain
+    /// drops the excess (see `draw_text`).
+    pub combining: [Option<char>; 2],
     pub is_continuation: bool,
     pub conn: LineConn,
     pub is_line: bool,
@@ -102,6 +106,7 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             ch: ' ',
+            combining: [None, None],
             is_continuation: false,
             conn: LineConn::default(),
             is_line: false,
@@ -226,7 +231,11 @@ impl Canvas {
     }
 
     pub fn put_char_with_role(&mut self, x: usize, y: usize, ch: char, role: CellRole) {
-        let w = ch.width().unwrap_or(1);
+        let w = if ('\u{1F1E6}'..='\u{1F1FF}').contains(&ch) {
+            2
+        } else {
+            ch.width().unwrap_or(1)
+        };
         if w == 0 {
             return;
         }
@@ -235,6 +244,7 @@ impl Canvas {
         let i = self.idx(x, y);
         let cell = &mut self.cells[i];
         cell.ch = ch;
+        cell.combining = [None, None];
         cell.is_line = role == CellRole::Line;
         cell.is_continuation = false;
         cell.custom_corner = None;
@@ -252,6 +262,7 @@ impl Canvas {
                 let i = self.idx(x + offset, y);
                 let cont_cell = &mut self.cells[i];
                 cont_cell.ch = ' ';
+                cont_cell.combining = [None, None];
                 cont_cell.is_continuation = true;
                 cont_cell.is_line = false;
                 cont_cell.role = role;
@@ -259,15 +270,102 @@ impl Canvas {
         }
     }
 
+    /// Tab expansion interval for label text (SEQ-W-03): a literal tab in a
+    /// cell would be counted one column here but expands to the terminal's
+    /// own tab stop, drifting every border right of it — so tabs never reach
+    /// the canvas.
+    const TAB_STOP: usize = 4;
+
+    /// Draws label text character by character.
+    ///
+    /// Width and sanitation policy — keep rule-for-rule in sync with
+    /// [`display_width`], which is the layout-math counterpart of this loop:
+    /// - combining marks (width 0) attach to the base cell to their left and
+    ///   render right after it, so NFD input keeps its diacritics while the
+    ///   advance stays the base char's width (SEQ-W-02)
+    /// - every other zero-width char (ZWSP U+200B, ZWNJ, LRM/RLM, bidi
+    ///   controls U+202A-202E / U+2066-2069) is intentionally dropped and
+    ///   never emitted — output carries no invisible formatting or bidi
+    ///   override controls (SEQ-W-03, ERR-05)
+    /// - tabs expand to spaces on `TAB_STOP`-column stops measured from
+    ///   `start_x` (SEQ-W-03)
+    /// - emoji presentation sequences collapse the way a modern terminal
+    ///   renders them: skin-tone modifiers U+1F3FB-1F3FF and ZWJ U+200D plus
+    ///   the component right after it contribute no columns, so `👍🏽` and
+    ///   `👨‍👩‍👧` occupy 2 columns (SEQ-W-04); a regional-indicator flag
+    ///   pair occupies the same 2 columns with both codepoints preserved
     pub fn draw_text(&mut self, start_x: usize, y: usize, text: &str) {
         let mut cur_x = start_x;
+        let mut after_zwj = false;
+        let mut prev_ri = false;
         for ch in text.chars() {
-            let w = ch.width().unwrap_or(1);
-            if w == 0 {
+            if ch == '\t' {
+                let adv = Self::TAB_STOP - ((cur_x - start_x) % Self::TAB_STOP);
+                for _ in 0..adv {
+                    self.put_char_with_role(cur_x, y, ' ', CellRole::Text);
+                    cur_x += 1;
+                }
+                after_zwj = false;
+                prev_ri = false;
                 continue;
             }
+            let is_ri = ('\u{1F1E6}'..='\u{1F1FF}').contains(&ch);
+            let cw = if is_ri { 2 } else { ch.width().unwrap_or(1) };
+            if cw == 0 {
+                if is_combining_mark(ch) && cur_x > start_x {
+                    self.attach_combining(cur_x, y, ch);
+                }
+                // Zero-width chars that are not combining marks are dropped.
+                // A ZWJ additionally arms cluster collapsing below.
+                after_zwj = ch == '\u{200D}';
+                continue;
+            }
+            if after_zwj {
+                // Component of a ZWJ-joined cluster: shares the base glyph's
+                // 2 columns, never drawn separately.
+                after_zwj = false;
+                continue;
+            }
+            if ('\u{1F3FB}'..='\u{1F3FF}').contains(&ch) {
+                continue; // skin-tone modifier: part of the previous glyph
+            }
+
+            if is_ri && prev_ri {
+                // Second half of a flag pair: store it in the first RI's
+                // continuation cell so both codepoints reach the output (the
+                // terminal needs the pair to render the flag) while the pair
+                // still occupies exactly the base's 2 columns
+                prev_ri = false;
+                if cur_x > 0
+                    && let Some(cell) = self.cells.get_mut(y * self.width + cur_x - 1)
+                    && cell.is_continuation
+                {
+                    cell.ch = ch;
+                }
+                continue;
+            }
+            prev_ri = is_ri;
             self.put_char_with_role(cur_x, y, ch, CellRole::Text);
-            cur_x += w;
+            cur_x += cw;
+        }
+    }
+
+    /// Attaches a width-0 combining mark to the base cell left of the pen
+    /// position (stepping back over a wide-char continuation cell). At most
+    /// `Cell::combining.len()` marks are kept per base; further marks, and
+    /// marks with no cell to their left, are dropped.
+    fn attach_combining(&mut self, cur_x: usize, y: usize, mark: char) {
+        if cur_x == 0 || y >= self.height {
+            return;
+        }
+        let mut mx = cur_x - 1;
+        if self.get_cell(mx, y).is_some_and(|c| c.is_continuation) && mx > 0 {
+            mx -= 1;
+        }
+        if let Some(cell) = self.cells.get_mut(y * self.width + mx)
+            && let Some(slot) = cell.combining.iter_mut().find(|s| s.is_none())
+        {
+            *slot = Some(mark);
         }
     }
 
@@ -278,7 +376,7 @@ impl Canvas {
         if y >= self.height {
             return true;
         }
-        let text_w = UnicodeWidthStr::width(text);
+        let text_w = display_width(text);
         let base = y * self.width;
         for offset in 0..text_w {
             let x = start_x + offset;
@@ -296,13 +394,14 @@ impl Canvas {
                 }
                 // Do not overwrite vertical lines or junctions
                 if cell.is_line && (cell.conn.north || cell.conn.south)
-                    || matches!(cell.ch, '│' | '|' | '║' | '┆' | '┊' | '╎' | '╏')
+                    || matches!(cell.ch, '│' | '|' | '║' | '┆' | '┊' | '╎' | '╏' | ':')
                 {
                     return false;
                 }
                 // Do not place labels inside horizontal line or dash runs — a label
                 // drawn mid-run reads as merged with the crossing edge
-                if cell.is_line || matches!(cell.ch, '─' | '-' | '╌' | '┄' | '━' | '═') {
+                if cell.is_line || matches!(cell.ch, '─' | '-' | '╌' | '┄' | '━' | '═' | '.')
+                {
                     return false;
                 }
                 // Do not overwrite existing non-space text
@@ -351,7 +450,7 @@ impl Canvas {
         preferred_y: usize,
         text: &str,
     ) -> Option<(usize, usize)> {
-        let text_w = UnicodeWidthStr::width(text);
+        let text_w = display_width(text);
         let fits_bounds = |x: usize, y: usize| -> bool {
             let max_x = bounds.x.saturating_add(bounds.width);
             let max_y = bounds.y.saturating_add(bounds.height);
@@ -494,8 +593,9 @@ impl Canvas {
             let cell = &mut self.cells[base + x];
             // A stale dash glyph from an earlier dashed run would suppress
             // junction resolution (render only resolves ' ' line cells)
-            if cell.ch == '\u{252e}' || cell.ch == '-' {
+            if cell.ch == '\u{252e}' || cell.ch == '-' || cell.ch == '.' {
                 cell.ch = ' ';
+                cell.combining = [None, None];
             }
             cell.is_line = true;
             cell.thick = weight == 1;
@@ -520,8 +620,13 @@ impl Canvas {
         self.ensure_capacity(x2, y);
         let base = y * self.width;
 
+        // 7-bit dashed strokes use '.' runs so they stay distinguishable
+        // from a solid ascii '-' run (SEQ-02 async arrows, FC-SUB-05 dashed
+        // borders). Dots are the ascii dashed family; ':' is its vertical
+        // counterpart — both pure 7-bit, neither collides with the solid
+        // `+ - |` ascii box set.
         let dash_char = if theme.box_style == crate::theme::BoxStyle::Ascii {
-            '-'
+            '.'
         } else {
             '╌'
         };
@@ -529,7 +634,7 @@ impl Canvas {
         // solid cross cell — one cell loses its dash pattern, both strokes
         // stay continuous
         let vdash_char = if theme.box_style == crate::theme::BoxStyle::Ascii {
-            '|'
+            ':'
         } else {
             '┆'
         };
@@ -573,6 +678,7 @@ impl Canvas {
                 continue;
             }
             cell.ch = dash_char;
+            cell.combining = [None, None];
             cell.is_line = false;
             if cell.role != CellRole::Border {
                 cell.color = self.pen;
@@ -588,14 +694,14 @@ impl Canvas {
         self.ensure_capacity(x, y2);
 
         let dash_char = if theme.box_style == crate::theme::BoxStyle::Ascii {
-            '|'
+            ':'
         } else {
             '┆'
         };
         // Perpendicular dashed-run glyph: dash × dash crossing resolves to a
         // solid cross cell (see draw_dashed_hline)
         let hdash_char = if theme.box_style == crate::theme::BoxStyle::Ascii {
-            '-'
+            '.'
         } else {
             '╌'
         };
@@ -632,6 +738,7 @@ impl Canvas {
                 continue;
             }
             cell.ch = dash_char;
+            cell.combining = [None, None];
             cell.is_line = false;
             if cell.role != CellRole::Border {
                 cell.color = self.pen;
@@ -666,8 +773,9 @@ impl Canvas {
                 continue;
             }
             // Clear stale dash glyphs so junction resolution applies
-            if cell.ch == '\u{2546}' || cell.ch == '|' {
+            if cell.ch == '\u{2546}' || cell.ch == '|' || cell.ch == ':' {
                 cell.ch = ' ';
+                cell.combining = [None, None];
             }
             cell.is_line = true;
             cell.thick = weight == 1;
@@ -877,8 +985,7 @@ impl Canvas {
             && width > 4
         {
             let padded_title = format!(" {t} ");
-            let title_cols = UnicodeWidthChar::width(' ').unwrap() * 2
-                + t.chars().map(|c| c.width().unwrap_or(1)).sum::<usize>();
+            let title_cols = 2 + display_width(t);
             if title_cols < width - 2 {
                 let title_x = x + (width - title_cols) / 2;
                 self.draw_text(title_x, y, &padded_title);
@@ -1037,9 +1144,11 @@ impl Canvas {
         let is_ascii = theme.box_style == crate::theme::BoxStyle::Ascii;
         // Solid borders resolve from the active theme (sharp stays `┌─┐`,
         // double keeps `╔═╗`); dashed borders and 7-bit ascii keep their own
-        // glyph families.
+        // glyph families. Ascii dashed uses the dotted family ('.', ':') so a
+        // `stroke-dasharray` decision node stays distinct from the solid
+        // ascii box (`-`, `|`) and the solid decision box (`=`, `#`).
         let (tl, tr, bl, br, h_char, v_char) = match (is_ascii, dashed) {
-            (true, true) => ('+', '+', '+', '+', '-', '|'),
+            (true, true) => ('+', '+', '+', '+', '.', ':'),
             (true, false) => ('+', '+', '+', '+', '=', '#'),
             (false, true) => ('╌', '╌', '╌', '╌', '╌', '┆'),
             (false, false) => (
@@ -1131,7 +1240,7 @@ impl Canvas {
             } else {
                 [" ", b, " "].concat()
             };
-            let badge_w = UnicodeWidthStr::width(badge_text.as_str());
+            let badge_w = display_width(&badge_text);
             if badge_w < width - 2 {
                 let badge_x = x + (width - badge_w) / 2;
                 self.draw_text(badge_x, y, &badge_text);
@@ -1196,6 +1305,14 @@ impl Canvas {
             for x in 0..=limit {
                 let cell = &self.cells[base + x];
                 if cell.is_continuation {
+                    // Continuation cells are pure column spacers — except when
+                    // they carry a sequence tail (second half of a
+                    // regional-indicator flag pair): it belongs to the same 2
+                    // columns and must reach the output or the terminal gets a
+                    // lone half-flag
+                    if cell.ch != ' ' {
+                        out.push(cell.ch);
+                    }
                     continue;
                 }
                 if colored && cell.color != current {
@@ -1220,6 +1337,10 @@ impl Canvas {
                     out.push(resolve_line_glyph(cell.conn, t, thick));
                 } else {
                     out.push(cell.ch);
+                    // NFD combining marks ride on their base cell (SEQ-W-02)
+                    for mark in cell.combining.iter().flatten() {
+                        out.push(*mark);
+                    }
                 }
             }
             // Close any open color run before trimming/pushing the newline so
@@ -1248,6 +1369,110 @@ fn offset_pos(base: usize, off: isize) -> Option<usize> {
     } else {
         base.checked_sub(off.unsigned_abs())
     }
+}
+
+/// Terminal display width of `text` — the layout-math counterpart of
+/// [`Canvas::draw_text`], which places glyphs under exactly these rules:
+/// - combining marks attach to the preceding base char and add 0 columns
+///   (the base keeps its own width), so NFD `café` is 4 columns
+/// - every other zero-width char (ZWSP U+200B, ZWNJ, LRM/RLM, bidi controls)
+///   is dropped at draw time and counts 0 here
+/// - tabs advance to the next 4-column stop measured from the start of
+///   `text` (draw_text expands them to spaces on the same stops)
+/// - emoji sequences collapse to what a modern terminal renders:
+///   U+FE0F/U+FE0E, skin-tone modifiers U+1F3FB-1F3FF, ZWJ U+200D and the
+///   component right after a ZWJ all count 0, so `👍🏽` and `👨‍👩‍👧`
+///   occupy 2 columns; a regional-indicator flag pair counts 2 total
+///
+/// Residual limits (see also README Known Limitations): FE0F emoji
+/// presentation of a text-default symbol (e.g. `❤️`) still counts 1 while
+/// emoji-presentation terminals render 2; terminals that expand ZWJ/skin-tone
+/// clusters to multiple cells disagree with the 2-column assumption.
+#[must_use]
+pub fn display_width(text: &str) -> usize {
+    let mut width = 0usize;
+    let mut col = 0usize;
+    let mut after_zwj = false;
+    let mut prev_ri = false;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let adv = Canvas::TAB_STOP - (col % Canvas::TAB_STOP);
+            width += adv;
+            col += adv;
+            after_zwj = false;
+            prev_ri = false;
+            continue;
+        }
+        let is_ri = ('\u{1F1E6}'..='\u{1F1FF}').contains(&ch);
+        let cw = if is_ri { 2 } else { ch.width().unwrap_or(1) };
+        if cw == 0 {
+            // Combining marks and other zero-width chars ride for free; a ZWJ
+            // arms cluster collapsing for the next visible char.
+            after_zwj = ch == '\u{200D}';
+            continue;
+        }
+        if after_zwj {
+            after_zwj = false;
+            continue; // ZWJ cluster component shares the base glyph's cells
+        }
+        if ('\u{1F3FB}'..='\u{1F3FF}').contains(&ch) {
+            continue; // skin-tone modifier: part of the previous glyph
+        }
+
+        if is_ri && prev_ri {
+            prev_ri = false;
+            continue; // second half of a regional-indicator flag pair
+        }
+        prev_ri = is_ri;
+        width += cw;
+        col += cw;
+    }
+    width
+}
+
+/// Combining marks (Unicode Mn/Mc/Me) that [`Canvas::draw_text`] preserves by
+/// attaching them to the base cell on their left. The table covers the blocks
+/// that occur in real-world diagram labels (Latin/Greek/Cyrillic diacritics,
+/// Hebrew, Arabic, Thai/Lao, Indic, Tibetan, Ethiopic, symbol marks and the
+/// combining-half forms); a mark outside the table falls back to the
+/// zero-width drop policy. Variation selectors are deliberately excluded —
+/// they are presentation selectors, not visible marks.
+fn is_combining_mark(ch: char) -> bool {
+    matches!(ch,
+        '\u{0300}'..='\u{036F}' // combining diacritical marks (Latin/Greek/Cyrillic)
+        | '\u{0483}'..='\u{0489}' // cyrillic (titlo, palatalization…)
+        | '\u{0591}'..='\u{05BD}' | '\u{05BF}' | '\u{05C1}'..='\u{05C2}'
+        | '\u{05C4}'..='\u{05C5}' | '\u{05C7}' // hebrew points
+        | '\u{0610}'..='\u{061A}' | '\u{064B}'..='\u{065F}' | '\u{0670}'
+        | '\u{06D6}'..='\u{06DC}' | '\u{06DF}'..='\u{06E4}' | '\u{06E7}'..='\u{06E8}'
+        | '\u{06EA}'..='\u{06ED}' // arabic
+        | '\u{0711}' | '\u{0730}'..='\u{074A}' // syriac
+        | '\u{07A6}'..='\u{07B0}' // thaana
+        | '\u{07EB}'..='\u{07F3}' // nko
+        | '\u{0816}'..='\u{0819}' | '\u{081B}'..='\u{0823}' | '\u{0825}'..='\u{0827}'
+        | '\u{0829}'..='\u{082D}' | '\u{0859}'..='\u{085B}' | '\u{08D3}'..='\u{08E1}'
+        | '\u{093C}' | '\u{0951}'..='\u{0957}' // devanagari nukta/vedic
+        | '\u{0E31}' | '\u{0E34}'..='\u{0E3A}' | '\u{0E47}'..='\u{0E4E}' // thai
+        | '\u{0EB1}' | '\u{0EB4}'..='\u{0EBC}' | '\u{0EC8}'..='\u{0ECD}' // lao
+        | '\u{0F71}'..='\u{0F84}' | '\u{0F86}'..='\u{0F87}' // tibetan
+        | '\u{135D}'..='\u{135F}' // ethiopic
+        | '\u{1AB0}'..='\u{1AFF}' | '\u{1DC0}'..='\u{1DFF}' // diacritics extended/supplement
+        | '\u{20D0}'..='\u{20F0}' // combining marks for symbols
+        | '\u{2CEF}'..='\u{2CF1}' // coptic
+        | '\u{2DE0}'..='\u{2DFF}' // cyrillic extended-A
+        | '\u{A66F}'..='\u{A672}' | '\u{A674}'..='\u{A67D}' | '\u{A69E}'..='\u{A69F}'
+        | '\u{A6F0}'..='\u{A6F1}' // cyrillic extended-B
+        | '\u{A802}' | '\u{A806}' | '\u{A80B}' | '\u{A825}'..='\u{A826}' // phags-pa
+        | '\u{A8C4}'..='\u{A8C5}' | '\u{A8E0}'..='\u{A8F1}' // devanagari extended
+        | '\u{A926}'..='\u{A92D}' | '\u{A947}'..='\u{A951}' // javanese/rejang
+        | '\u{A980}'..='\u{A982}' | '\u{A9B3}' | '\u{A9B6}'..='\u{A9B9}'
+        | '\u{A9BC}'..='\u{A9BD}' // javanese
+        | '\u{AAB0}' | '\u{AAB2}'..='\u{AAB4}' | '\u{AAB7}'..='\u{AAB8}'
+        | '\u{AABE}'..='\u{AABF}' | '\u{AAC1}' | '\u{AAEC}'..='\u{AAEF}' | '\u{AAF6}' // tai viet
+        | '\u{ABE5}' | '\u{ABE8}' | '\u{ABED}' // mei (manipuri)
+        | '\u{FB1E}' // hebrew point judeo-spanish
+        | '\u{FE20}'..='\u{FE2F}' // combining half marks
+    )
 }
 
 fn resolve_line_glyph(conn: LineConn, theme: &Theme, thick: bool) -> char {
@@ -1599,5 +1824,215 @@ mod stride_tests {
             "pre-growth content must stay at its original column after height growth"
         );
         assert!(out.lines().any(|l| l.contains("NEW")));
+    }
+}
+
+#[cfg(test)]
+mod display_width_tests {
+    use super::*;
+
+    #[test]
+    fn nfd_combining_mark_counts_on_base() {
+        // é = U+0065 + U+0301 (NFD): 1 column, same as NFC é
+        assert_eq!(display_width("e\u{0301}"), 1);
+        assert_eq!(display_width("caf\u{0065}\u{0301}"), 4);
+        // NFC 'é' — same 16 columns as the NFD spelling of the same text
+        assert_eq!(display_width("Caf\u{00e9} (decomposed)"), 17);
+    }
+
+    #[test]
+    fn zwsp_and_bidi_controls_count_zero() {
+        assert_eq!(display_width("zero\u{200b}width"), 9);
+        // U+202E RTL override + U+202D LRO + U+2066-2069 isolates + LRM/RLM
+        assert_eq!(display_width("\u{202e}ab"), 2);
+        assert_eq!(
+            display_width("a\u{202d}b\u{2066}c\u{2067}d\u{2068}e\u{2069}f\u{200e}g\u{200f}h"),
+            8
+        );
+    }
+
+    #[test]
+    fn tabs_advance_on_four_col_stops() {
+        assert_eq!(display_width("\t"), 4);
+        assert_eq!(display_width("a\tb"), 1 + 3 + 1);
+        assert_eq!(display_width("ab\t"), 4);
+        assert_eq!(display_width("abc\td"), 5);
+    }
+
+    #[test]
+    fn emoji_presentation_sequences_collapse() {
+        // SEQ-W-04: skin-tone modifier and ZWJ-joined family are 2 columns
+        assert_eq!(display_width("\u{1F44D}\u{1F3FD}"), 2); // thumbs up + medium skin tone
+        assert_eq!(
+            display_width("\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}"),
+            2
+        ); // family
+        assert_eq!(display_width("\u{1F44D}\u{1F3FD} ok"), 5);
+        assert_eq!(display_width("\u{1F1FA}\u{1F1F8}"), 2); // regional-indicator flag pair
+        assert_eq!(display_width("\u{1F1FA}\u{1F1F8}\u{1F1EF}\u{1F1F5}"), 4); // two flags
+    }
+
+    #[test]
+    fn combining_mark_after_wide_char_attaches_without_width() {
+        // Devanagari-style stack on a wide base stays at the base width
+        assert_eq!(display_width("\u{0915}\u{093F}"), 2);
+    }
+
+    #[test]
+    fn draw_text_preserves_combining_mark_in_output() {
+        let mut canvas = Canvas::new(12, 3);
+        canvas.draw_text(0, 1, "cafe\u{0301}"); // NFD: c a f e + combining acute
+        let theme = Theme::new(crate::theme::BoxStyle::Sharp);
+        let out = canvas.render(&theme);
+        assert!(
+            out.contains("e\u{0301}"),
+            "NFD accent must survive draw_text: {out:?}"
+        );
+        // The marked cell ends the text: column 4 is untouched
+        assert_eq!(canvas.get_cell(4, 1).map(|c| c.ch), Some(' '));
+    }
+
+    #[test]
+    fn draw_text_strips_bidi_and_zwsp() {
+        let mut canvas = Canvas::new(20, 3);
+        canvas.draw_text(0, 1, "a\u{202e}b\u{200b}c");
+        let theme = Theme::new(crate::theme::BoxStyle::Sharp);
+        let out = canvas.render(&theme);
+        assert!(!out.contains('\u{202e}'), "bidi override must not render");
+        assert!(!out.contains('\u{200b}'), "ZWSP must not render");
+        assert!(out.contains("abc"), "visible text kept: {out:?}");
+    }
+
+    #[test]
+    fn draw_text_expands_tabs_to_spaces() {
+        let mut canvas = Canvas::new(20, 3);
+        canvas.draw_text(0, 1, "a\tb");
+        let theme = Theme::new(crate::theme::BoxStyle::Sharp);
+        let out = canvas.render(&theme);
+        assert!(!out.contains('\t'), "no literal tab may reach the canvas");
+        assert!(out.contains("a   b"), "tab expands to col-4 stop: {out:?}");
+        // 'b' sits exactly at column 4
+        assert_eq!(canvas.get_cell(4, 1).map(|c| c.ch), Some('b'));
+    }
+
+    #[test]
+    fn draw_text_emoji_cluster_occupies_two_cells() {
+        let mut canvas = Canvas::new(20, 3);
+        canvas.draw_text(0, 1, "\u{1F44D}\u{1F3FD}!"); // 👍🏽!
+        // Cluster = cols 0-1 (col 1 is the wide continuation), '!' at col 2
+        assert_eq!(canvas.get_cell(0, 1).map(|c| c.ch), Some('\u{1F44D}'));
+        assert!(canvas.get_cell(1, 1).is_some_and(|c| c.is_continuation));
+        assert_eq!(canvas.get_cell(2, 1).map(|c| c.ch), Some('!'));
+        assert_eq!(canvas.get_cell(3, 1).map(|c| c.ch), Some(' '));
+    }
+
+    #[test]
+    fn draw_text_flag_pair_keeps_both_codepoints_and_width() {
+        let mut canvas = Canvas::new(20, 3);
+        canvas.draw_text(0, 1, "\u{1F1FA}\u{1F1F8}x"); // 🇺🇸x
+        let theme = Theme::new(crate::theme::BoxStyle::Sharp);
+        let out = canvas.render(&theme);
+        // Both regional indicators reach the output — a lone RI renders as a
+        // broken half-flag in terminals
+        assert!(out.contains('\u{1F1FA}'), "first RI: {out:?}");
+        assert!(out.contains('\u{1F1F8}'), "second RI: {out:?}");
+        // …but the pair occupies exactly 2 columns: 'x' at column 2
+        assert_eq!(canvas.get_cell(2, 1).map(|c| c.ch), Some('x'));
+    }
+
+    #[test]
+    fn draw_text_matches_display_width_advance() {
+        for text in [
+            "café",
+            "a\tb",
+            "\u{1F44D}\u{1F3FD} ok",
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} x",
+            "zero\u{200b}width",
+            "\u{202e}reversed",
+        ] {
+            let mut canvas = Canvas::new(64, 3);
+            canvas.draw_text(1, 1, text);
+            let expected_end = 1 + display_width(text);
+            assert_eq!(
+                canvas.get_cell(expected_end, 1).map(|c| c.ch),
+                Some(' '),
+                "text {text:?} must advance exactly display_width cols"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ascii_dashed_tests {
+    use super::*;
+
+    #[test]
+    fn ascii_dashed_hline_distinct_from_solid() {
+        let mut dashed = Canvas::new(12, 3);
+        dashed.draw_dashed_hline(1, 10, 1, &Theme::ascii());
+        let mut solid = Canvas::new(12, 3);
+        solid.draw_hline(1, 10, 1);
+        let dashed_row = dashed.render(&Theme::ascii());
+        let solid_row = solid.render(&Theme::ascii());
+        assert!(
+            dashed_row.contains('.'),
+            "ascii dashed run must be dotted: {dashed_row:?}"
+        );
+        assert!(
+            !dashed_row.contains('-'),
+            "ascii dashed must not reuse the solid glyph: {dashed_row:?}"
+        );
+        assert!(
+            solid_row.contains('-'),
+            "solid run stays '-': {solid_row:?}"
+        );
+        assert_ne!(dashed_row, solid_row);
+    }
+
+    #[test]
+    fn ascii_dashed_vline_distinct_from_solid() {
+        let mut dashed = Canvas::new(6, 8);
+        dashed.draw_dashed_vline(2, 1, 6, &Theme::ascii());
+        let out = dashed.render(&Theme::ascii());
+        assert!(out.contains(':'), "ascii vertical dashed run: {out:?}");
+        for line in out.lines() {
+            assert!(
+                !line.contains('|'),
+                "ascii dashed must not reuse solid '|': {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ascii_dashed_crossing_resolves_to_junction() {
+        let mut canvas = Canvas::new(12, 12);
+        let theme = Theme::ascii();
+        canvas.draw_dashed_hline(1, 10, 5, &theme);
+        canvas.draw_dashed_vline(5, 1, 10, &theme);
+        let out = canvas.render(&theme);
+        // The crossing cell becomes a solid cross so both strokes stay readable
+        let row = out.lines().nth(5).expect("crossing row");
+        assert!(
+            row.contains('+'),
+            "dashed × dashed crossing resolves to '+': {row:?}"
+        );
+    }
+
+    #[test]
+    fn ascii_dashed_box_differs_from_solid_box() {
+        let mut dashed = Canvas::new(12, 5);
+        dashed.draw_dashed_box(1, 1, 9, 3, &Theme::ascii(), None);
+        let mut solid = Canvas::new(12, 5);
+        solid.draw_box(1, 1, 9, 3, &Theme::ascii(), None);
+        let dashed_out = dashed.render(&Theme::ascii());
+        let solid_out = solid.render(&Theme::ascii());
+        assert!(
+            dashed_out.contains('.'),
+            "FC-SUB-05: ascii dashed border must be dotted: {dashed_out:?}"
+        );
+        assert_ne!(
+            dashed_out, solid_out,
+            "dashed border must differ from solid"
+        );
     }
 }

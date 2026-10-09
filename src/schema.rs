@@ -12,7 +12,30 @@ mod string_or_number {
     fn coerce(v: Value) -> Result<String, String> {
         match v {
             Value::String(s) => Ok(s),
-            Value::Number(n) => Ok(n.to_string()),
+            Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    return Ok(u.to_string());
+                }
+                if let Some(i) = n.as_i64() {
+                    return Ok(i.to_string());
+                }
+                // f64-backed number. Integers beyond the exact-integer range
+                // were decimal literals that lost digit precision when
+                // parsed (e.g. `9999999999999999999999` -> `1e22`); refuse
+                // to render an altered value and point at the quoted form.
+                if let Some(f) = n.as_f64()
+                    && f.is_finite()
+                    && f.fract() == 0.0
+                    && f.abs() >= 9_007_199_254_740_992.0
+                {
+                    return Err(format!(
+                        "unquoted integer {n} is too large for an exact JSON number and would \
+                         silently change value — write it as a JSON string (e.g. \"{n}\") to \
+                         keep the digits"
+                    ));
+                }
+                Ok(n.to_string())
+            }
             other => Err(format!("expected a string or number, got {other}")),
         }
     }
@@ -71,7 +94,7 @@ pub enum NodeShape {
     TrapezoidAlt,     // [\Text/] - Manual operation
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct NodeSpec {
     pub id: String,
     pub label: String,
@@ -92,6 +115,11 @@ pub struct NodeSpec {
     /// (≥2px), `2` double `╔═╗` (≥3px).
     #[serde(default)]
     pub border_level: u8,
+    /// Multi-line label lines (DSL parser fills; flowchart renderer
+    /// consumes). Empty = single-line label in `label`. When non-empty,
+    /// `label == lines.join("\n")` (invariant).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -104,7 +132,7 @@ pub enum ArrowDirection {
     None,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EdgeSpec {
     pub from: String,
     pub to: String,
@@ -119,6 +147,11 @@ pub struct EdgeSpec {
     /// Edge line + arrow color, via `linkStyle N stroke:<name|hex>` or JSON.
     #[serde(default)]
     pub color: Option<Color>,
+    /// Multi-line edge label lines (`<br/>` / `\n` split). Empty =
+    /// single-line `label`. When non-empty, `label ==
+    /// Some(lines.join("\n"))`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -343,7 +376,7 @@ pub struct ContainerSpec {
     pub items: Vec<ContainerItem>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ArchitectureSpec {
     #[serde(default)]
     pub style: BoxStyle,

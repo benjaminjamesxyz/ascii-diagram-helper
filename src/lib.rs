@@ -48,7 +48,7 @@ pub fn render_diagram_colored(spec: &DiagramSpec, colored: bool) -> Result<Strin
         DiagramSpec::Architecture(a) => {
             let theme = Theme::new(a.style);
             let renderer = ArchitectureRenderer::new(a, theme);
-            Ok(renderer.render(colored))
+            renderer.render(colored)
         }
         DiagramSpec::Tree(t) => {
             let theme = Theme::new(t.style);

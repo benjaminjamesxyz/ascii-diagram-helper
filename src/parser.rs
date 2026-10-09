@@ -112,15 +112,25 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         parse_sequence_dsl(trimmed, default_style)
     } else if first_line.starts_with("graph") || first_line.starts_with("flowchart") {
         parse_flowchart_dsl(trimmed, default_style)
+    } else if is_unsupported_diagram_header(first_line) {
+        // An unrecognized `xxxDiagram` / `gitGraph` header must not render
+        // as a node label (stateDiagram-v2 used to become a box).
+        Err(format!(
+            "unsupported diagram type `{}` — supported: `graph|flowchart <TB|LR|RL|BT>`, `sequenceDiagram`, `tree`, `stack`/`memory`, `table`, `ds <tree|btree|linkedlist|array>`, or a JSON diagram spec",
+            first_line.split_whitespace().next().unwrap_or(first_line)
+        ))
     } else if first_line.starts_with("stack")
         || first_line.starts_with("memory")
         || first_line.starts_with("memory-map")
     {
         parse_stack_dsl(trimmed, default_style)
+    } else if first_line.starts_with("table") || first_line.starts_with('|') {
+        parse_table_dsl(trimmed, default_style)
     } else if first_line.starts_with("tree")
         || trimmed.lines().any(|l| l.trim_start().starts_with("- "))
+        || is_headerless_tree(trimmed)
     {
-        // Tree must be checked BEFORE the pipe-shape table heuristic: tree
+        // Tree must be checked BEFORE the heuristic table detection: tree
         // labels legitimately contain '|' (e.g. 'cmd1 | filter'), and the
         // >=2-pipe-lines heuristic would otherwise hijack them into the
         // table parser.
@@ -149,9 +159,52 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         // Default to flowchart if arrow detected
         parse_flowchart_dsl(trimmed, default_style)
     } else {
-        // Fallback to tree
-        parse_tree_dsl(trimmed, default_style)
+        // No diagram syntax detected. The old tree fallback rendered bare
+        // prose as a one-node diagram with exit 0; the documented contract
+        // (and CLI-04) is a clear error instead.
+        Err(
+            "unrecognized diagram input — supported: `graph|flowchart <TB|LR|RL|BT>` (e.g. `graph TD; A --> B`), `sequenceDiagram` (e.g. `sequenceDiagram A->>B: hi`), `tree` (indented lines, or `- ` bullet lists), `stack`/`memory`, `table`, `ds <tree|btree|linkedlist|array>`, or a JSON diagram spec"
+                .to_string(),
+        )
     }
+}
+
+/// Detects a Mermaid-family header this tool does not implement
+/// (`stateDiagram-v2`, `classDiagram`, `erDiagram`, `gitGraph`, …) so it is
+/// rejected with the unsupported-type error instead of being parsed as node
+/// text. Only `*-Diagram` words and the exact `gitGraph` keyword match, so
+/// ordinary prose never trips it.
+fn is_unsupported_diagram_header(first_line: &str) -> bool {
+    let first = first_line.split_whitespace().next().unwrap_or("");
+    let bare = first.split('-').next().unwrap_or(first);
+    if bare == "gitGraph" {
+        return true;
+    }
+    bare.len() > "diagram".len() && bare.to_ascii_lowercase().ends_with("diagram")
+}
+
+/// Headerless tree shape: an unindented first entry with at least one
+/// INDENTED later entry (`src/\n  main.rs` — the documented indent DSL
+/// without the `tree` header, e.g. the `example tree` spec). Replaces the
+/// old any-prose tree fallback, which rendered flat prose (`hello world`)
+/// as a one-node diagram; flat text without indentation now errors instead.
+/// Lines carrying flowchart arrows are excluded so headerless flowcharts
+/// with wrapped labels keep routing to the flowchart parser.
+fn is_headerless_tree(trimmed: &str) -> bool {
+    let lines: Vec<&str> = trimmed.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() < 2 || tree_indent_width(lines[0]) != 0 {
+        return false;
+    }
+    let mut has_indented = false;
+    for line in &lines {
+        if line.contains("-->") || line.contains("-.->") || line.contains("==>") {
+            return false;
+        }
+        if tree_indent_width(line) > 0 {
+            has_indented = true;
+        }
+    }
+    has_indented
 }
 
 /// Heuristic table detection beyond the leading `table` / `|` forms: a
@@ -242,11 +295,23 @@ pub fn parse_datastructure_dsl(
             if rest.is_empty() {
                 return Err(format!("ds btree needs a root key list; {DS_DSL_HINT}"));
             }
+            // An empty non-first level (`||` interior or trailing `|`) would
+            // shift every later level up one rank and silently change the
+            // tree shape — reject it instead.
             let mut levels = rest.split('|');
             let mut root = DsNode {
                 keys: parse_ds_keys(levels.next().unwrap_or_default(), "root key")?,
                 ..DsNode::default()
             };
+            for (idx, level) in levels.enumerate() {
+                if level.trim().is_empty() {
+                    return Err(format!(
+                        "empty level {} in `ds btree` input; every pipe-separated level must contain at least one cell; {DS_DSL_HINT}",
+                        idx + 2
+                    ));
+                }
+            }
+            let levels = rest.split('|').skip(1);
 
             // Flatten the remaining levels into a cell stream and attach
             // children level-order (BFS). A node with `n` keys takes up to
@@ -348,6 +413,8 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     let mut dashed_links: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut colored_links: std::collections::HashMap<usize, Color> =
         std::collections::HashMap::new();
+    let mut default_link_dashed = false;
+    let mut default_link_color: Option<Color> = None;
     // Subgraph ids styled via `style <sg-id> stroke:<color>`; node ids may
     // also land here — build_subgraph_tree only looks up subgraph ids
     let mut colored_sgs: std::collections::HashMap<String, Color> =
@@ -366,10 +433,15 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     let subgraphs_flat: std::cell::RefCell<Vec<SubgraphFlat>> = std::cell::RefCell::new(Vec::new());
     let sg_stack: std::cell::RefCell<Vec<usize>> = std::cell::RefCell::new(Vec::new());
 
-    let mut lines = input.lines();
-    let first_line = lines.next().unwrap_or("").trim();
-
-    if first_line.starts_with("graph") || first_line.starts_with("flowchart") {
+    // Physical newlines inside brackets/quotes join into one statement so
+    // multi-line node labels work (`A[line1\nline2]` written across lines,
+    // README/skill-recommended); label content keeps the newline characters
+    // and lands in `NodeSpec::lines`. Unterminated wrappers join to EOF and
+    // still fail node-token validation downstream.
+    let logical = logical_lines(input);
+    let first_line = logical.first().map(String::as_str).unwrap_or("").trim();
+    let header = first_line.starts_with("graph") || first_line.starts_with("flowchart");
+    if header {
         let parts: Vec<&str> = first_line.split_whitespace().collect();
         if parts.len() > 1 {
             direction = match parts[1].to_uppercase().as_str() {
@@ -379,21 +451,37 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                 _ => LayoutDirection::TB,
             };
         }
-    } else {
-        // Put first line back by processing all lines
-        lines = input.lines();
     }
+    let body: &[String] = if header { &logical[1..] } else { &logical[..] };
+    // 1-based statement numbering for diagnostics (+1 when the header line
+    // is consumed instead of processed as a statement).
+    let line_no_base = if header { 2 } else { 1 };
 
-    let mut ensure_node = |id: &str, label: &str, shape: NodeShape| {
+    // linkStyle directives seen, for deferred out-of-range warnings (a
+    // directive may precede the edges it styles)
+    let mut link_style_refs: Vec<(usize, String)> = Vec::new();
+
+    let mut ensure_node = |id: &str, label: &str, explicit_label: bool, shape: NodeShape| {
         if let Some(&idx) = node_indices.get(id) {
             if !label.is_empty() && nodes[idx].label == nodes[idx].id {
                 nodes[idx].label = label.to_string();
+                nodes[idx].lines = split_label_lines(label);
                 nodes[idx].shape = shape;
             }
         } else {
+            // An explicitly written empty wrapper (`A[]`, `A[ ]`, `A()`, …)
+            // falls back to the id as label, but warns so the substitution
+            // is visible; a bare unlabeled endpoint (`A --> B`) is the
+            // normal unlabeled form and stays silent.
+            if label.is_empty() && explicit_label {
+                eprintln!(
+                    "warning: flowchart: node `{id}` has an empty [] label — using the node id `{id}` as the label"
+                );
+            }
             node_indices.insert(id.to_string(), nodes.len());
             nodes.push(NodeSpec {
                 id: id.to_string(),
+                lines: split_label_lines(label),
                 label: if label.is_empty() {
                     id.to_string()
                 } else {
@@ -416,7 +504,8 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
         }
     };
 
-    for line in lines {
+    for (offset, line) in body.iter().enumerate() {
+        let line_no = line_no_base + offset;
         let trimmed = line.trim();
         if trimmed.is_empty()
             || trimmed.starts_with("```")
@@ -551,13 +640,41 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
 
         // linkStyle 0,2 prop:value,... — dashed / colored edges. `fill` is
         // aliased to the edge color (Mermaid links have no fill; the terminal
-        // edge color IS the line color)
+        // edge color IS the line color). Bad indices / unparseable colors
+        // warn on stderr instead of silently yielding an unstyled diagram.
         if let Some(rest) = trimmed.strip_prefix("linkStyle ") {
-            if let Some((idxs, props)) = rest.split_once(char::is_whitespace) {
-                let dashed = prop_flag(props, "stroke-dasharray");
-                let color = prop_color(props, "stroke").or_else(|| prop_color(props, "fill"));
-                for idx in idxs.split(',') {
-                    if let Ok(i) = idx.trim().parse::<usize>() {
+            let (idxs, props) = match rest.split_once(char::is_whitespace) {
+                Some((i, p)) => (i, p),
+                None => (rest, ""),
+            };
+            let dashed = prop_flag(props, "stroke-dasharray");
+            let color = prop_color(props, "stroke").or_else(|| prop_color(props, "fill"));
+            for (prop, checked) in [
+                ("stroke", prop_color_checked(props, "stroke")),
+                ("fill", prop_color_checked(props, "fill")),
+            ] {
+                if let Some(None) = checked {
+                    let raw = prop_value(props, prop).unwrap_or("");
+                    eprintln!(
+                        "warning: flowchart line {line_no}: linkStyle {prop}:{raw} is not a color (use a color name or #rgb/#rrggbb hex) — ignored"
+                    );
+                }
+            }
+            let mut any_index = false;
+            for idx in idxs.split(',') {
+                let trimmed_idx = idx.trim();
+                if trimmed_idx.eq_ignore_ascii_case("default") {
+                    if dashed {
+                        default_link_dashed = true;
+                    }
+                    if let Some(c) = color {
+                        default_link_color = Some(c);
+                    }
+                    continue;
+                }
+                match trimmed_idx.parse::<usize>() {
+                    Ok(i) => {
+                        any_index = true;
                         if dashed {
                             dashed_links.insert(i);
                         }
@@ -565,7 +682,19 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
                             colored_links.insert(i, c);
                         }
                     }
+                    Err(_) => eprintln!(
+                        "warning: flowchart line {line_no}: linkStyle index `{}` is not a non-negative integer — ignored",
+                        idx.trim()
+                    ),
                 }
+            }
+            if any_index {
+                link_style_refs.push((line_no, idxs.to_string()));
+            }
+            if props.trim().is_empty() {
+                eprintln!(
+                    "warning: flowchart line {line_no}: linkStyle has no style properties (expected e.g. `stroke:red` or `stroke-dasharray`) — ignored"
+                );
             }
             continue;
         }
@@ -584,7 +713,7 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
             }
             let (id, label, shape) = parse_node_token(trimmed);
             if !id.is_empty() {
-                ensure_node(&id, &label, shape);
+                ensure_node(&id, &label, token_has_label_wrapper(trimmed), shape);
             }
         }
     }
@@ -625,26 +754,54 @@ pub fn parse_flowchart_dsl(input: &str, default_style: BoxStyle) -> Result<Diagr
     let subgraphs = build_subgraph_tree(&flat_tuples, None, &colored_sgs);
 
     // Apply deferred style marks (class/style lines may precede node defs)
+    let default_class_style = class_styles.get("default").copied();
     for node in &mut nodes {
-        if dashed_nodes.contains(&node.id) {
+        let is_dashed =
+            dashed_nodes.contains(&node.id) || default_class_style.is_some_and(|s| s.dashed);
+        if is_dashed {
             node.dashed_border = true;
         }
-        if let Some(c) = colored_nodes.get(&node.id) {
-            node.color = Some(*c);
+        if let Some(c) = colored_nodes
+            .get(&node.id)
+            .copied()
+            .or(default_class_style.and_then(|s| s.stroke))
+        {
+            node.color = Some(c);
         }
-        if let Some(c) = filled_nodes.get(&node.id) {
-            node.fill_color = Some(*c);
+        if let Some(c) = filled_nodes
+            .get(&node.id)
+            .copied()
+            .or(default_class_style.and_then(|s| s.fill))
+        {
+            node.fill_color = Some(c);
         }
         if let Some(&lvl) = border_nodes.get(&node.id) {
+            node.border_level = lvl;
+        } else if let Some(lvl) = default_class_style.map(|s| s.thick).filter(|&l| l > 0) {
             node.border_level = lvl;
         }
     }
     for (i, edge) in edges.iter_mut().enumerate() {
-        if dashed_links.contains(&i) {
+        if dashed_links.contains(&i) || default_link_dashed {
             edge.dashed = true;
         }
-        if let Some(c) = colored_links.get(&i) {
-            edge.color = Some(*c);
+        if let Some(c) = colored_links.get(&i).copied().or(default_link_color) {
+            edge.color = Some(c);
+        }
+    }
+    // Out-of-range linkStyle indices can only be judged once all edges
+    // exist (directives may precede them) — warn instead of silently
+    // styling nothing.
+    let edge_count = edges.len();
+    for (line_no, idxs) in &link_style_refs {
+        for idx in idxs.split(',') {
+            if let Ok(i) = idx.trim().parse::<usize>()
+                && i >= edge_count
+            {
+                eprintln!(
+                    "warning: flowchart line {line_no}: linkStyle index {i} is out of range (diagram defines {edge_count} edge(s)) — ignored"
+                );
+            }
         }
     }
 
@@ -700,6 +857,79 @@ fn clean_label(raw: &str) -> String {
         .replace("<br>", "\n")
         .replace("<br />", "\n");
     s
+}
+
+/// Multi-line render lines for a label: `\n` escapes and `<br/>` markup are
+/// already normalized to newlines by [`clean_label`], and physical newlines
+/// inside node brackets survive statement joining. Single-line labels yield
+/// an empty vec — `label` is authoritative when `lines` is empty
+/// (`NodeSpec::lines` / `EdgeSpec::lines` invariant: non-empty `lines`
+/// implies `label == lines.join("\n")`).
+fn split_label_lines(label: &str) -> Vec<String> {
+    if label.contains('\n') {
+        label.split('\n').map(str::to_string).collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// True when a node token carries an explicit label wrapper (`A[x]`,
+/// `A(x)`, `A{{y}}`, `[(z)]`, quoted text) as opposed to a bare id —
+/// wrapper openers cannot occur in a bare id. An explicit but EMPTY label
+/// (`A[]`, `A[ ]`) warns instead of silently showing the id.
+fn token_has_label_wrapper(token: &str) -> bool {
+    let t = token.trim();
+    t.starts_with('"') || t.starts_with('\'') || t.find(['[', '(', '{']).is_some()
+}
+
+/// Splits input into logical flowchart statements: a physical newline
+/// inside brackets/quotes joins onto the open statement (multi-line node
+/// labels), keeping the newline character in the accumulated text. Comment
+/// (`%%`, `//`) and fence (```` ``` ````) lines never leak bracket state
+/// into the next statement. Unterminated wrappers join to EOF and fail
+/// node-token validation downstream, exactly as a same-line typo would.
+fn logical_lines(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut depth = 0usize;
+    let mut in_quote: Option<char> = None;
+    for line in input.lines() {
+        let t = line.trim_start();
+        if t.starts_with("%%") || t.starts_with("//") || t.starts_with("```") {
+            if !cur.trim().is_empty() {
+                cur.push('\n');
+                cur.push_str(line);
+            }
+            continue;
+        }
+        if !cur.is_empty() {
+            cur.push('\n');
+        }
+        for ch in line.chars() {
+            match ch {
+                q @ ('"' | '\'') if in_quote.is_none() => in_quote = Some(q),
+                q if Some(q) == in_quote => in_quote = None,
+                '[' | '{' | '(' if in_quote.is_none() => depth += 1,
+                ']' | '}' | ')' if in_quote.is_none() => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            cur.push(ch);
+        }
+        if depth == 0 && in_quote.is_none() {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Like [`prop_color`] but distinguishes "prop absent" (`None` outer) from
+/// "prop present but not a parseable color" (`None` inner), so `linkStyle`
+/// can warn about typos instead of silently styling nothing.
+fn prop_color_checked(props: &str, name: &str) -> Option<Option<Color>> {
+    prop_value(props, name).map(Color::parse)
 }
 
 /// Is `c` a character that only occurs inside shape wrappers or quotes?
@@ -1023,23 +1253,37 @@ fn split_bracket_aware(s: &str, delimiter: char) -> Vec<&str> {
 }
 
 fn parse_flowchart_edges_in_line<F>(
-    mut line: &str,
+    raw_line: &str,
     ensure_node: &mut F,
     edges: &mut Vec<EdgeSpec>,
 ) -> Result<(), String>
 where
-    F: FnMut(&str, &str, NodeShape),
+    F: FnMut(&str, &str, bool, NodeShape),
 {
+    // `-- "label" -->` (documented edge-label form) is canonicalized into
+    // `-->|label|` before scanning; the label keeps its quotes and the
+    // `|label|` scan below strips them while protecting embedded pipes.
+    let rewritten = rewrite_quoted_edge_labels(raw_line);
+    let mut line: &str = &rewritten;
+
     while let Some((idx, delim)) = find_next_delim(line) {
         let left_part = line[..idx].trim();
         let mut rest = line[idx + delim.len()..].trim();
 
         let mut edge_label = None;
-        if rest.starts_with('|')
-            && let Some(end_bar) = rest[1..].find('|')
-        {
-            edge_label = Some(clean_label(&rest[1..=end_bar]));
-            rest = rest[end_bar + 2..].trim();
+        if rest.starts_with('|') {
+            match scan_edge_label(&rest[1..]) {
+                EdgeLabelScan::Closed { end, after } => {
+                    edge_label = Some(clean_label(&rest[1..1 + end]));
+                    rest = rest[1 + after..].trim();
+                }
+                EdgeLabelScan::Unclosed => {
+                    return Err(format!(
+                        "edge label `|{}` is not closed — edge labels end with `|`, e.g. `A -->|label| B`, or quote them to protect pipes: `A -->|\"a | b\"| B`",
+                        &rest[1..]
+                    ));
+                }
+            }
         }
 
         let (target_part, has_next) = match find_next_delim(rest) {
@@ -1060,13 +1304,14 @@ where
         let targets = split_bracket_aware(target_part, '&');
 
         if sources.is_empty() {
-            return Err(format!(
-                "invalid node text `{left_part}` in edge statement — wrap node text in [brackets] or \"quotes\""
-            ));
+            return Err(
+                "edge statement has no source node — an edge needs both endpoints, e.g. `A --> B`"
+                    .to_string(),
+            );
         }
-        if targets.is_empty() {
+        if target_part.is_empty() {
             return Err(format!(
-                "invalid node text `{target_part}` in edge statement — wrap node text in [brackets] or \"quotes\""
+                "edge statement has no target — `{left_part} {delim}` dangles; add a target node, e.g. `A --> B`"
             ));
         }
 
@@ -1076,24 +1321,33 @@ where
         // inside quotes/brackets)
         for token in sources.iter().chain(targets.iter()) {
             if !node_token_fully_consumed(token) {
+                let hint = if token.contains("--") || token.contains(" --") {
+                    " — for an edge label use `-->|label|` or `-- \"label\" -->`"
+                } else {
+                    " — wrap node text in [brackets] or \"quotes\""
+                };
                 return Err(format!(
-                    "invalid node text `{token}` in edge statement — wrap node text in [brackets] or \"quotes\""
+                    "invalid node text `{token}` in edge statement{hint}"
                 ));
             }
         }
 
         for s in &sources {
             let (u_id, u_label, u_shape) = parse_node_token(s);
-            ensure_node(&u_id, &u_label, u_shape);
+            ensure_node(&u_id, &u_label, token_has_label_wrapper(s), u_shape);
 
             for t in &targets {
                 let (v_id, v_label, v_shape) = parse_node_token(t);
-                ensure_node(&v_id, &v_label, v_shape);
+                ensure_node(&v_id, &v_label, token_has_label_wrapper(t), v_shape);
 
                 edges.push(EdgeSpec {
                     from: u_id.clone(),
                     to: v_id,
                     label: edge_label.clone(),
+                    lines: edge_label
+                        .as_deref()
+                        .map(split_label_lines)
+                        .unwrap_or_default(),
                     arrow,
                     dashed: is_dashed,
                     thick: is_thick,
@@ -1108,6 +1362,132 @@ where
         line = rest;
     }
     Ok(())
+}
+
+/// Result of scanning an edge label after its opening `|`.
+enum EdgeLabelScan {
+    /// Label content (byte span in the scan input) and the offset one past
+    /// the closing `|` where the statement continues.
+    Closed { end: usize, after: usize },
+    /// No closing `|` (or closing quote followed by `|` for quoted labels).
+    Unclosed,
+}
+
+/// Scans an edge label after the opening `|`. A label opening with a quote
+/// runs to the matching closing quote (pipes inside stay literal —
+/// `A -->|"a | b"| B`), then optional whitespace and the closing `|`.
+/// Unquoted labels end at the next `|`.
+fn scan_edge_label(after_open: &str) -> EdgeLabelScan {
+    let t = after_open.trim_start();
+    if t.starts_with('"') || t.starts_with('\'') {
+        let quote = t.as_bytes()[0] as char;
+        if let Some(rel) = t[1..].find(quote) {
+            let close = 1 + rel; // closing quote index within t
+            let bytes = t.as_bytes();
+            let mut k = close + 1;
+            while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                k += 1;
+            }
+            if k < bytes.len() && bytes[k] == b'|' {
+                let lead = after_open.len() - t.len();
+                return EdgeLabelScan::Closed {
+                    end: lead + close + 1,
+                    after: lead + k + 1,
+                };
+            }
+        }
+        // Quoted label missing its closing quote + `|`: report unclosed so
+        // the error names the label instead of garbage node text.
+        return EdgeLabelScan::Unclosed;
+    }
+    match after_open.find('|') {
+        Some(bar) => EdgeLabelScan::Closed {
+            end: bar,
+            after: bar + 1,
+        },
+        None => EdgeLabelScan::Unclosed,
+    }
+}
+
+/// Rewrites the documented `-- "label" -->` edge-label form into the
+/// canonical `-->|label|` (label keeps its quotes; [`scan_edge_label`]
+/// strips them and protects embedded pipes). The `--` must not be part of
+/// `---` / `-.->` (preceding `-` rejected) and the closing `-->` must
+/// follow the quoted label for the rewrite to apply; anything else is left
+/// untouched for the normal scan to report.
+fn rewrite_quoted_edge_labels(line: &str) -> std::borrow::Cow<'_, str> {
+    if !line.contains("--") {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    let bytes = line.as_bytes();
+    let mut out = String::new();
+    let mut copied = 0usize;
+    let mut i = 0usize;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'-'
+            && bytes[i + 1] == b'-'
+            && (i == 0 || bytes[i - 1] != b'-')
+            && (bytes[i + 2] == b'"'
+                || bytes[i + 2] == b'\''
+                || bytes[i + 2] == b' '
+                || bytes[i + 2] == b'\t')
+        {
+            let mut j = i + 2;
+            while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
+                j += 1;
+            }
+            if j < bytes.len() && (bytes[j] == b'"' || bytes[j] == b'\'') {
+                let quote = bytes[j] as char;
+                if let Some(rel) = line[j + 1..].find(quote) {
+                    let close = j + 1 + rel;
+                    let mut k = close + 1;
+                    while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                        k += 1;
+                    }
+                    if k + 3 <= bytes.len() && &line[k..k + 3] == "-->" {
+                        out.push_str(&line[copied..i]);
+                        out.push_str("-->|");
+                        out.push_str(&line[j..=close]);
+                        out.push('|');
+                        copied = k + 3;
+                        i = copied;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    if copied == 0 {
+        return std::borrow::Cow::Borrowed(line);
+    }
+    out.push_str(&line[copied..]);
+    std::borrow::Cow::Owned(out)
+}
+
+/// Finds a second `participant`/`actor` keyword on a participant line,
+/// outside quoted label text (`participant A as "the participant X"` is a
+/// legal single declaration). Returns the byte offset of the keyword.
+fn find_second_participant_keyword(rest: &str) -> Option<usize> {
+    let mut in_quote: Option<char> = None;
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            q @ ('"' | '\'') if in_quote.is_none() => in_quote = Some(q),
+            q if Some(q) == in_quote => in_quote = None,
+            ' ' | '\t' if in_quote.is_none() => {
+                let tail = &rest[i + 1..];
+                if tail.starts_with("participant ")
+                    || tail.starts_with("participant\t")
+                    || tail.starts_with("actor ")
+                    || tail.starts_with("actor\t")
+                {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Parses a Mermaid sequence-diagram DSL into a [`SequenceSpec`].
@@ -1171,6 +1551,14 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
             .strip_prefix("participant ")
             .or_else(|| trimmed.strip_prefix("actor "))
         {
+            // Multiple participants on one line silently mis-render (a
+            // single box labeled `A participant B`), so reject the line.
+            if find_second_participant_keyword(rest).is_some() {
+                return Err(format!(
+                    "sequenceDiagram line {}: `{trimmed}` — only one `participant`/`actor` per line; put each declaration on its own line",
+                    ln + 1
+                ));
+            }
             if let Some(as_pos) = rest.find(" as ") {
                 let id = rest[..as_pos].trim();
                 let label = rest[as_pos + 4..].trim().trim_matches('"');
@@ -1180,6 +1568,13 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
                     .replace("<br>", "\n")
                     .replace("<br />", "\n");
                 add_participant(id, Some(unescaped), &mut participants, &mut p_set);
+            } else if rest.trim_end().ends_with(" as") {
+                // `participant A as` (no alias) would leak the keyword into
+                // the display name (`A as`) — require the alias instead.
+                return Err(format!(
+                    "sequenceDiagram line {}: `{trimmed}` — `as` requires an alias: `participant A as Alias`",
+                    ln + 1
+                ));
             } else {
                 let id = rest.trim();
                 add_participant(id, None, &mut participants, &mut p_set);
@@ -1191,8 +1586,12 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
         // `note left of X: text` (keyword case-insensitive, Mermaid form).
         // Notes introduce participants, matching Mermaid. Malformed note
         // forms fall through to the unrecognized-line tracking below.
+        // Prefix compare uses bytes, never a `&str` byte-slice: slicing
+        // `trimmed[..4]` panicked on any line starting with a multi-byte
+        // char (`数据库 ->> A: x`), while non-ASCII bytes can never equal
+        // the ASCII "note" pattern under `eq_ignore_ascii_case`.
         if trimmed.len() >= 5
-            && trimmed[..4].eq_ignore_ascii_case("note")
+            && trimmed.as_bytes()[..4].eq_ignore_ascii_case(b"note")
             && (trimmed.as_bytes()[4] == b' ' || trimmed.as_bytes()[4] == b'\t')
         {
             let rest = trimmed[4..].trim();
@@ -1301,11 +1700,17 @@ pub fn parse_sequence_dsl(input: &str, default_style: BoxStyle) -> Result<Diagra
                 let from_id = trimmed[..idx].trim();
                 let rest = trimmed[idx + pat.len()..].trim();
 
-                let (to_id, label) = if let Some(colon) = rest.find(':') {
-                    (&rest[..colon].trim(), rest[colon + 1..].trim())
-                } else {
-                    (&rest, "")
+                // A message without `:` used to be silently dropped while
+                // the whole remainder became a bogus participant id — fail
+                // with the offending line instead.
+                let Some(colon) = rest.find(':') else {
+                    return Err(format!(
+                        "sequenceDiagram line {}: `{trimmed}` — message is missing `: <label>`; label the message, e.g. `A -> B: text`",
+                        ln + 1
+                    ));
                 };
+                let to_id = rest[..colon].trim();
+                let label = rest[colon + 1..].trim();
 
                 let clean_label = label
                     .trim_matches('"')
@@ -1391,40 +1796,99 @@ fn split_trailing_color(s: &str) -> (&str, Option<Color>) {
     (s, None)
 }
 
+/// Extracts a tree-node annotation from `content`. Per README the annotation
+/// is a trailing ` (text)` group, so only a whitespace-delimited `(...)`
+/// segment at the very END of the line is an annotation; every other paren
+/// is literal name text. `src (CLI entry)` → `src` + `CLI entry`;
+/// `foo(1).rs`, `foo (1).rs`, `(y) x` and nested `foo(bar (x))` pass through
+/// unmodified (parens in names must survive), as does a paren group with an
+/// empty name (`(y)` alone) or empty body (`foo ()`).
 fn parse_tree_node_annotation(content: &str) -> (String, Option<String>) {
-    if let (Some(start), Some(end)) = (content.find('('), content.rfind(')'))
-        && start < end
-    {
-        let before = content[..start].trim();
-        let inside = content[start + 1..end].trim();
-        let trailing = content[end + 1..].trim();
-        let ann = if trailing.is_empty() {
-            inside.to_string()
-        } else if inside.is_empty() {
-            trailing.to_string()
-        } else {
-            format!("{inside} {trailing}")
-        };
-        return (before.to_string(), Some(ann));
+    let content = content.trim();
+    let bytes = content.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'(' && i > 0 && (bytes[i - 1] == b' ' || bytes[i - 1] == b'\t') {
+            let group = &content[i..];
+            if group.ends_with(')') && is_balanced_parens(group) {
+                let inside = group[1..group.len() - 1].trim();
+                let name = content[..i].trim_end();
+                if !inside.is_empty() {
+                    return (name.to_string(), Some(inside.to_string()));
+                }
+            }
+        }
     }
     (content.to_string(), None)
 }
 
+/// True if `s` starts and ends with `(`/`)` and its parens balance to zero
+/// without dipping negative — i.e. the whole string is one paren group.
+fn is_balanced_parens(s: &str) -> bool {
+    let mut depth = 0i32;
+    for b in s.bytes() {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
+}
+
+/// Leading display columns of a raw tree line (tabs expand to 4 columns,
+/// matching the indent logic in [`parse_tree_dsl`]).
+fn tree_indent_width(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
+}
+
 fn parse_tree_node_line(raw: &str) -> (String, Option<String>, Option<Color>) {
-    let clean = raw.trim().trim_start_matches("- ").trim();
-    let (content, color) = split_trailing_color(clean);
+    let trimmed = raw.trim();
+    // Strip exactly ONE bullet marker from the set `- ` / `* ` / `+ `:
+    // bullet lists render their label, but a second marker stays literal
+    // text (`- - x` names the node `- x`).
+    let stripped = if trimmed.len() >= 2
+        && matches!(trimmed.as_bytes()[0], b'-' | b'*' | b'+')
+        && trimmed.as_bytes()[1] == b' '
+    {
+        trimmed[2..].trim_start()
+    } else {
+        trimmed
+    };
+    let (content, color) = split_trailing_color(stripped);
     let (name, ann) = parse_tree_node_annotation(content);
     (name, ann, color)
 }
 
 pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpec, String> {
-    let mut lines = input.lines().filter(|l| !l.trim().is_empty());
-    let Some(first) = lines.next() else {
+    let all: Vec<&str> = input.lines().filter(|l| !l.trim().is_empty()).collect();
+    let Some(first) = all.first() else {
         return Err("Empty tree specification".to_string());
     };
 
+    // A first line of exactly `tree` is the header keyword only when nothing
+    // follows it, or when the next line is unindented (it would be a second
+    // root, so it is promoted to root — the documented `tree\nsrc` form).
+    // When the next line is INDENTED, `tree` is itself the root label and
+    // the indented lines are its children, so a root named `tree` renders
+    // (`tree\n  src` → tree └── src, not a bare `src`).
+    let mut start = 1; // index of the first line after the root line
     let root_raw = if first.trim() == "tree" {
-        lines.next().unwrap_or("Root")
+        match all.get(1) {
+            None => "Root",
+            Some(next) if tree_indent_width(next) == 0 => {
+                start = 2;
+                next
+            }
+            Some(_) => "tree",
+        }
     } else {
         first
     };
@@ -1440,18 +1904,14 @@ pub fn parse_tree_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSpe
     // Stack of (indent_level, node)
     let mut stack: Vec<(usize, TreeNodeSpec)> = vec![(0, root)];
 
-    for line in lines {
+    for line in &all[start..] {
         let trimmed_line = line.trim();
         if trimmed_line.is_empty() {
             continue;
         }
 
         // Count leading spaces (tabs expand to 4 columns)
-        let indent: usize = line
-            .chars()
-            .take_while(|c| *c == ' ' || *c == '\t')
-            .map(|c| if c == '\t' { 4 } else { 1 })
-            .sum();
+        let indent = tree_indent_width(line);
 
         let (name, ann, node_color) = parse_tree_node_line(trimmed_line);
 
@@ -1529,14 +1989,15 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
     if let Some(&last_line) = content_lines.last() {
         let (addr, rest) = if let Some(col) = last_line.find(':') {
             let a = last_line[..col].trim();
-            (
-                if a.is_empty() {
-                    None
-                } else {
-                    Some(a.to_string())
-                },
-                last_line[col + 1..].trim(),
-            )
+            if a.is_empty() {
+                // `: label` — no address, keep the text after the colon
+                (None, last_line[col + 1..].trim())
+            } else if crate::stack::is_address_shaped(a) {
+                (Some(a.to_string()), last_line[col + 1..].trim())
+            } else {
+                // `Note: x` — not an address; the whole line stays a label
+                (None, last_line)
+            }
         } else {
             (None, last_line)
         };
@@ -1552,14 +2013,15 @@ pub fn parse_stack_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
     for line in content_lines {
         let (addr, rest) = if let Some(col) = line.find(':') {
             let a = line[..col].trim();
-            (
-                if a.is_empty() {
-                    None
-                } else {
-                    Some(a.to_string())
-                },
-                line[col + 1..].trim(),
-            )
+            if a.is_empty() {
+                // `: label` — no address, keep the text after the colon
+                (None, line[col + 1..].trim())
+            } else if crate::stack::is_address_shaped(a) {
+                (Some(a.to_string()), line[col + 1..].trim())
+            } else {
+                // `Port: 5432` — not an address; the whole line stays a label
+                (None, line)
+            }
         } else {
             (None, line)
         };
@@ -1614,6 +2076,7 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
     let mut rows = Vec::new();
     let mut alignments = Vec::new();
     let mut table_color = None;
+    let mut uses_leading_pipe: Option<bool> = None;
 
     let mut is_first_line = true;
     for (line_idx, line) in input.lines().enumerate() {
@@ -1644,15 +2107,25 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             ));
         }
 
-        let mut cells: Vec<String> = trimmed.split('|').map(|c| c.trim().to_string()).collect();
+        // A cell split across a physical newline shows up as a continuation
+        // line without a leading '|' when the table established leading pipes
+        // (e.g. `| line1` + `line2 | 2 |`). Reject it rather than silently
+        // corrupting the table shape; multi-line cells are not supported.
+        let starts_pipe = trimmed.starts_with('|');
+        if uses_leading_pipe == Some(true) && !starts_pipe {
+            return Err(format!(
+                "line {line_no}: table row must start with '|' — a row split across \
+                 multiple lines is not supported; put the whole row on one line \
+                 (escape a literal pipe in a cell as `\\|`): \"{trimmed}\""
+            ));
+        }
+        if uses_leading_pipe.is_none() {
+            uses_leading_pipe = Some(starts_pipe);
+        }
 
-        // Drop empty first/last if leading/trailing '|'
-        if cells.first().is_some_and(std::string::String::is_empty) {
-            cells.remove(0);
-        }
-        if cells.last().is_some_and(std::string::String::is_empty) {
-            cells.pop();
-        }
+        // Honors `\|` escapes inside cells and strips only edge delimiter
+        // pipes (crate::table::split_table_row).
+        let cells = crate::table::split_table_row(trimmed);
         if cells.is_empty() {
             continue;
         }
@@ -1684,6 +2157,13 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
         if headers.is_empty() {
             headers = cells;
         } else {
+            if cells.len() > headers.len() {
+                return Err(format!(
+                    "line {line_no}: table row has {} cells but the header defines {} columns",
+                    cells.len(),
+                    headers.len()
+                ));
+            }
             rows.push(cells);
         }
     }
@@ -1693,6 +2173,14 @@ pub fn parse_table_dsl(input: &str, default_style: BoxStyle) -> Result<DiagramSp
             "No valid table rows found: table requires at least a header row with '|' delimiter"
                 .to_string(),
         );
+    }
+
+    if !alignments.is_empty() && alignments.len() != headers.len() {
+        return Err(format!(
+            "table separator defines {} columns but the header has {}",
+            alignments.len(),
+            headers.len()
+        ));
     }
 
     Ok(DiagramSpec::Table(TableSpec {
@@ -2263,17 +2751,25 @@ mod tests {
 
     #[test]
     fn test_tree_trailing_annotation_preserved() {
+        // Annotation syntax is a TRAILING whitespace-delimited `(...)` group;
+        // text after the group keeps the whole line a literal name.
         let dsl = "root\n  main (entry) extra";
         let res = parse_tree_dsl(dsl, BoxStyle::Rounded);
         assert!(res.is_ok());
         match res.unwrap() {
             DiagramSpec::Tree(t) => {
                 assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "main (entry) extra");
+                assert!(t.root.children[0].annotation.is_none());
+            }
+            _ => panic!("Expected tree"),
+        }
+        // The trailing-group form still extracts the annotation.
+        let dsl = "root\n  main (entry)";
+        match parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Tree(t) => {
                 assert_eq!(t.root.children[0].name, "main");
-                assert_eq!(
-                    t.root.children[0].annotation.as_deref(),
-                    Some("entry extra")
-                );
+                assert_eq!(t.root.children[0].annotation.as_deref(), Some("entry"));
             }
             _ => panic!("Expected tree"),
         }
@@ -2281,20 +2777,31 @@ mod tests {
 
     #[test]
     fn test_tree_trailing_emoji_preserved() {
+        // An emoji AFTER the paren group means the group is not the trailing
+        // segment, so the line stays a literal name — emoji survives either way.
         let dsl = "root\n  main (entry) 🚀";
         let res = parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap();
         match &res {
             DiagramSpec::Tree(t) => {
                 assert_eq!(t.root.children.len(), 1);
-                assert_eq!(t.root.children[0].name, "main");
-                assert_eq!(t.root.children[0].annotation.as_deref(), Some("entry 🚀"));
+                assert_eq!(t.root.children[0].name, "main (entry) 🚀");
+                assert!(t.root.children[0].annotation.is_none());
                 let renderer =
                     crate::tree::TreeRenderer::new(t, crate::theme::Theme::new(BoxStyle::Rounded));
                 let rendered = renderer.render(false);
                 assert!(
-                    rendered.contains("main (entry 🚀)"),
-                    "rendered output contains emoji annotation: {rendered}"
+                    rendered.contains("main (entry) 🚀"),
+                    "rendered output contains emoji name: {rendered}"
                 );
+            }
+            _ => panic!("Expected tree"),
+        }
+        // Emoji inside the trailing annotation is preserved there.
+        let dsl = "root\n  main (entry 🚀)";
+        match parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.children[0].name, "main");
+                assert_eq!(t.root.children[0].annotation.as_deref(), Some("entry 🚀"));
             }
             _ => panic!("Expected tree"),
         }
@@ -3103,5 +3610,444 @@ mod tests {
         assert!(matches!(spec, DiagramSpec::Flowchart(_)));
         let spec = parse_dsl_or_json("graph TD; A --> B", BoxStyle::Rounded).unwrap();
         assert!(matches!(spec, DiagramSpec::Flowchart(_)));
+    }
+
+    // ---- TREE-01/03/04/05: annotation only in a trailing group, single
+    // bullet strip, root named `tree`, paren-first lines literal.
+
+    #[test]
+    fn test_tree_annotation_requires_trailing_group() {
+        let cases: &[(&str, &str, Option<&str>)] = &[
+            // (line, expected name, expected annotation)
+            ("foo(1).rs", "foo(1).rs", None),
+            ("foo (1).rs", "foo (1).rs", None),
+            ("(y) x", "(y) x", None),
+            ("foo(bar (x))", "foo(bar (x))", None),
+            ("foo ()", "foo ()", None),
+            ("(alone)", "(alone)", None),
+            ("src/main.rs (CLI entry)", "src/main.rs", Some("CLI entry")),
+            ("app (v2 (beta))", "app", Some("v2 (beta)")),
+            ("dir/ (note)", "dir/", Some("note")),
+        ];
+        for (line, want_name, want_ann) in cases {
+            let dsl = format!("root\n  {line}");
+            match parse_tree_dsl(&dsl, BoxStyle::Rounded).unwrap() {
+                DiagramSpec::Tree(t) => {
+                    assert_eq!(t.root.children[0].name, *want_name, "name of `{line}`");
+                    assert_eq!(
+                        t.root.children[0].annotation.as_deref(),
+                        *want_ann,
+                        "annotation of `{line}`"
+                    );
+                }
+                _ => panic!("Expected tree for `{line}`"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_tree_bullet_strips_one_marker_from_set() {
+        let dsl = "root\n  - childA\n  * childB\n  + childC\n  - - childD";
+        match parse_tree_dsl(dsl, BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Tree(t) => {
+                let kids: Vec<&str> = t.root.children.iter().map(|c| c.name.as_str()).collect();
+                assert_eq!(kids, vec!["childA", "childB", "childC", "- childD"]);
+            }
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    #[test]
+    fn test_tree_root_named_tree_with_indented_child() {
+        // `tree` followed by an INDENTED line: `tree` is the root label.
+        match parse_tree_dsl("tree\n  src", BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.name, "tree");
+                assert_eq!(t.root.children.len(), 1);
+                assert_eq!(t.root.children[0].name, "src");
+            }
+            _ => panic!("Expected tree"),
+        }
+        // Keyword form: unindented next line is promoted to root.
+        match parse_tree_dsl("tree\nsrc\n  main.rs", BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.name, "src");
+                assert_eq!(t.root.children[0].name, "main.rs");
+            }
+            _ => panic!("Expected tree"),
+        }
+        // Bare `tree` keeps the documented `Root` fallback.
+        match parse_tree_dsl("tree", BoxStyle::Rounded).unwrap() {
+            DiagramSpec::Tree(t) => assert_eq!(t.root.name, "Root"),
+            _ => panic!("Expected tree"),
+        }
+    }
+
+    // ---- SEQ-W-01: multi-byte leading char must not panic on the note check.
+
+    #[test]
+    fn test_sequence_cjk_leading_line_no_panic() {
+        let spec = parse_sequence_dsl("sequenceDiagram\n数据库 ->> DB: hi", BoxStyle::Rounded);
+        match spec.unwrap() {
+            DiagramSpec::Sequence(s) => {
+                let ids: Vec<&str> = s.participants.iter().map(|p| p.id.as_str()).collect();
+                assert_eq!(ids, vec!["数据库", "DB"]);
+                assert_eq!(s.messages[0].label, "hi");
+            }
+            _ => panic!("Expected sequence"),
+        }
+        // Note-prefix guard on a line that merely starts with a CJK char.
+        let spec = parse_sequence_dsl("sequenceDiagram\n数据库: note-ish", BoxStyle::Rounded);
+        assert!(spec.is_err() || matches!(spec, Ok(DiagramSpec::Sequence(_))));
+    }
+
+    // ---- SEQ-01/03/04: participant/message line error contract.
+
+    #[test]
+    fn test_sequence_missing_colon_errors() {
+        let err = parse_sequence_dsl(
+            "sequenceDiagram\nparticipant A\nA -> B no colon here",
+            BoxStyle::Rounded,
+        )
+        .unwrap_err();
+        assert!(err.contains("line 3"), "names the line: {err}");
+        assert!(err.contains("missing"), "names the problem: {err}");
+    }
+
+    #[test]
+    fn test_sequence_multi_participant_line_errors() {
+        let err = parse_sequence_dsl(
+            "sequenceDiagram\nparticipant A participant B participant C",
+            BoxStyle::Rounded,
+        )
+        .unwrap_err();
+        assert!(err.contains("line 2"), "names the line: {err}");
+        assert!(
+            err.contains("one `participant`"),
+            "names the problem: {err}"
+        );
+    }
+
+    #[test]
+    fn test_sequence_quoted_label_with_keyword_word_ok() {
+        let spec = parse_sequence_dsl(
+            "sequenceDiagram\nparticipant A as \"the participant X\"\nA -> A: x",
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        match spec {
+            DiagramSpec::Sequence(s) => {
+                assert_eq!(
+                    s.participants[0].label.as_deref(),
+                    Some("the participant X")
+                );
+            }
+            _ => panic!("Expected sequence"),
+        }
+    }
+
+    #[test]
+    fn test_sequence_dangling_as_errors() {
+        let err = parse_sequence_dsl(
+            "sequenceDiagram\nparticipant A as\nA -> A: x",
+            BoxStyle::Rounded,
+        )
+        .unwrap_err();
+        assert!(err.contains("`as` requires an alias"), "message: {err}");
+    }
+
+    // ---- FC-EDGE-01/05/07: quoted edge-label form, quote-aware `|label|`
+    // scan, dangling-edge errors.
+
+    #[test]
+    fn test_quoted_edge_label_form_parses() {
+        let spec =
+            parse_dsl_or_json("graph LR\n  A -- \"two words\" --> B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.edges[0].from, "A");
+                assert_eq!(f.edges[0].to, "B");
+                assert_eq!(f.edges[0].label.as_deref(), Some("two words"));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_edge_label_quoted_pipes_preserved() {
+        let spec = parse_dsl_or_json("graph LR\n  A -->|\"a | b\"| B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges[0].label.as_deref(), Some("a | b"));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_unquoted_edge_label_still_parses() {
+        let spec = parse_dsl_or_json("graph LR; A -->|edge label| B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges[0].label.as_deref(), Some("edge label"));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_unclosed_edge_label_errors() {
+        let err = parse_dsl_or_json("graph TD\n  A -->|oops B", BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("not closed"), "names the label problem: {err}");
+    }
+
+    #[test]
+    fn test_dangling_edge_endpoints_error() {
+        let err = parse_dsl_or_json("graph TD\n  A -->", BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("no target"), "names the problem: {err}");
+        assert!(err.contains("A -->"), "names the statement: {err}");
+
+        let err = parse_dsl_or_json("graph TD\n  --> B", BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("no source node"), "names the problem: {err}");
+
+        // Chain with a dangling tail still errors, naming the dangle.
+        let err = parse_dsl_or_json("graph TD; A --> B -->", BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("no target"), "names the problem: {err}");
+    }
+
+    // ---- FC-LR-04/FC-TB-01 + FC-EDGE-02: multi-line node and edge labels
+    // (shared contract: `lines: Vec<String>`, label == join).
+
+    #[test]
+    fn test_multiline_node_label_via_escape() {
+        let spec =
+            parse_dsl_or_json("graph TD\n  A[line1\\nline2] --> B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                assert_eq!(a.lines, vec!["line1", "line2"]);
+                assert_eq!(a.label, "line1\nline2");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_multiline_node_label_via_physical_newline() {
+        let spec =
+            parse_dsl_or_json("graph TD\n  A[line1\nline2] --> B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                assert_eq!(a.lines, vec!["line1", "line2"]);
+                assert_eq!(a.label, "line1\nline2");
+                assert_eq!(f.edges.len(), 1);
+                assert_eq!(f.edges[0].to, "B");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_multiline_node_label_br_markup() {
+        let spec =
+            parse_dsl_or_json("graph LR\n  A[line1<br/>line2] --> B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                assert_eq!(a.lines, vec!["line1", "line2"]);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_multiline_edge_label_lines() {
+        let spec =
+            parse_dsl_or_json("graph LR\n  A -->|line1<br/>line2| B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges[0].lines, vec!["line1", "line2"]);
+                assert_eq!(f.edges[0].label.as_deref(), Some("line1\nline2"));
+            }
+            _ => panic!("Expected flowchart"),
+        }
+        let spec =
+            parse_dsl_or_json("graph LR\n  A -->|line1\\nline2| B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                assert_eq!(f.edges[0].lines, vec!["line1", "line2"]);
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    #[test]
+    fn test_single_line_labels_have_empty_lines() {
+        let spec = parse_dsl_or_json("graph LR; A[One] -->|x| B", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                assert!(a.lines.is_empty());
+                assert!(f.edges[0].lines.is_empty());
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    // ---- FC-LR-05/FC-TB-04: empty bracket label falls back to the id.
+
+    #[test]
+    fn test_empty_bracket_label_falls_back_to_id() {
+        let spec = parse_dsl_or_json("graph LR; A[ ] --> B[]", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Flowchart(f) => {
+                let a = f.nodes.iter().find(|n| n.id == "A").unwrap();
+                assert_eq!(a.label, "A");
+                let b = f.nodes.iter().find(|n| n.id == "B").unwrap();
+                assert_eq!(b.label, "B");
+            }
+            _ => panic!("Expected flowchart"),
+        }
+    }
+
+    // ---- CLI-04 / IO-02-root / ERR-03: unrecognized input errors instead
+    // of falling back to a one-node tree or rendering the header.
+
+    #[test]
+    fn test_unrecognized_prose_errors() {
+        for prose in ["render", "hello world", "5", "state of the art"] {
+            let err = parse_dsl_or_json(prose, BoxStyle::Rounded).unwrap_err();
+            assert!(
+                err.contains("unrecognized diagram input"),
+                "`{prose}` should error listing supported input: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_headerless_indented_tree_still_dispatches() {
+        // The documented indent DSL without the `tree` header (example-tree
+        // shape): unindented root + indented children routes to tree.
+        let spec = parse_dsl_or_json(
+            "src/\n  main.rs (CLI entry)\n  lib.rs\nCargo.toml",
+            BoxStyle::Rounded,
+        );
+        match spec.unwrap() {
+            DiagramSpec::Tree(t) => {
+                assert_eq!(t.root.name, "src/");
+                assert_eq!(t.root.children[0].name, "main.rs");
+                assert_eq!(t.root.children[1].name, "lib.rs");
+                assert_eq!(t.root.children[2].name, "Cargo.toml");
+            }
+            _ => panic!("Expected tree"),
+        }
+        // Flat prose without indentation is NOT a tree (errors instead).
+        assert!(parse_dsl_or_json("hello world\nmore prose", BoxStyle::Rounded).is_err());
+        // Wrapped flowchart labels with arrows stay flowchart.
+        let spec = parse_dsl_or_json("A[line1\n  line2] --> B", BoxStyle::Rounded).unwrap();
+        assert!(matches!(spec, DiagramSpec::Flowchart(_)));
+    }
+
+    #[test]
+    fn test_unsupported_mermaid_header_errors() {
+        let err = parse_dsl_or_json("stateDiagram-v2\n  A --> B", BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err.contains("unsupported diagram type `stateDiagram-v2`"),
+            "names the type: {err}"
+        );
+        for header in [
+            "classDiagram\n  A --> B",
+            "erDiagram\n  A ||--o{ B : has",
+            "gitGraph\n  commit",
+        ] {
+            assert!(
+                parse_dsl_or_json(header, BoxStyle::Rounded)
+                    .unwrap_err()
+                    .contains("unsupported diagram type"),
+                "`{header}` must error"
+            );
+        }
+    }
+
+    #[test]
+    fn test_supported_headers_still_dispatch() {
+        // Pins the dispatch contract relied on by the CLI layer.
+        assert!(matches!(
+            parse_dsl_or_json("graph TD; A --> B", BoxStyle::Rounded),
+            Ok(DiagramSpec::Flowchart(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json("sequenceDiagram\nA->>B: hi", BoxStyle::Rounded),
+            Ok(DiagramSpec::Sequence(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json("tree\n  a", BoxStyle::Rounded),
+            Ok(DiagramSpec::Tree(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json("- a\n- b", BoxStyle::Rounded),
+            Ok(DiagramSpec::Tree(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json("stack\n0x00: base", BoxStyle::Rounded),
+            Ok(DiagramSpec::Stack(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json("| A | B |\n| 1 | 2 |", BoxStyle::Rounded),
+            Ok(DiagramSpec::Table(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json("ds tree 8 3 10", BoxStyle::Rounded),
+            Ok(DiagramSpec::DataStructure(_))
+        ));
+        assert!(matches!(
+            parse_dsl_or_json(
+                "{\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\"]}",
+                BoxStyle::Rounded
+            ),
+            Ok(DiagramSpec::DataStructure(_))
+        ));
+    }
+
+    // ---- ST-02/ST-04/ST-06 parser-side pins (table shape errors).
+
+    #[test]
+    fn test_table_row_wider_than_header_errors() {
+        let err = parse_table_dsl("| A | B |\n| 1 | 2 | 3 |", BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("3 cells but the header defines 2"), "{err}");
+    }
+
+    #[test]
+    fn test_table_separator_column_mismatch_errors() {
+        let err =
+            parse_table_dsl("| A | B |\n|---|---|---|\n| 1 | 2 |", BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err.contains("separator defines 3 columns but the header has 2"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_table_row_split_across_lines_errors() {
+        let err = parse_table_dsl("| A | B |\nline2 | 2 |", BoxStyle::Rounded).unwrap_err();
+        assert!(err.contains("must start with '|'"), "{err}");
+    }
+
+    // ---- ST-05 parser-side pin: non-address prefixes keep the whole line.
+
+    #[test]
+    fn test_stack_non_address_colon_line_stays_label() {
+        let spec = parse_stack_dsl("stack\nPort: 5432\n0x0010: boot", BoxStyle::Rounded).unwrap();
+        match spec {
+            DiagramSpec::Stack(s) => {
+                assert_eq!(s.layers[0].label, "Port: 5432");
+                assert!(s.layers[0].address_or_id.is_none());
+                assert_eq!(s.layers[1].address_or_id.as_deref(), Some("0x0010"));
+                assert_eq!(s.layers[1].label, "boot");
+            }
+            _ => panic!("Expected stack"),
+        }
     }
 }

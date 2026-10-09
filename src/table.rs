@@ -27,6 +27,42 @@ pub fn sanitize_cell(s: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Splits a raw table row line into trimmed cell strings (ST-01, ST-03).
+///
+/// - A `\|` escape is a literal pipe inside the cell, not a column break
+///   (markdown pipe-table escaping); any other backslash stays literal.
+/// - Pipes flush with the line edges are delimiters and do not create cells,
+///   so `|| A | B ||` yields `["A", "B"]` with no phantom columns. The strip
+///   stops at the first non-empty raw cell on each side, so an explicit
+///   blank edge cell (`| | A |`) and interior empties (`| a | | b |`) are
+///   preserved.
+#[must_use]
+pub(crate) fn split_table_row(line: &str) -> Vec<String> {
+    let mut cells: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                chars.next();
+                current.push('|');
+            }
+            '|' => cells.push(std::mem::take(&mut current)),
+            _ => current.push(c),
+        }
+    }
+    cells.push(current);
+
+    while cells.first().is_some_and(String::is_empty) {
+        cells.remove(0);
+    }
+    while cells.last().is_some_and(String::is_empty) {
+        cells.pop();
+    }
+
+    cells.iter().map(|c| c.trim().to_string()).collect()
+}
+
 /// Paints `s` when `colored` and a color is set; otherwise returns it plain.
 fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
     match (colored, color) {
@@ -346,5 +382,91 @@ mod tests {
         let sanitized = sanitize_cell(input);
         assert!(matches!(sanitized, Cow::Borrowed(_)));
         assert_eq!(sanitized, input);
+    }
+
+    #[test]
+    fn test_split_table_row_escape_and_edges() {
+        use crate::table::split_table_row;
+
+        // Plain rows keep their delimiter handling.
+        assert_eq!(split_table_row("| a | b |"), vec!["a", "b"]);
+        assert_eq!(split_table_row("a | b"), vec!["a", "b"]);
+
+        // ST-01: `\|` is a literal pipe, not a column break.
+        assert_eq!(split_table_row("| x \\| y | 2 |"), vec!["x | y", "2"]);
+        assert_eq!(split_table_row("\\|"), vec!["|"]);
+
+        // ST-03: doubled edge pipes are delimiters, not phantom columns.
+        assert_eq!(split_table_row("|| A | B ||"), vec!["A", "B"]);
+
+        // Interior empty cells are preserved.
+        assert_eq!(split_table_row("| a | | b |"), vec!["a", "", "b"]);
+        // An explicit blank edge cell (space between pipes) is preserved.
+        assert_eq!(split_table_row("| | a |"), vec!["", "a"]);
+
+        // Empty edge strips leave nothing.
+        assert!(split_table_row("||").is_empty());
+    }
+
+    #[test]
+    fn test_parse_table_dsl_escaped_pipe_cell() {
+        use crate::parser::parse_table_dsl;
+        let dsl = "table\n| A | B |\n| x \\| y | 2 |";
+        let spec = parse_table_dsl(dsl, BoxStyle::Rounded).unwrap();
+        if let crate::schema::DiagramSpec::Table(t) = spec {
+            assert_eq!(t.headers, vec!["A", "B"]);
+            assert_eq!(t.rows, vec![vec!["x | y".to_string(), "2".to_string()]]);
+            let out =
+                crate::table::TableRenderer::new(&t, Theme::new(BoxStyle::Rounded)).render(false);
+            assert!(out.contains("x | y"), "literal pipe survives: {out:?}");
+        } else {
+            panic!("Expected table diagram");
+        }
+    }
+
+    #[test]
+    fn test_parse_table_dsl_doubled_edge_pipes() {
+        use crate::parser::parse_table_dsl;
+        let dsl = "table\n|| A | B ||\n| 1 | 2 |";
+        let spec = parse_table_dsl(dsl, BoxStyle::Rounded).unwrap();
+        if let crate::schema::DiagramSpec::Table(t) = spec {
+            assert_eq!(t.headers, vec!["A", "B"]);
+            assert_eq!(t.rows, vec![vec!["1".to_string(), "2".to_string()]]);
+        } else {
+            panic!("Expected table diagram");
+        }
+    }
+
+    #[test]
+    fn test_parse_table_dsl_extra_cell_errors() {
+        use crate::parser::parse_table_dsl;
+        let err =
+            parse_table_dsl("table\n| A | B |\n| 1 | 2 | 3 |", BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err.contains("3 cells") && err.contains("2 columns") && err.contains("line 3"),
+            "error must name row/column counts: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_table_dsl_multiline_cell_rejected() {
+        use crate::parser::parse_table_dsl;
+        let dsl = "table\n| A | B |\n| line1\nline2 | 2 |";
+        let err = parse_table_dsl(dsl, BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err.contains("must start with '|'") && err.contains("line 4"),
+            "error must point at the split row: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_table_dsl_separator_count_mismatch_errors() {
+        use crate::parser::parse_table_dsl;
+        let dsl = "table\n| A | B | C |\n| --- | --- |\n| 1 | 2 | 3 |";
+        let err = parse_table_dsl(dsl, BoxStyle::Rounded).unwrap_err();
+        assert!(
+            err.contains("separator defines 2 columns") && err.contains("header has 3"),
+            "error must name expected vs actual: {err}"
+        );
     }
 }

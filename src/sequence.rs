@@ -1,7 +1,7 @@
-use crate::canvas::{Canvas, Direction};
+use crate::canvas::{Canvas, Direction, display_width};
 use crate::schema::{SeqMessageType, SeqNotePosition, SequenceSpec};
 use crate::theme::{BoxStyle, Theme};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthChar;
 
 fn truncate_to_width(s: &str, max_w: usize) -> (&str, usize) {
     let mut cur_w = 0;
@@ -54,7 +54,7 @@ impl<'a> SequenceRenderer<'a> {
             };
             let max_w = lines
                 .iter()
-                .map(|l| UnicodeWidthStr::width(l.as_str()))
+                .map(|l| display_width(l.as_str()))
                 .max()
                 .unwrap_or(4);
             let w = max_w + 4; // 2 padding + 2 borders
@@ -85,7 +85,9 @@ impl<'a> SequenceRenderer<'a> {
                         (to_idx, from_idx)
                     };
                     let span = right - left;
-                    let msg_w = UnicodeWidthStr::width(msg.label.as_str()) + 4;
+                    // SEQ-05: size gaps by the label that will actually draw —
+                    // a blank label contributes nothing
+                    let msg_w = display_width(msg.label.trim()) + 4;
                     // Distribute across the span
                     let per_gap = msg_w.div_ceil(span);
                     for gap in min_gap.iter_mut().take(right).skip(left) {
@@ -94,7 +96,7 @@ impl<'a> SequenceRenderer<'a> {
                         }
                     }
                 } else {
-                    let lbl_w = UnicodeWidthStr::width(msg.label.as_str());
+                    let lbl_w = display_width(msg.label.trim());
                     let needed_gap = 5 + 2 + lbl_w + 2;
                     if from_idx == num_p - 1 && from_idx > 0 {
                         if needed_gap > min_gap[from_idx - 1] {
@@ -178,11 +180,16 @@ impl<'a> SequenceRenderer<'a> {
             }
             let msg = &self.spec.messages[i];
             let is_self = msg.from == msg.to;
+            let has_label = display_width(msg.label.trim()) > 0;
             msg_y.push(cur_y);
             if is_self {
                 cur_y += 3; // loop takes extra row
-            } else {
+            } else if has_label {
                 cur_y += 2; // label row + line row
+            } else {
+                // SEQ-05: `A -> B:` (empty/blank label) draws the arrow only —
+                // no blank label row above it
+                cur_y += 1;
             }
         }
         // Trailing dividers (else/and after the last message) allocate above
@@ -213,7 +220,7 @@ impl<'a> SequenceRenderer<'a> {
 
         // Draw title
         if let Some(ref title) = self.spec.title {
-            let tw = UnicodeWidthStr::width(title.as_str());
+            let tw = display_width(title.as_str());
             let tx = if total_w > tw { (total_w - tw) / 2 } else { 0 };
             canvas.draw_text(tx, 0, title);
         }
@@ -255,7 +262,7 @@ impl<'a> SequenceRenderer<'a> {
                     Some(c) => format!("{} {}", frame.label, c),
                     None => frame.label.clone(),
                 };
-                let head_w = UnicodeWidthStr::width(head.as_str());
+                let head_w = display_width(head.as_str());
                 let avail_w = fw.saturating_sub(4);
                 let (head_str, head_w) = if head_w <= avail_w {
                     (head.as_str(), head_w)
@@ -287,7 +294,7 @@ impl<'a> SequenceRenderer<'a> {
                         _ => "else",
                     };
                     let dhead = format!("{} {}", div_kw, frame.branches[*bi]);
-                    let dw = UnicodeWidthStr::width(dhead.as_str());
+                    let dw = display_width(dhead.as_str());
                     let (dhead_str, dw) = if dw <= avail_w {
                         (dhead.as_str(), dw)
                     } else {
@@ -314,7 +321,7 @@ impl<'a> SequenceRenderer<'a> {
             if idxs.is_empty() {
                 continue;
             }
-            let text_w = UnicodeWidthStr::width(note.text.as_str());
+            let text_w = display_width(note.text.as_str());
             let y = note_y[ni];
             let span_lx = p_cx[0].saturating_sub(p_widths[0] / 2);
             let span_rx = p_cx[num_p - 1] + p_widths[num_p - 1] / 2;
@@ -391,7 +398,7 @@ impl<'a> SequenceRenderer<'a> {
             canvas.draw_box(x, p_top_y, w, box_h, &self.theme, None);
             canvas.set_pen(None);
             for (line_idx, line) in p_labels[i].iter().enumerate() {
-                let lbl_w = UnicodeWidthStr::width(line.as_str());
+                let lbl_w = display_width(line.as_str());
                 let lbl_x = x + (w - lbl_w) / 2;
                 canvas.draw_text(lbl_x, p_top_y + 1 + line_idx, line);
             }
@@ -408,33 +415,41 @@ impl<'a> SequenceRenderer<'a> {
                     let cx = p_cx[from_idx];
                     let loop_w = 5;
                     let is_last = from_idx == num_p - 1 && num_p > 1;
+                    let has_label = display_width(msg.label.trim()) > 0;
 
                     if is_last {
-                        let lbl_w = UnicodeWidthStr::width(msg.label.as_str());
+                        let lbl_w = display_width(msg.label.as_str());
                         let loop_x = cx.saturating_sub(loop_w);
                         let text_x = loop_x.saturating_sub(lbl_w + 1);
                         canvas.draw_hline(loop_x, cx, y);
                         canvas.draw_vline(loop_x, y, y + 1);
                         canvas.draw_hline(loop_x, cx, y + 1);
                         canvas.draw_arrow(cx - 1, y + 1, Direction::Right, &self.theme);
-                        canvas.draw_text(text_x, y, &msg.label);
+                        if has_label {
+                            canvas.draw_text(text_x, y, &msg.label);
+                        }
                     } else {
                         canvas.draw_hline(cx, cx + loop_w, y);
                         canvas.draw_vline(cx + loop_w, y, y + 1);
                         canvas.draw_hline(cx, cx + loop_w, y + 1);
                         canvas.draw_arrow(cx + 1, y + 1, Direction::Left, &self.theme);
-                        canvas.draw_text(cx + loop_w + 2, y, &msg.label);
+                        if has_label {
+                            canvas.draw_text(cx + loop_w + 2, y, &msg.label);
+                        }
                     }
                 } else if from_idx < to_idx {
                     // Left to Right ->
                     let from_x = p_cx[from_idx];
                     let to_x = p_cx[to_idx];
-                    let line_y = y + 1;
+                    let has_label = display_width(msg.label.trim()) > 0;
+                    let line_y = y + if has_label { 1 } else { 0 };
 
-                    // Label above the line
-                    let lbl_w = UnicodeWidthStr::width(msg.label.as_str());
-                    let mid_x = from_x + (to_x - from_x).saturating_sub(lbl_w) / 2;
-                    canvas.draw_text(mid_x, y, &msg.label);
+                    // Label above the line (SEQ-05: skipped entirely when empty)
+                    if has_label {
+                        let lbl_w = display_width(msg.label.as_str());
+                        let mid_x = from_x + (to_x - from_x).saturating_sub(lbl_w) / 2;
+                        canvas.draw_text(mid_x, y, &msg.label);
+                    }
 
                     // Line and arrow
                     if msg.message_type == SeqMessageType::Async {
@@ -451,11 +466,14 @@ impl<'a> SequenceRenderer<'a> {
                     // Right to Left <-
                     let from_x = p_cx[from_idx];
                     let to_x = p_cx[to_idx];
-                    let line_y = y + 1;
+                    let has_label = display_width(msg.label.trim()) > 0;
+                    let line_y = y + if has_label { 1 } else { 0 };
 
-                    let lbl_w = UnicodeWidthStr::width(msg.label.as_str());
-                    let mid_x = to_x + (from_x - to_x).saturating_sub(lbl_w) / 2;
-                    canvas.draw_text(mid_x, y, &msg.label);
+                    if has_label {
+                        let lbl_w = display_width(msg.label.as_str());
+                        let mid_x = to_x + (from_x - to_x).saturating_sub(lbl_w) / 2;
+                        canvas.draw_text(mid_x, y, &msg.label);
+                    }
 
                     if msg.message_type == SeqMessageType::Async {
                         canvas.draw_dashed_hline(to_x + 1, from_x - 1, line_y, &self.theme);
@@ -479,7 +497,7 @@ impl<'a> SequenceRenderer<'a> {
             canvas.draw_box(x, bottom_box_y, w, box_h, &self.theme, None);
             canvas.set_pen(None);
             for (line_idx, line) in p_labels[i].iter().enumerate() {
-                let lbl_w = UnicodeWidthStr::width(line.as_str());
+                let lbl_w = display_width(line.as_str());
                 let lbl_x = x + (w - lbl_w) / 2;
                 canvas.draw_text(lbl_x, bottom_box_y + 1 + line_idx, line);
             }
@@ -908,5 +926,126 @@ mod tests {
                 "row preserves right frame border: {line}"
             );
         }
+    }
+
+    // ---- Cycle-1 regressions: width policy, ascii dashed, empty labels ----
+
+    fn render_seq(dsl: &str, style: BoxStyle) -> String {
+        let DiagramSpec::Sequence(spec) = crate::parser::parse_sequence_dsl(dsl, style).unwrap()
+        else {
+            panic!("Expected sequence");
+        };
+        SequenceRenderer::new(&spec, Theme::new(style)).render(false)
+    }
+
+    /// The row carrying the arrowhead — layout columns must match between two
+    /// diagrams whose labels differ only in encodings with equal display width.
+    fn arrow_row(out: &str) -> String {
+        out.lines()
+            .find(|l| l.contains('►'))
+            .expect("arrow row present")
+            .to_string()
+    }
+
+    #[test]
+    fn test_sequence_empty_label_suppresses_blank_row() {
+        // SEQ-05: `A -> B:` must not emit a blank label row above the arrow
+        let unlabeled = render_seq("sequenceDiagram\nA ->> B:", BoxStyle::Rounded);
+        let labeled = render_seq("sequenceDiagram\nA ->> B: hi", BoxStyle::Rounded);
+        assert_eq!(
+            unlabeled.lines().count() + 1,
+            labeled.lines().count(),
+            "empty label renders exactly one row less:\n{unlabeled}"
+        );
+        // The arrow sits in the first message row, directly under the boxes
+        let arrow_line = unlabeled
+            .lines()
+            .position(|l| l.contains('►'))
+            .expect("arrow present");
+        assert!(
+            unlabeled
+                .lines()
+                .take(arrow_line)
+                .all(|l| l.contains('│') || l.contains('─')),
+            "no gap row between boxes and arrow:\n{unlabeled}"
+        );
+        // Whitespace-only labels behave the same
+        let blank = render_seq("sequenceDiagram\nA ->> B:   ", BoxStyle::Rounded);
+        assert_eq!(blank, unlabeled, "blank label == empty label");
+    }
+
+    #[test]
+    fn test_sequence_ascii_dashed_arrow_distinct_from_solid() {
+        // SEQ-02: ascii `-->` must be visibly dashed, not a second solid run
+        let solid = render_seq("sequenceDiagram\nA -> B: s", BoxStyle::Ascii);
+        let dashed = render_seq("sequenceDiagram\nA --> B: a", BoxStyle::Ascii);
+        let solid_row = solid.lines().find(|l| l.contains('>')).unwrap();
+        let dashed_row = dashed.lines().find(|l| l.contains('>')).unwrap();
+        assert!(solid_row.contains('-'), "solid ascii run: {solid_row:?}");
+        assert!(
+            dashed_row.contains('.'),
+            "ascii async arrow must be dotted: {dashed_row:?}"
+        );
+        assert!(
+            !dashed_row.contains('-'),
+            "ascii dashed must not reuse the solid glyph: {dashed_row:?}"
+        );
+    }
+
+    #[test]
+    fn test_sequence_skin_tone_and_zwj_width_match_terminal() {
+        // SEQ-W-04: the arrow row of a skin-tone label must line up with an
+        // ASCII label of the same collapsed display width
+        let emoji = render_seq(
+            "sequenceDiagram\nA ->> B: \u{1F44D}\u{1F3FD} ok",
+            BoxStyle::Rounded,
+        );
+        let plain = render_seq("sequenceDiagram\nA ->> B: zz ok", BoxStyle::Rounded);
+        assert_eq!(arrow_row(&emoji), arrow_row(&plain));
+
+        let family = render_seq(
+            "sequenceDiagram\nA ->> B: \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} fam",
+            BoxStyle::Rounded,
+        );
+        let plain_fam = render_seq("sequenceDiagram\nA ->> B: xx fam", BoxStyle::Rounded);
+        assert_eq!(arrow_row(&family), arrow_row(&plain_fam));
+    }
+
+    #[test]
+    fn test_sequence_nfd_label_keeps_accent_and_width() {
+        let nfd = render_seq("sequenceDiagram\nA ->> B: cafe\u{0301}", BoxStyle::Rounded);
+        assert!(
+            nfd.contains("e\u{0301}"),
+            "SEQ-W-02: NFD accent must survive:\n{nfd:?}"
+        );
+        let ascii = render_seq("sequenceDiagram\nA ->> B: cafe", BoxStyle::Rounded);
+        assert_eq!(
+            arrow_row(&nfd),
+            arrow_row(&ascii),
+            "combining mark adds no columns"
+        );
+    }
+
+    #[test]
+    fn test_sequence_tab_in_label_expands_to_spaces() {
+        let tabbed = render_seq("sequenceDiagram\nA ->> B: a\tb", BoxStyle::Rounded);
+        assert!(
+            !tabbed.contains('\t'),
+            "no literal tab in output: {tabbed:?}"
+        );
+        let spaced = render_seq("sequenceDiagram\nA ->> B: a   b", BoxStyle::Rounded);
+        assert_eq!(arrow_row(&tabbed), arrow_row(&spaced));
+    }
+
+    #[test]
+    fn test_sequence_bidi_override_stripped() {
+        // ERR-05: U+202E must never reach the rendered output
+        let out = render_seq("sequenceDiagram\nA ->> B: \u{202e}abc", BoxStyle::Rounded);
+        assert!(
+            !out.contains('\u{202e}'),
+            "bidi override rendered!: {out:?}"
+        );
+        let plain = render_seq("sequenceDiagram\nA ->> B: abc", BoxStyle::Rounded);
+        assert_eq!(arrow_row(&out), arrow_row(&plain));
     }
 }

@@ -1,3 +1,50 @@
+# Sprint v0.12.0 — Post-QA Hardening: 88-Defect Fix Campaign
+
+**Goal:** Fix every verified defect from the 2026-10-09 QA campaign
+(`local://qa-board.md`: 94 raw findings → 88 unique after 1 rejection and
+dup consolidation; 1 blocker, 21 major, 43 minor, 23 nit), then close the
+version drift the v0.11.0 docs sprint left behind (titles said v0.11.0,
+manifests and `--version` stayed 0.10.0) by releasing as **v0.12.0**.
+**Method:** 7 parallel fix agents with exclusive file ownership
+(`local://fix-board.md`), one regression test per fix, followed by a
+reviewer + re-tester cycle (cap 3 loops) against the rebuilt release binary.
+
+## Fix slices (cycle 1)
+
+| Owner | Scope | Representative fixes |
+|---|---|---|
+| fix-parser | `src/parser.rs` | SEQ-W-01 blocker (multibyte byte-slice panic), tree annotation/bullet/root rules, dangling-edge + empty-label edges, sequence message drop, escaped-pipe table cells, prose fallback → hard error |
+| fix-main | `src/main.rs` | `example <unknown>` errors (was silent flowchart), exit paths, ERR-01/02, JSON gate |
+| fix-leaf | `src/tree.rs`, `src/table.rs`, `src/stack.rs` | tree style-aware connectors (OUT-02/TREE-02), stack/table glyph defects |
+| fix-schema | `src/schema.rs`, `src/architecture.rs`, `src/datastructure.rs` | blank render on empty containers, input echo on malformed JSON, routing overwrites |
+| fix-flow | `src/flowchart/**` | dense LR/TB border piercing, subgraph nesting/borders, `<br/>`/`\n` multi-line labels + edge labels |
+| fix-canvas | `src/canvas.rs`, `src/sequence.rs`, `src/color.rs` | display-width fixes: NFD combining marks, tab expansion, emoji clusters (ZWJ/skin-tone), bidi stripping |
+| fix-docs | README, SPRINT, manifests, skills, extension | version sync → 0.12.0, `/diagram --style` pass-through, EPIPE stdin guard in `runDiagramBinary`, by-design behaviors documented in README Known Limitations, `npm run sync:pi` |
+
+## Documentation of by-design behavior (README Known Limitations)
+
+New rows: implicit node auto-declaration (Mermaid parity), empty `[]` label →
+id fallback + warning, dangling-edge hard error, tree trailing `/` plain text,
+sequence labels never wrap (no `--width`), Unicode width residuals
+(`U+FE0F`, legacy-terminal emoji drift, zero-width stripping, combining-mark
+cap), unknown JSON fields ignored (`color`, not `stroke`, on connections).
+
+## Integration
+
+1. Reviewer + re-tester wave against the release rebuild; `bin/` synced by
+   coordinator before re-tests (repo `bin/` is stale during fix cycle)
+2. Full gate: `cargo test` + `cargo clippy --all-targets` (baseline only) +
+   `cargo fmt --check` + `node --experimental-strip-types tests/extension.test.js`
+3. Version bump `Cargo.toml` + `package.json` + package-lock → `0.12.0` (done in cycle 1)
+4. `npm run sync:pi`; note: `~/.omp/plugins/node_modules/ascii-diagram-helper`
+   is NOT covered by `sync:pi` — it predates the `prepare` script and carries
+   no binary; reinstall that copy (or re-link) manually
+5. Merge, tag `v0.12.0`
+
+**OUTCOME:** pending cycle 2 (reviewers + re-testers).
+
+---
+
 # Sprint v0.11.0 — Human-First Documentation & Showcase Overhaul
 
 **Goal:** Redesign `README.md` to be a human-friendly visual showcase.
@@ -90,7 +137,10 @@ Compile the v0.9.0 reviewer-rejected findings + deferred nits into README
 Known Limitations: NO_COLOR vs explicit `--color always` precedence (flag
 wins, no-color.org compliant); `A | B; no pipe here` single-pipe dsl falls
 to tree; lone `color:` directive passes through; tree `(y) x` paren-first
-renders empty-name node; header-only diagram policy per type; BT/RL and
+renders empty-name node [superseded v0.12.0: headerless flat prose now
+errors ("unrecognized diagram input", CLI-04); as tree input — via `tree`
+header or an indented headerless tree — `(y) x` renders verbatim as the
+node name]; header-only diagram policy per type; BT/RL and
 subgraph-direction notes (already present — keep). Prose only, NO code.
 **Files:** `README.md`.
 

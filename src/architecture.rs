@@ -1,4 +1,4 @@
-use crate::canvas::{Canvas, Direction, Rect};
+use crate::canvas::{Canvas, CellRole, Direction, LineConn, Rect};
 use crate::schema::{
     ArchitectureSpec, ContainerItem, ContainerLayout, ContainerSpec, EdgeSpec, LeafComponent,
 };
@@ -25,27 +25,35 @@ impl<'a> ArchitectureRenderer<'a> {
         Self { spec, theme }
     }
 
-    #[must_use]
-    #[allow(
-        clippy::similar_names,
-        reason = "u_/v_ prefixes denote the two endpoints of a connection"
-    )]
-    pub fn render(&self, colored: bool) -> String {
+    /// Renders the diagram.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` when the spec has no containers, duplicate IDs, or
+    /// connections referencing unknown, self, or container IDs (each named
+    /// in the message).
+    pub fn render(&self, colored: bool) -> Result<String, String> {
         if self.spec.containers.is_empty() {
-            return String::new();
+            return Err("architecture requires at least one container".to_string());
         }
+        let (comp_ids, container_ids) = validate_ids(&self.spec.containers)?;
 
         let mut comp_bounds: HashMap<String, BoxBounds> = HashMap::new();
-        let mut container_ids: HashSet<String> = HashSet::new();
+        let mut container_rects: Vec<Rect> = Vec::new();
 
-        // Compute layout for each top-level container
-        let gap = 4;
+        // Compute layout for each top-level container. With no connections
+        // there is nothing to route, so stacked containers keep a small
+        // uniform gap instead of reserving blank corridor rows.
+        let gap = if self.spec.connections.is_empty() {
+            2
+        } else {
+            4
+        };
         let mut top_layouts = Vec::new();
         let start_y = if self.spec.title.is_some() { 2 } else { 0 };
         let mut cur_y = start_y;
 
         for c in &self.spec.containers {
-            container_ids.insert(c.id.clone());
             let (w, h) = self.measure_container(c);
             top_layouts.push((0, cur_y, w, h));
             cur_y += h + gap;
@@ -60,11 +68,14 @@ impl<'a> ArchitectureRenderer<'a> {
 
         let mut canvas = Canvas::new(max_w + 4, total_h);
 
-        // Title
-        if let Some(ref title) = self.spec.title {
-            let tw = UnicodeWidthStr::width(title.as_str());
-            let tx = if max_w > tw { (max_w - tw) / 2 } else { 0 };
-            canvas.draw_text(tx, 0, title);
+        // Title (whitespace-only titles are trimmed away entirely)
+        if let Some(spec_title) = &self.spec.title {
+            let title = spec_title.trim();
+            if !title.is_empty() {
+                let tw = UnicodeWidthStr::width(title);
+                let tx = if max_w > tw { (max_w - tw) / 2 } else { 0 };
+                canvas.draw_text(tx, 0, title);
+            }
         }
 
         // Draw containers first: fills comp_bounds and lays down walls
@@ -75,229 +86,70 @@ impl<'a> ArchitectureRenderer<'a> {
                 c,
                 Rect::new(0, y, w, h),
                 &mut comp_bounds,
-                &mut container_ids,
+                &mut container_rects,
             );
         }
 
-        let warnings =
-            skipped_connection_warnings(&self.spec.connections, &comp_bounds, &container_ids);
-        for msg in warnings {
-            eprintln!("Warning: architecture: {msg}");
-        }
+        validate_connections(&self.spec.connections, &comp_ids, &container_ids)?;
 
-        // Classify top-to-bottom connections that cross intermediate containers
-        // (source and target containers separated by at least one other). These
-        // route via a shared right-margin corridor track per source instead of
-        // slicing straight through the containers in between.
-        let container_of = |b: &BoxBounds| -> Option<usize> {
-            let cx = b.x + b.width / 2;
-            let cy = b.y + b.height / 2;
-            top_layouts
-                .iter()
-                .position(|&(_, ly, lw, lh)| cx < lw && cy >= ly && cy < ly + lh)
-        };
-        let mut arch_tracks: HashMap<String, (usize, usize)> = HashMap::new();
-        let mut next_track = max_w + 2;
-        for conn in &self.spec.connections {
-            if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to))
-                && u.y + u.height <= v.y
-                && let (Some(uct), Some(vct)) = (container_of(u), container_of(v))
-                && vct >= uct + 2
-            {
-                let entry_y = top_layouts[vct].1 - 1;
-                let entry = arch_tracks.entry(conn.from.clone()).or_insert_with(|| {
-                    let t = (next_track, entry_y);
-                    next_track += 4;
-                    t
-                });
-                entry.1 = entry.1.max(entry_y);
-            }
-        }
-        let mut arch_led: HashSet<String> = HashSet::new();
+        // Corridor routing: leaf boxes are impassable, container borders may
+        // only be crossed perpendicular (which paints the junction glyph),
+        // and text cells are impassable — so routes run through the free
+        // corridors between boxes and never cross item content.
+        let grid = RouteGrid::new(
+            canvas.width,
+            canvas.height,
+            &container_rects,
+            &comp_bounds,
+            &canvas,
+        );
 
-        // Draw inter-component connection lines
+        // Route and draw each connection through the corridor grid.
         for conn in &self.spec.connections {
-            if conn.from == conn.to
-                || container_ids.contains(&conn.from)
-                || container_ids.contains(&conn.to)
-            {
+            let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to))
+            else {
                 continue;
-            }
+            };
             canvas.set_pen(conn.color);
-            if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to)) {
-                let u_right = u.x + u.width - 1;
-                let u_cy = u.y + u.height / 2;
-                let v_left = v.x;
-                let v_cy = v.y + v.height / 2;
-
-                if u_right < v_left {
-                    // Left to Right connection
-                    let mid_x = u_right + (v_left - u_right) / 2;
-                    canvas.draw_hline(u_right + 1, mid_x, u_cy);
-                    canvas.draw_vline(mid_x, u_cy, v_cy);
-                    canvas.draw_hline(mid_x, v_left - 1, v_cy);
-                } else if u.x > v.x + v.width - 1 && u_cy == v_cy {
-                    // Right to Left, same row: route below both components
-                    let u_cx = u.x + u.width / 2;
-                    let v_cx = v.x + v.width / 2;
-                    let route_y = u.y + u.height + 1;
-                    canvas.draw_vline(u_cx, u.y + u.height, route_y);
-                    canvas.draw_hline(v_cx.min(u_cx), v_cx.max(u_cx), route_y);
-                    canvas.draw_vline(v_cx, route_y, v.y + v.height);
-                } else if u.y + u.height <= v.y {
-                    // Top to Bottom connection
-                    let u_cx = u.x + u.width / 2;
-                    let u_bottom = u.y + u.height - 1;
-                    let v_cx = v.x + v.width / 2;
-                    let v_top = v.y;
-
-                    let uct = container_of(u);
-                    let vct = container_of(v);
-                    let crosses = matches!((uct, vct), (Some(a), Some(b)) if b >= a + 2);
-                    if crosses
-                        && let Some(&(track_x, depth_y)) = arch_tracks.get(conn.from.as_str())
-                    {
-                        let uct = uct.unwrap_or(0);
-                        let exit_y = top_layouts[uct].1 + top_layouts[uct].3;
-                        let entry_y = vct.map_or(0, |k| top_layouts[k].1 - 1);
-
-                        let lead = arch_led.insert(conn.from.clone());
-                        if lead {
-                            // One shared corridor run per source
-                            canvas.draw_vline(u_cx, u_bottom + 1, exit_y);
-                            canvas.draw_hline(u_cx, track_x, exit_y);
-                            canvas.draw_vline(track_x, exit_y, depth_y);
-                        }
-                        // Drop into the target container's corridor
-                        canvas.draw_hline(track_x, v_cx, entry_y);
-                        if entry_y < v_top - 1 {
-                            canvas.draw_vline(v_cx, entry_y, v_top - 1);
-                        }
-                    } else {
-                        let mid_y = u_bottom + (v_top - u_bottom) / 2;
-                        canvas.draw_vline(u_cx, u_bottom + 1, mid_y);
-                        canvas.draw_hline(u_cx, v_cx, mid_y);
-                        canvas.draw_vline(v_cx, mid_y, v_top - 1);
-                    }
-                }
-            }
-        }
-
-        // Draw arrowheads and labels on top of everything so callouts are
-        // never buried by lines or container walls
-        for conn in &self.spec.connections {
-            if conn.from == conn.to
-                || container_ids.contains(&conn.from)
-                || container_ids.contains(&conn.to)
-            {
+            let u_rect = Rect::new(u.x, u.y, u.width, u.height);
+            let v_rect = Rect::new(v.x, v.y, v.width, v.height);
+            let Some(route) = grid.route(u_rect, v_rect) else {
+                // Degenerate-shape safety net (layout gaps always leave a
+                // corridor): fall back to the direct center Z route.
+                draw_fallback_route(&mut canvas, u, v, &self.theme);
                 continue;
-            }
-            if let (Some(u), Some(v)) = (comp_bounds.get(&conn.from), comp_bounds.get(&conn.to)) {
-                let u_right = u.x + u.width - 1;
-                let u_cy = u.y + u.height / 2;
-                let v_left = v.x;
-                let v_cy = v.y + v.height / 2;
+            };
+            draw_cells(&mut canvas, &route.cells);
+            canvas.draw_corner(
+                route.src_anchor.0,
+                route.src_anchor.1,
+                line_conn_toward(route.src_dir),
+            );
+            canvas.draw_corner(
+                route.dst_anchor.0,
+                route.dst_anchor.1,
+                line_conn_toward(route.dst_dir),
+            );
+            let arrow_cell = route.cells[route.cells.len() - 1];
+            canvas.draw_arrow(arrow_cell.0, arrow_cell.1, route.arrow, &self.theme);
 
-                if u_right < v_left {
-                    // Left to Right connection
-                    let _mid_x = u_right + (v_left - u_right) / 2;
-                    canvas.draw_arrow(v_left - 1, v_cy, Direction::Right, &self.theme);
-
-                    if let Some(ref lbl) = conn.label {
-                        let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-                        let channel = v_left.saturating_sub(u_right + 1);
-                        if channel >= lbl_w {
-                            let lx = u_right + 1 + (channel - lbl_w) / 2;
-                            let (cx, cy, cw, _) =
-                                container_of(u).map_or((0, 0, max_w, total_h), |k| top_layouts[k]);
-                            let bounds =
-                                Rect::new(cx + 1, cy + 1, cw.saturating_sub(2), usize::MAX);
-                            Self::place_label(
-                                &mut canvas,
-                                bounds,
-                                lx,
-                                u_cy.saturating_sub(1),
-                                &[],
-                                lbl,
-                            );
-                        }
-                    }
-                } else if u.x > v.x + v.width - 1 && u_cy == v_cy {
-                    // Right to Left, same row (routed below)
-                    let u_cx = u.x + u.width / 2;
-                    let v_cx = v.x + v.width / 2;
-                    let route_y = u.y + u.height + 1;
-                    canvas.draw_arrow(v_cx, v.y + v.height, Direction::Up, &self.theme);
-
-                    if let Some(ref lbl) = conn.label {
-                        let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-                        let mid = usize::midpoint(v_cx, u_cx);
-                        if lbl_w + 2 < u_cx.saturating_sub(v_cx) {
-                            let (cx, cy, cw, ch) =
-                                container_of(u).map_or((0, 0, max_w, total_h), |k| top_layouts[k]);
-                            let bounds = Rect::new(
-                                cx + 1,
-                                cy + 1,
-                                cw.saturating_sub(2),
-                                ch.saturating_sub(2),
-                            );
-                            let clamps = [
-                                (u_cx + 2, route_y),
-                                (v_cx.saturating_sub(lbl_w + 2), route_y),
-                            ];
-                            Self::place_label(
-                                &mut canvas,
-                                bounds,
-                                mid.saturating_sub(lbl_w / 2),
-                                route_y + 1,
-                                &clamps,
-                                lbl,
-                            );
-                        }
-                    }
-                } else if u.y + u.height <= v.y {
-                    // Top to Bottom connection
-                    let u_cx = u.x + u.width / 2;
-                    let v_cx = v.x + v.width / 2;
-                    let v_top = v.y;
-                    let u_bottom = u.y + u.height - 1;
-                    let mid_y = u_bottom + (v_top - u_bottom) / 2;
-                    canvas.draw_arrow(v_cx, v_top - 1, Direction::Down, &self.theme);
-
-                    let uct = container_of(u);
-                    let vct = container_of(v);
-                    let crosses = matches!((uct, vct), (Some(a), Some(b)) if b >= a + 2);
-                    if crosses && let Some(&(track_x, _)) = arch_tracks.get(conn.from.as_str()) {
-                        let entry_y = vct.map_or(0, |k| top_layouts[k].1 - 1);
-                        if let Some(ref lbl) = conn.label {
-                            let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-                            let lx = usize::midpoint(track_x, v_cx)
-                                .saturating_sub(lbl_w / 2)
-                                .max(v_cx.min(track_x) + 1);
-                            canvas.draw_text_safe(lx, entry_y.saturating_sub(1), lbl);
-                        }
-                    } else if let Some(ref lbl) = conn.label {
-                        let (cx, cy, cw, _) =
-                            uct.map_or((0, 0, max_w, total_h), |k| top_layouts[k]);
-                        let bounds = Rect::new(cx + 1, cy + 1, cw.saturating_sub(2), usize::MAX);
-                        let clamp = [(u_cx.max(v_cx) + 2, mid_y)];
-                        Self::place_label(
-                            &mut canvas,
-                            bounds,
-                            u_cx + 2,
-                            mid_y.saturating_sub(1),
-                            &clamp,
-                            lbl,
-                        );
-                    }
-                }
+            if let Some(label) = &conn.label {
+                let cw = canvas.width;
+                let ch = canvas.height;
+                place_route_label(&mut canvas, &route.cells, u, v, &top_layouts, cw, ch, label);
             }
         }
+
         canvas.set_pen(None);
 
-        canvas.render_impl(&self.theme, colored)
+        Ok(canvas.render_impl(&self.theme, colored))
     }
     fn calculate_row_gap(&self) -> usize {
+        // No connections means nothing to route or label between row items:
+        // keep them close instead of reserving blank corridor columns.
+        if self.spec.connections.is_empty() {
+            return 4;
+        }
         let max_label_w = self
             .spec
             .connections
@@ -310,7 +162,8 @@ impl<'a> ArchitectureRenderer<'a> {
     }
 
     fn measure_leaf(leaf: &LeafComponent) -> (usize, usize) {
-        let name_w = UnicodeWidthStr::width(leaf.name.as_str());
+        let name = leaf.name.trim();
+        let name_w = UnicodeWidthStr::width(name);
         let props_w = leaf
             .properties
             .iter()
@@ -328,7 +181,7 @@ impl<'a> ArchitectureRenderer<'a> {
     }
 
     fn measure_container(&self, c: &ContainerSpec) -> (usize, usize) {
-        let title_w = UnicodeWidthStr::width(c.title.as_str()) + 6;
+        let title_w = UnicodeWidthStr::width(c.title.trim()) + 6;
 
         if c.items.is_empty() {
             return (title_w.max(16), 4);
@@ -363,30 +216,10 @@ impl<'a> ArchitectureRenderer<'a> {
         }
     }
 
-    fn place_label(
-        canvas: &mut Canvas,
-        bounds: Rect,
-        px: usize,
-        py: usize,
-        clamps: &[(usize, usize)],
-        label: &str,
-    ) -> bool {
+    fn place_label(canvas: &mut Canvas, bounds: Rect, px: usize, py: usize, label: &str) -> bool {
         if let Some((sx, sy)) = canvas.find_safe_text_pos_within(bounds, px, py, label) {
             canvas.draw_text(sx, sy, label);
             return true;
-        }
-        let text_w = UnicodeWidthStr::width(label);
-        let max_x = bounds.x.saturating_add(bounds.width);
-        let max_y = bounds.y.saturating_add(bounds.height);
-        for &(cx, cy) in clamps {
-            let in_bounds = cy >= bounds.y
-                && cy < max_y
-                && cx >= bounds.x
-                && cx.saturating_add(text_w) <= max_x;
-            if in_bounds && canvas.can_place_text(cx, cy, label) {
-                canvas.draw_text(cx, cy, label);
-                return true;
-            }
         }
         false
     }
@@ -397,10 +230,10 @@ impl<'a> ArchitectureRenderer<'a> {
         c: &ContainerSpec,
         area: Rect,
         bounds: &mut HashMap<String, BoxBounds>,
-        container_ids: &mut HashSet<String>,
+        container_rects: &mut Vec<Rect>,
     ) {
-        container_ids.insert(c.id.clone());
-        // Draw outer container box
+        container_rects.push(area);
+        // Draw outer container box (whitespace-only titles render as none)
         canvas.set_pen(c.color);
         canvas.draw_box(
             area.x,
@@ -408,7 +241,7 @@ impl<'a> ArchitectureRenderer<'a> {
             area.width,
             area.height,
             &self.theme,
-            Some(&c.title),
+            Some(c.title.trim()),
         );
         canvas.obstacles.pop();
         canvas.set_pen(None);
@@ -451,16 +284,7 @@ impl<'a> ArchitectureRenderer<'a> {
                         sub,
                         Rect::new(cur_x, cur_y, w, h),
                         bounds,
-                        container_ids,
-                    );
-                    bounds.insert(
-                        sub.id.clone(),
-                        BoxBounds {
-                            x: cur_x,
-                            y: cur_y,
-                            width: w,
-                            height: h,
-                        },
+                        container_rects,
                     );
 
                     match c.layout {
@@ -490,10 +314,11 @@ impl<'a> ArchitectureRenderer<'a> {
         canvas.add_obstacle(Rect::new(x, y, width, height));
         canvas.set_pen(None);
 
-        // Name
-        let name_w = UnicodeWidthStr::width(leaf.name.as_str());
+        // Name (whitespace-only names collapse to an empty label)
+        let name = leaf.name.trim();
+        let name_w = UnicodeWidthStr::width(name);
         let name_x = x + (width.saturating_sub(name_w)) / 2;
-        canvas.draw_text(name_x, y + 1, &leaf.name);
+        canvas.draw_text(name_x, y + 1, name);
 
         // Properties with divider if present
         if !leaf.properties.is_empty() && height >= 4 {
@@ -533,40 +358,558 @@ impl<'a> ArchitectureRenderer<'a> {
     }
 }
 
-fn skipped_connection_warnings(
-    connections: &[EdgeSpec],
-    bounds: &HashMap<String, BoxBounds>,
-    container_ids: &HashSet<String>,
-) -> Vec<String> {
-    let mut warnings = Vec::new();
-    let mut seen: HashSet<(&'static str, String)> = HashSet::new();
+/// Rejects specs with duplicate IDs up front and returns the component /
+/// container ID sets. An ambiguous reference (one ID naming two boxes)
+/// would otherwise be dropped silently at routing time.
+fn validate_ids(
+    containers: &[ContainerSpec],
+) -> Result<(HashSet<String>, HashSet<String>), String> {
+    fn claim(
+        owner: &mut HashMap<String, &'static str>,
+        id: &str,
+        kind: &'static str,
+    ) -> Result<(), String> {
+        if let Some(prev) = owner.insert(id.to_string(), kind) {
+            return Err(format!(
+                "duplicate ID '{id}': already declared as a {prev} and again as a {kind} — \
+                 architecture IDs must be unique across containers and components"
+            ));
+        }
+        Ok(())
+    }
 
-    for conn in connections {
-        if conn.from == conn.to {
-            if seen.insert(("self-loop", conn.from.clone())) {
-                warnings.push(format!("skipping self-loop connection on '{}'", conn.from));
+    fn walk(
+        c: &ContainerSpec,
+        comps: &mut HashSet<String>,
+        conts: &mut HashSet<String>,
+        owner: &mut HashMap<String, &'static str>,
+    ) -> Result<(), String> {
+        claim(owner, &c.id, "container")?;
+        conts.insert(c.id.clone());
+        for item in &c.items {
+            match item {
+                ContainerItem::Leaf(l) => {
+                    claim(owner, &l.id, "component")?;
+                    comps.insert(l.id.clone());
+                }
+                ContainerItem::SubContainer(sub) => walk(sub, comps, conts, owner)?,
             }
+        }
+        Ok(())
+    }
+
+    let mut comps = HashSet::new();
+    let mut conts = HashSet::new();
+    let mut owner: HashMap<String, &'static str> = HashMap::new();
+    for c in containers {
+        walk(c, &mut comps, &mut conts, &mut owner)?;
+    }
+    Ok((comps, conts))
+}
+
+/// Hard-errors on unusable connections instead of warn-and-drop: each
+/// problem names the connection index and the offending ID.
+fn validate_connections(
+    connections: &[EdgeSpec],
+    comps: &HashSet<String>,
+    conts: &HashSet<String>,
+) -> Result<(), String> {
+    let mut problems: Vec<String> = Vec::new();
+    for (i, conn) in connections.iter().enumerate() {
+        if conn.from == conn.to {
+            problems.push(format!(
+                "connection {i} ({} -> {}): self-loop connection on '{}'",
+                conn.from, conn.to, conn.from
+            ));
             continue;
         }
-
-        for endpoint in [&conn.from, &conn.to] {
-            if container_ids.contains(endpoint) {
-                if seen.insert(("container-id", (*endpoint).clone())) {
-                    warnings.push(format!(
-                        "skipping connection referencing container ID '{endpoint}'"
-                    ));
-                }
-            } else if !bounds.contains_key(endpoint)
-                && seen.insert(("unknown-id", (*endpoint).clone()))
-            {
-                warnings.push(format!(
-                    "skipping connection with unknown component ID '{endpoint}'"
+        for (endpoint, field) in [(&conn.from, "from"), (&conn.to, "to")] {
+            if conts.contains(endpoint) {
+                problems.push(format!(
+                    "connection {i}: endpoint '{endpoint}' ({field}) is a container ID — \
+                     architecture connections link components (items), not containers"
+                ));
+            } else if !comps.contains(endpoint) {
+                problems.push(format!(
+                    "connection {i}: endpoint '{endpoint}' ({field}) is an unknown component ID"
                 ));
             }
         }
     }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "cannot render architecture connections:\n  - {}",
+            problems.join("\n  - ")
+        ))
+    }
+}
 
-    warnings
+fn line_conn_toward(d: Direction) -> LineConn {
+    match d {
+        Direction::Up => LineConn {
+            north: true,
+            ..LineConn::default()
+        },
+        Direction::Down => LineConn {
+            south: true,
+            ..LineConn::default()
+        },
+        Direction::Left => LineConn {
+            west: true,
+            ..LineConn::default()
+        },
+        Direction::Right => LineConn {
+            east: true,
+            ..LineConn::default()
+        },
+    }
+}
+
+fn dir_delta(d: Direction) -> (isize, isize) {
+    match d {
+        Direction::Up => (0, -1),
+        Direction::Down => (0, 1),
+        Direction::Left => (-1, 0),
+        Direction::Right => (1, 0),
+    }
+}
+
+fn delta_to_dir(dx: isize, dy: isize) -> Direction {
+    if dx > 0 {
+        Direction::Right
+    } else if dx < 0 {
+        Direction::Left
+    } else if dy > 0 {
+        Direction::Down
+    } else {
+        Direction::Up
+    }
+}
+
+fn step(p: (usize, usize), d: Direction) -> Option<(usize, usize)> {
+    let (dx, dy) = dir_delta(d);
+    let nx = p.0 as isize + dx;
+    let ny = p.1 as isize + dy;
+    if nx < 0 || ny < 0 {
+        None
+    } else {
+        Some((nx as usize, ny as usize))
+    }
+}
+
+fn center_x(r: Rect) -> usize {
+    r.x + r.width / 2
+}
+
+fn center_y(r: Rect) -> usize {
+    r.y + r.height / 2
+}
+
+/// Border cells (corners excluded) of `r` on the sides facing the other
+/// box, paired with the outward direction. `(dx, dy)` points from `r`
+/// toward the other box.
+fn facing_anchors(r: Rect, dx: isize, dy: isize) -> Vec<((usize, usize), Direction)> {
+    let right = r.x + r.width - 1;
+    let bottom = r.y + r.height - 1;
+    let mut out = Vec::new();
+    if dy > 0 {
+        for x in (r.x + 1)..right {
+            out.push(((x, bottom), Direction::Down));
+        }
+    }
+    if dy < 0 {
+        for x in (r.x + 1)..right {
+            out.push(((x, r.y), Direction::Up));
+        }
+    }
+    if dx > 0 {
+        for y in (r.y + 1)..bottom {
+            out.push(((right, y), Direction::Right));
+        }
+    }
+    if dx < 0 {
+        for y in (r.y + 1)..bottom {
+            out.push(((r.x, y), Direction::Left));
+        }
+    }
+    out
+}
+
+/// A routed connection: corridor cells from the seed beside the source box
+/// to the cell beside the target box, the two border anchor cells, and the
+/// arrowhead direction (the final move direction, pointing into the
+/// target).
+struct Routed {
+    cells: Vec<(usize, usize)>,
+    src_anchor: (usize, usize),
+    src_dir: Direction,
+    dst_anchor: (usize, usize),
+    dst_dir: Direction,
+    arrow: Direction,
+}
+
+/// Per-cell routing surface. Leaf boxes and any rendered text are
+/// impassable; container borders may only be crossed perpendicular to
+/// their edge (a vertical move may enter a horizontal border cell), which
+/// is what paints the junction glyph where a route pierces a wall.
+struct RouteGrid {
+    w: usize,
+    h: usize,
+    blocked: Vec<bool>,
+    hborder: Vec<bool>,
+    vborder: Vec<bool>,
+}
+
+impl RouteGrid {
+    fn new(
+        w: usize,
+        h: usize,
+        containers: &[Rect],
+        leaves: &HashMap<String, BoxBounds>,
+        canvas: &Canvas,
+    ) -> Self {
+        let mut grid = Self {
+            w,
+            h,
+            blocked: vec![false; w * h],
+            hborder: vec![false; w * h],
+            vborder: vec![false; w * h],
+        };
+        for r in containers {
+            grid.mark_container(*r);
+        }
+        for b in leaves.values() {
+            grid.mark_blocked(Rect::new(b.x, b.y, b.width, b.height));
+        }
+        // Any rendered text/arrow cell (spec title, container titles, item
+        // content) is impassable and also drops its border-corridor flag.
+        for y in 0..h {
+            for x in 0..w {
+                if let Some(cell) = canvas.get_cell(x, y)
+                    && (cell.role == CellRole::Text
+                        || cell.role == CellRole::Arrow
+                        || cell.is_continuation)
+                {
+                    let i = y * w + x;
+                    grid.blocked[i] = true;
+                    grid.hborder[i] = false;
+                    grid.vborder[i] = false;
+                }
+            }
+        }
+        grid
+    }
+
+    fn mark_blocked(&mut self, r: Rect) {
+        for y in r.y..(r.y + r.height) {
+            for x in r.x..(r.x + r.width) {
+                if x < self.w && y < self.h {
+                    self.blocked[y * self.w + x] = true;
+                }
+            }
+        }
+    }
+
+    fn mark_container(&mut self, r: Rect) {
+        if r.width < 2 || r.height < 2 {
+            return;
+        }
+        let right = r.x + r.width - 1;
+        let bottom = r.y + r.height - 1;
+        // Corners never carry a route.
+        for (cx, cy) in [(r.x, r.y), (right, r.y), (r.x, bottom), (right, bottom)] {
+            if cx < self.w && cy < self.h {
+                self.blocked[cy * self.w + cx] = true;
+            }
+        }
+        for x in (r.x + 1)..right {
+            if x < self.w {
+                self.hborder[r.y * self.w + x] = true;
+                self.hborder[bottom * self.w + x] = true;
+            }
+        }
+        for y in (r.y + 1)..bottom {
+            if y < self.h {
+                self.vborder[y * self.w + r.x] = true;
+                self.vborder[y * self.w + right] = true;
+            }
+        }
+    }
+
+    /// Whether a move in direction `(dx, dy)` may land on `(x, y)`.
+    fn step_ok(&self, x: usize, y: usize, dx: isize, dy: isize) -> bool {
+        if x >= self.w || y >= self.h {
+            return false;
+        }
+        let i = y * self.w + x;
+        if self.blocked[i] {
+            return false;
+        }
+        // Running along a border would erase/overlap it; only perpendicular
+        // crossings are legal.
+        if dx != 0 && self.hborder[i] {
+            return false;
+        }
+        if dy != 0 && self.vborder[i] {
+            return false;
+        }
+        true
+    }
+
+    /// Shortest corridor path between two component boxes. `None` only if
+    /// no legal path exists (layout gaps guarantee one, so this is a
+    /// degenerate-shape guard rather than an expected outcome).
+    fn route(&self, u: Rect, v: Rect) -> Option<Routed> {
+        let dx = center_x(v) as isize - center_x(u) as isize;
+        let dy = center_y(v) as isize - center_y(u) as isize;
+
+        // (seed cell, source anchor, outward direction)
+        let mut seeds = Vec::new();
+        for (anchor, dir) in facing_anchors(u, dx, dy) {
+            if let Some(seed) = step(anchor, dir) {
+                let (ddx, ddy) = dir_delta(dir);
+                if self.step_ok(seed.0, seed.1, ddx, ddy) {
+                    seeds.push((seed, anchor, dir));
+                }
+            }
+        }
+        // goal cell -> (target anchor, inward direction)
+        let mut goals: HashMap<(usize, usize), ((usize, usize), Direction)> = HashMap::new();
+        for (anchor, dir) in facing_anchors(v, -dx, -dy) {
+            if let Some(goal) = step(anchor, dir) {
+                let (ddx, ddy) = dir_delta(dir);
+                if self.step_ok(goal.0, goal.1, ddx, ddy) {
+                    goals.insert(goal, (anchor, dir));
+                }
+            }
+        }
+        if seeds.is_empty() || goals.is_empty() {
+            return None;
+        }
+
+        // Multi-source BFS over legal moves.
+        let mut prev: Vec<Option<u32>> = vec![None; self.w * self.h];
+        let mut visited = vec![false; self.w * self.h];
+        let mut roots: HashMap<usize, ((usize, usize), Direction)> = HashMap::new();
+        let mut queue = std::collections::VecDeque::new();
+        for (cell, anchor, dir) in seeds {
+            let idx = cell.1 * self.w + cell.0;
+            visited[idx] = true;
+            roots.insert(idx, (anchor, dir));
+            queue.push_back(idx);
+        }
+        let found = 'search: {
+            while let Some(idx) = queue.pop_front() {
+                let (x, y) = (idx % self.w, idx / self.w);
+                for dir in [
+                    Direction::Up,
+                    Direction::Down,
+                    Direction::Left,
+                    Direction::Right,
+                ] {
+                    let (ddx, ddy) = dir_delta(dir);
+                    let Some((nx, ny)) = step((x, y), dir) else {
+                        continue;
+                    };
+                    if !self.step_ok(nx, ny, ddx, ddy) {
+                        continue;
+                    }
+                    let nidx = ny * self.w + nx;
+                    if visited[nidx] {
+                        continue;
+                    }
+                    visited[nidx] = true;
+                    prev[nidx] = Some(idx as u32);
+                    if let Some(&(dst_anchor, dst_dir)) = goals.get(&(nx, ny)) {
+                        break 'search Some((nidx, dst_anchor, dst_dir));
+                    }
+                    queue.push_back(nidx);
+                }
+            }
+            None
+        };
+        let (goal_idx, dst_anchor, dst_dir) = found?;
+
+        // Reconstruct seed -> goal.
+        let mut cells = Vec::new();
+        let mut cur = goal_idx;
+        loop {
+            cells.push((cur % self.w, cur / self.w));
+            let Some(p) = prev[cur] else { break };
+            cur = p as usize;
+        }
+        cells.reverse();
+        let (src_anchor, src_dir) = roots[&cur];
+        if cells.len() < 2 {
+            return None;
+        }
+        let (x0, y0) = cells[cells.len() - 2];
+        let (x1, y1) = cells[cells.len() - 1];
+        let arrow = delta_to_dir(x1 as isize - x0 as isize, y1 as isize - y0 as isize);
+        Some(Routed {
+            cells,
+            src_anchor,
+            src_dir,
+            dst_anchor,
+            dst_dir,
+            arrow,
+        })
+    }
+}
+
+/// Stamps a routed cell path as line runs (crossings merge into junction
+/// glyphs via the canvas conn flags).
+fn draw_cells(canvas: &mut Canvas, cells: &[(usize, usize)]) {
+    let mut i = 0;
+    while i + 1 < cells.len() {
+        let (x0, y0) = cells[i];
+        let mut j = i + 1;
+        if cells[j].0 == x0 {
+            while j + 1 < cells.len() && cells[j + 1].0 == x0 {
+                j += 1;
+            }
+            canvas.draw_vline(x0, y0, cells[j].1);
+        } else {
+            while j + 1 < cells.len() && cells[j + 1].1 == y0 {
+                j += 1;
+            }
+            canvas.draw_hline(x0, cells[j].0, y0);
+        }
+        i = j;
+    }
+}
+
+/// Safety net when no corridor path exists: the direct center-to-center Z
+/// route (best effort, matches the pre-router geometry).
+fn draw_fallback_route(canvas: &mut Canvas, u: &BoxBounds, v: &BoxBounds, theme: &Theme) {
+    let u_right = u.x + u.width - 1;
+    let u_cy = u.y + u.height / 2;
+    let u_cx = u.x + u.width / 2;
+    let u_bottom = u.y + u.height - 1;
+    let v_left = v.x;
+    let v_cx = v.x + v.width / 2;
+    let v_cy = v.y + v.height / 2;
+    if u_right < v_left {
+        let mid_x = u_right + (v_left - u_right) / 2;
+        canvas.draw_hline(u_right + 1, mid_x, u_cy);
+        canvas.draw_vline(mid_x, u_cy, v_cy);
+        canvas.draw_hline(mid_x, v_left - 1, v_cy);
+        canvas.draw_arrow(v_left - 1, v_cy, Direction::Right, theme);
+    } else if u.y + u.height <= v.y {
+        let mid_y = u_bottom + (v.y - u_bottom) / 2;
+        canvas.draw_vline(u_cx, u_bottom + 1, mid_y);
+        canvas.draw_hline(u_cx, v_cx, mid_y);
+        canvas.draw_vline(v_cx, mid_y, v.y.saturating_sub(1));
+        canvas.draw_arrow(v_cx, v.y.saturating_sub(1), Direction::Down, theme);
+    } else {
+        let route_y = u.y + u.height + 1;
+        canvas.draw_vline(u_cx, u.y + u.height, route_y);
+        canvas.draw_hline(v_cx.min(u_cx), v_cx.max(u_cx), route_y);
+        canvas.draw_vline(v_cx, route_y, v.y + v.height);
+        canvas.draw_arrow(v_cx, v.y + v.height, Direction::Up, theme);
+    }
+}
+
+/// Longest straight horizontal run in a routed path: `(y, x1, x2)`.
+fn longest_horizontal_run(cells: &[(usize, usize)]) -> Option<(usize, usize, usize)> {
+    let mut best: Option<(usize, usize, usize)> = None;
+    let mut i = 0;
+    while i < cells.len() {
+        let mut j = i;
+        while j + 1 < cells.len()
+            && cells[j + 1].1 == cells[i].1
+            && cells[j + 1].0 == cells[j].0 + 1
+        {
+            j += 1;
+        }
+        if j > i {
+            let cand = (cells[i].1, cells[i].0, cells[j].0);
+            best = match best {
+                Some(b) if b.2 - b.1 >= cand.2 - cand.1 => Some(b),
+                _ => Some(cand),
+            };
+        }
+        i = j + 1;
+    }
+    best
+}
+
+/// Search window for a route label: the interior of the top-level
+/// container holding both endpoints, else a window spanning both endpoint
+/// boxes (clamped to the canvas).
+fn label_bounds(
+    u: &BoxBounds,
+    v: &BoxBounds,
+    top_layouts: &[(usize, usize, usize, usize)],
+    canvas_w: usize,
+    canvas_h: usize,
+) -> Rect {
+    let inside = |b: &BoxBounds, r: Rect| r.contains_point(b.x + b.width / 2, b.y + b.height / 2);
+    for &(cx, cy, cw, ch) in top_layouts {
+        let r = Rect::new(cx, cy, cw, ch);
+        if inside(u, r) && inside(v, r) {
+            return Rect::new(cx + 1, cy + 1, cw.saturating_sub(2), ch.saturating_sub(2));
+        }
+    }
+    let min_x = u.x.min(v.x);
+    let min_y = u.y.min(v.y);
+    let max_x = (u.x + u.width).max(v.x + v.width);
+    let max_y = (u.y + u.height).max(v.y + v.height);
+    let mut rect = Rect::new(
+        min_x.saturating_sub(4),
+        min_y.saturating_sub(1),
+        max_x - min_x + 9,
+        max_y - min_y + 3,
+    );
+    rect.width = rect.width.min(canvas_w.saturating_sub(rect.x));
+    rect.height = rect.height.min(canvas_h.saturating_sub(rect.y));
+    rect
+}
+
+/// Places a connection label anchored to its route: one row above the
+/// longest horizontal run, or beside the path midpoint for straight
+/// vertical routes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "explicit route/context arguments keep the call site readable"
+)]
+fn place_route_label(
+    canvas: &mut Canvas,
+    cells: &[(usize, usize)],
+    u: &BoxBounds,
+    v: &BoxBounds,
+    top_layouts: &[(usize, usize, usize, usize)],
+    canvas_w: usize,
+    canvas_h: usize,
+    label: &str,
+) {
+    let lbl_w = UnicodeWidthStr::width(label);
+    let run = longest_horizontal_run(cells);
+    let (px, py) = match run {
+        Some((ry, rx1, rx2)) => (
+            usize::midpoint(rx1, rx2).saturating_sub(lbl_w / 2),
+            ry.saturating_sub(1),
+        ),
+        None => {
+            let mid = cells[cells.len() / 2];
+            (mid.0.saturating_sub(lbl_w + 2), mid.1)
+        }
+    };
+    let bounds = label_bounds(u, v, top_layouts, canvas_w, canvas_h);
+    if ArchitectureRenderer::place_label(canvas, bounds, px, py, label) {
+        return;
+    }
+    if let Some((ry, _, _)) = run {
+        ArchitectureRenderer::place_label(
+            canvas,
+            bounds,
+            px,
+            (ry + 1).min(canvas_h.saturating_sub(1)),
+            label,
+        );
+    }
 }
 
 #[cfg(test)]
@@ -608,11 +951,12 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
         let renderer = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded));
-        let out = renderer.render(false);
+        let out = renderer.render(false).unwrap();
         println!("ARCHITECTURE OUTPUT:\n{out}");
         assert!(out.contains("Kubernetes Cluster"));
         assert!(out.contains("Namespace: Production"));
@@ -655,6 +999,7 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
@@ -662,9 +1007,11 @@ mod tests {
             &make_spec(Some("HTTP".to_string())),
             Theme::new(BoxStyle::Rounded),
         )
-        .render(false);
+        .render(false)
+        .unwrap();
         let no_lbl = ArchitectureRenderer::new(&make_spec(None), Theme::new(BoxStyle::Rounded))
-            .render(false);
+            .render(false)
+            .unwrap();
 
         // Label appears exactly once
         assert_eq!(with_lbl.matches("HTTP").count(), 1);
@@ -733,16 +1080,19 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
         let mut spec_no_lbl = spec_with_lbl.clone();
         spec_no_lbl.connections[0].label = None;
 
-        let out_with =
-            ArchitectureRenderer::new(&spec_with_lbl, Theme::new(BoxStyle::Rounded)).render(false);
-        let out_no =
-            ArchitectureRenderer::new(&spec_no_lbl, Theme::new(BoxStyle::Rounded)).render(false);
+        let out_with = ArchitectureRenderer::new(&spec_with_lbl, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap();
+        let out_no = ArchitectureRenderer::new(&spec_no_lbl, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap();
 
         let lines_with: Vec<&str> = out_with.lines().collect();
         let lines_no: Vec<&str> = out_no.lines().collect();
@@ -805,11 +1155,13 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
-        let stacked_out =
-            ArchitectureRenderer::new(&stacked_spec, Theme::new(BoxStyle::Rounded)).render(false);
+        let stacked_out = ArchitectureRenderer::new(&stacked_spec, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap();
         let first_top_idx = stacked_out
             .lines()
             .position(|l| l.contains("First"))
@@ -854,10 +1206,13 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
-        let out = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render(false);
+        let out = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap();
         let lines: Vec<&str> = out.lines().collect();
 
         // Alpha bottom border has full corner pair
@@ -907,10 +1262,13 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
-        let out = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render(false);
+        let out = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap();
         let lines: Vec<&str> = out.lines().collect();
 
         // Container bottom border is the last non-empty line
@@ -976,111 +1334,150 @@ mod tests {
                 dashed: false,
                 thick: false,
                 color: None,
+                ..EdgeSpec::default()
             }],
         };
 
-        let out = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render(false);
+        let out = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap();
         assert!(out.contains("SYNC"));
     }
 
     #[test]
-    fn test_skipped_connection_warnings_classification() {
-        let mut bounds = HashMap::new();
-        bounds.insert(
-            "frontend".to_string(),
-            BoxBounds {
-                x: 2,
-                y: 2,
-                width: 10,
-                height: 4,
-            },
+    fn test_connection_problems_are_hard_errors() {
+        let comps: HashSet<String> = ["frontend".to_string(), "backend".to_string()]
+            .into_iter()
+            .collect();
+        let conts: HashSet<String> = ["k8s".to_string()].into_iter().collect();
+        let edge = |from: &str, to: &str| EdgeSpec {
+            from: from.to_string(),
+            to: to.to_string(),
+            ..EdgeSpec::default()
+        };
+
+        let ok = validate_connections(&[edge("frontend", "backend")], &comps, &conts);
+        assert!(ok.is_ok(), "valid connection must pass: {ok:?}");
+
+        let err = validate_connections(
+            &[
+                edge("frontend", "ghost"),
+                edge("frontend", "frontend"),
+                edge("frontend", "k8s"),
+                edge("ghost", "backend"),
+            ],
+            &comps,
+            &conts,
+        )
+        .unwrap_err();
+        // Each problem names its connection and the offending id
+        assert!(
+            err.contains("'ghost'") && err.contains("unknown component ID"),
+            "{err}"
         );
-        bounds.insert(
-            "backend".to_string(),
-            BoxBounds {
-                x: 20,
-                y: 2,
-                width: 10,
-                height: 4,
-            },
-        );
-
-        let mut container_ids = HashSet::new();
-        container_ids.insert("k8s".to_string());
-
-        let connections = vec![
-            // Valid
-            EdgeSpec {
-                from: "frontend".to_string(),
-                to: "backend".to_string(),
-                label: None,
-                arrow: ArrowDirection::Forward,
-                dashed: false,
-                thick: false,
-                color: None,
-            },
-            // Unknown id
-            EdgeSpec {
-                from: "frontend".to_string(),
-                to: "ghost".to_string(),
-                label: None,
-                arrow: ArrowDirection::Forward,
-                dashed: false,
-                thick: false,
-                color: None,
-            },
-            // Self-loop
-            EdgeSpec {
-                from: "frontend".to_string(),
-                to: "frontend".to_string(),
-                label: None,
-                arrow: ArrowDirection::Forward,
-                dashed: false,
-                thick: false,
-                color: None,
-            },
-            // Container ID
-            EdgeSpec {
-                from: "frontend".to_string(),
-                to: "k8s".to_string(),
-                label: None,
-                arrow: ArrowDirection::Forward,
-                dashed: false,
-                thick: false,
-                color: None,
-            },
-            // Duplicated unknown id
-            EdgeSpec {
-                from: "backend".to_string(),
-                to: "ghost".to_string(),
-                label: None,
-                arrow: ArrowDirection::Forward,
-                dashed: false,
-                thick: false,
-                color: None,
-            },
-        ];
-
-        let warnings = skipped_connection_warnings(&connections, &bounds, &container_ids);
-        assert_eq!(
-            warnings.len(),
-            3,
-            "Expected exactly 3 deduped warnings, got {warnings:?}"
+        assert!(err.contains("self-loop connection on 'frontend'"), "{err}");
+        assert!(
+            err.contains("'k8s'") && err.contains("container ID"),
+            "{err}"
         );
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("self-loop") && w.contains("frontend"))
+            err.contains("connection 0") && err.contains("connection 1"),
+            "{err}"
         );
+    }
+
+    #[test]
+    fn test_empty_containers_hard_error() {
+        let spec = ArchitectureSpec {
+            style: BoxStyle::Rounded,
+            title: Some("Empty".to_string()),
+            containers: vec![],
+            connections: vec![],
+        };
+        let err = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap_err();
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("container ID") && w.contains("k8s"))
+            err.contains("architecture requires at least one container"),
+            "{err}"
         );
+    }
+
+    #[test]
+    fn test_duplicate_ids_hard_error() {
+        // Leaf vs container id collision (ARCH-E-05 repro shape)
+        let spec = ArchitectureSpec {
+            style: BoxStyle::Rounded,
+            title: None,
+            containers: vec![
+                ContainerSpec {
+                    id: "c1".to_string(),
+                    title: "A".to_string(),
+                    layout: ContainerLayout::Row,
+                    color: None,
+                    items: vec![ContainerItem::Leaf(LeafComponent {
+                        id: "api".to_string(),
+                        name: "API".to_string(),
+                        properties: vec![],
+                        color: None,
+                    })],
+                },
+                ContainerSpec {
+                    id: "api".to_string(),
+                    title: "Dup".to_string(),
+                    layout: ContainerLayout::Row,
+                    color: None,
+                    items: vec![],
+                },
+            ],
+            connections: vec![EdgeSpec {
+                from: "api".to_string(),
+                to: "c1".to_string(),
+                ..EdgeSpec::default()
+            }],
+        };
+        let err = ArchitectureRenderer::new(&spec, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap_err();
+        assert!(err.contains("duplicate ID 'api'"), "{err}");
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("unknown component ID") && w.contains("ghost"))
+            err.contains("container") && err.contains("component"),
+            "{err}"
         );
+
+        // Duplicate leaf ids across containers are rejected too
+        let dup_leaf = ArchitectureSpec {
+            containers: vec![
+                ContainerSpec {
+                    id: "c1".to_string(),
+                    title: "A".to_string(),
+                    layout: ContainerLayout::Row,
+                    color: None,
+                    items: vec![ContainerItem::Leaf(LeafComponent {
+                        id: "x".to_string(),
+                        name: "X1".to_string(),
+                        properties: vec![],
+                        color: None,
+                    })],
+                },
+                ContainerSpec {
+                    id: "c2".to_string(),
+                    title: "B".to_string(),
+                    layout: ContainerLayout::Row,
+                    color: None,
+                    items: vec![ContainerItem::Leaf(LeafComponent {
+                        id: "x".to_string(),
+                        name: "X2".to_string(),
+                        properties: vec![],
+                        color: None,
+                    })],
+                },
+            ],
+            ..ArchitectureSpec::default()
+        };
+        let err = ArchitectureRenderer::new(&dup_leaf, Theme::new(BoxStyle::Rounded))
+            .render(false)
+            .unwrap_err();
+        assert!(err.contains("duplicate ID 'x'"), "{err}");
     }
 }

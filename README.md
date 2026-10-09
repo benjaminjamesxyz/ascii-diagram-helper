@@ -1,4 +1,4 @@
-# ascii-diagram v0.11.0
+# ascii-diagram v0.12.0
 
 High-precision, Rust-powered terminal ASCII & Unicode diagram generator for humans and AI agents.
 
@@ -182,7 +182,7 @@ Declarative JSON specifications with row/column layouts, component property badg
 
 ### 4. Directory & Hierarchy Trees (`tree`)
 
-Clean tree structures using indented lines, parenthetical annotations, and inline `@color` tags.
+Clean tree structures using indented lines, parenthetical annotations, and inline `@color` tags. An annotation is recognized only as the **final** whitespace-delimited `(…)` group of a line (`src (CLI entry)`); any other parentheses stay literal, so `foo(1).rs` renders verbatim. A single leading bullet marker (`- `, `* `, `+ `) is stripped. A root entry named `tree` is allowed when any following line is indented.
 
 **DSL Input:**
 ```text
@@ -458,7 +458,7 @@ Choose from 5 distinct box-drawing character sets:
 
 - `ascii-diagram dsl "<dsl>"`: Render inline DSL string directly.
 - `ascii-diagram render <file|->`: Render from file or stdin.
-- `ascii-diagram example <type>`: Output reference examples (`flowchart`, `sequence`, `architecture`, `tree`, `table`, `stack`, `datastructure`, `queue`, `heap`, `graph`).
+- `ascii-diagram example <type>`: Output reference examples (`flowchart`, `sequence`, `architecture`, `tree`, `table`, `stack`, `datastructure`, `queue`, `heap`, `graph`, `linkedlist`, `array`; aliases `ds`, `btree`, `bst`, `binarytree`). Bare `example` defaults to `flowchart`; an unknown type exits non-zero with an error naming the valid types.
 - `ascii-diagram "ds <kind> <args>"`: CLI shorthand for data structures (`tree`, `btree`, `linkedlist`, `array`).
 
 #### Global CLI Options
@@ -480,6 +480,10 @@ Choose from 5 distinct box-drawing character sets:
    /diagram --example sequence
    /diagram --style ascii ds tree 8 3 10 1 6
    ```
+   Leading flags combine in any order before the diagram text:
+   - `--color`: opt-in ANSI colors (superseded by `NO_COLOR`)
+   - `--style <rounded|sharp|double|heavy|ascii>`: border style
+   - `--example <type>`: render a built-in reference example instead of DSL
 3. **Bundled Agent Skills**:
    - `skills/ascii-diagram`: Prompts AI agents to generate structured terminal diagrams instead of breaking text layouts.
    - `skills/ascii-diagram-qa`: Systematic QA testing probe matrix and reviewer audit protocol for diagram types.
@@ -495,6 +499,13 @@ Choose from 5 distinct box-drawing character sets:
 | **Color Support** | `stroke:<color>` colorizes borders/lines; `fill:<color>` tints text labels | Use `--color always` to override `NO_COLOR` when explicit ANSI output is required |
 | **Header-only DSL** | `flowchart TD` or `sequenceDiagram` without nodes returns empty output | Always declare at least one node or participant |
 | **Pipe Disambiguation** | Single-pipe text without headers parses as `tree`, not `table` | Use explicit `table` keyword or standard pipe headers for tables |
+| **Implicit Nodes** | Undeclared edge endpoints (`A --> Z`) are auto-declared as new nodes — Mermaid parity, by design | Declare participants explicitly when a typo should error instead of creating a node |
+| **Empty Node Labels** | An explicitly empty bracket label (`A[ ]`) falls back to the node id as label, with a stderr warning naming the node | Leave brackets off (`A`) for the normal unlabeled form |
+| **Dangling Edges** | `A -->` / `--> B` is a hard error (no target / no source); nothing renders | Always write both endpoints: `A --> B` |
+| **Tree Directories** | A trailing `/` on a tree label is plain text — directories get no automatic visual distinction | Add an explicit `@cyan` tag (`src/ @cyan`) when you want directories to stand out |
+| **Sequence Label Width** | Message and note labels never wrap or truncate — the diagram grows to the longest label (only participant headers truncate); there is no `--width` clamp | Keep message labels short; target $\le 100$ columns overall (see SKILL.md width guidelines) |
+| **Unicode Widths** | `U+FE0F` presentation selectors count as 1 column but render 2 in emoji-presentation terminals; ZWJ/skin-tone emoji clusters (👍🏽, 👨‍👩‍👧) count 2 columns — legacy terminals that render them wider will drift. Zero-width characters (ZWSP, ZWNJ, bidi controls) are stripped; only the first 2 combining marks per base character are kept | Prefer precomposed text (`café`, not `cafe` + combining mark); avoid emoji inside boxes when exact alignment matters |
+| **Unknown JSON Fields** | Unknown fields in JSON specs (including Mermaid-native `stroke` on architecture connections) are silently ignored | Use the documented field for connections: `color` (not `stroke`) |
 
 ---
 

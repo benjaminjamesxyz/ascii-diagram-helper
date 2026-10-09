@@ -1,5 +1,7 @@
+use std::borrow::Cow;
+
 use crate::color::Color;
-use crate::schema::StackSpec;
+use crate::schema::{StackLayerSpec, StackSpec};
 use crate::theme::Theme;
 use unicode_width::UnicodeWidthStr;
 
@@ -9,6 +11,50 @@ fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
         (true, Some(c)) => c.paint(s),
         _ => s.to_string(),
     }
+}
+
+/// True when `s` looks like a memory address or hex ID rather than prose:
+/// a `0x`/`0X`-prefixed hex number or a bare all-hex token (`DEADBEEF`).
+///
+/// The stack DSL splits a layer line on the first `:` and shows the prefix
+/// right-aligned in an address column; this heuristic gates that split so
+/// prose like `Note: x` keeps the whole line as its label instead of
+/// becoming a pseudo-address. Pure decimal is deliberately NOT accepted
+/// (labels like `2: one` stay labels); the cost is that hex words such as
+/// `Feed: x` are treated as addresses — accepted tradeoff to keep the
+/// heuristic simple (ST-05).
+pub(crate) fn is_address_shaped(s: &str) -> bool {
+    let hex = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
+    !hex.is_empty() && hex.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Expands tabs to spaces on 4-column stops counted from the string start
+/// (same convention as the table/sequence sanitizers). Raw tabs inside box
+/// text make terminals reflow the line so the borders drift; expanding
+/// before width computation keeps every row exactly `box_w` wide.
+/// Tab-free strings incur zero allocations.
+pub(crate) fn expand_tabs(s: &str) -> Cow<'_, str> {
+    if !s.contains('\t') {
+        return Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut col = 0usize;
+    for ch in s.chars() {
+        if ch == '\t' {
+            let stop = (col / 4 + 1) * 4;
+            while col < stop {
+                out.push(' ');
+                col += 1;
+            }
+        } else {
+            out.push(ch);
+            col += 1;
+        }
+    }
+    Cow::Owned(out)
 }
 
 pub struct StackRenderer<'a> {
@@ -28,17 +74,40 @@ impl<'a> StackRenderer<'a> {
             return String::new();
         }
 
-        let num_layers = self.spec.layers.len();
-
-        // Find max address/prefix width
-        let bot_addr_w = self
+        // Expand tabs up front so width math, rendering, and terminals agree.
+        let layers: Vec<StackLayerSpec> = self
+            .spec
+            .layers
+            .iter()
+            .map(|l| StackLayerSpec {
+                label: expand_tabs(&l.label).into_owned(),
+                address_or_id: l
+                    .address_or_id
+                    .as_deref()
+                    .map(|a| expand_tabs(a).into_owned()),
+                description: l
+                    .description
+                    .as_deref()
+                    .map(|d| expand_tabs(d).into_owned()),
+                color: l.color,
+            })
+            .collect();
+        let bottom_address = self
             .spec
             .bottom_address
             .as_deref()
-            .map_or(0, UnicodeWidthStr::width);
-        let max_layer_addr_w = self
+            .map(|a| expand_tabs(a).into_owned());
+        let title = self
             .spec
-            .layers
+            .title
+            .as_deref()
+            .map(|t| expand_tabs(t).into_owned());
+
+        let num_layers = layers.len();
+
+        // Find max address/prefix width
+        let bot_addr_w = bottom_address.as_deref().map_or(0, UnicodeWidthStr::width);
+        let max_layer_addr_w = layers
             .iter()
             .map(|l| l.address_or_id.as_deref().map_or(0, UnicodeWidthStr::width))
             .max()
@@ -46,9 +115,7 @@ impl<'a> StackRenderer<'a> {
         let addr_w = max_layer_addr_w.max(bot_addr_w);
 
         // Find max content width
-        let content_w = self
-            .spec
-            .layers
+        let content_w = layers
             .iter()
             .map(|l| {
                 let lw = UnicodeWidthStr::width(l.label.as_str());
@@ -64,7 +131,7 @@ impl<'a> StackRenderer<'a> {
         let mut lines = Vec::new();
 
         // Title
-        if let Some(ref title) = self.spec.title {
+        if let Some(title) = &title {
             let tw = UnicodeWidthStr::width(title.as_str());
             let indent = addr_w + 1;
             let total_span = indent + box_w;
@@ -94,12 +161,8 @@ impl<'a> StackRenderer<'a> {
         };
 
         // Top line (first layer's color owns it)
-        let first_color = self.spec.layers.first().and_then(|l| l.color);
-        let first_addr = self
-            .spec
-            .layers
-            .first()
-            .and_then(|l| l.address_or_id.as_deref());
+        let first_color = layers.first().and_then(|l| l.color);
+        let first_addr = layers.first().and_then(|l| l.address_or_id.as_deref());
         let top_border = format!(
             "{} {}{}{}",
             prefix_pad(first_addr),
@@ -121,7 +184,7 @@ impl<'a> StackRenderer<'a> {
         );
         lines.push(top_border);
 
-        for (i, layer) in self.spec.layers.iter().enumerate() {
+        for (i, layer) in layers.iter().enumerate() {
             // Layer content
             let lbl_w = UnicodeWidthStr::width(layer.label.as_str());
             let pad = (box_w - 2).saturating_sub(lbl_w);
@@ -175,7 +238,7 @@ impl<'a> StackRenderer<'a> {
 
             // Separator or bottom (upper layer owns its bottom edge)
             if i + 1 < num_layers {
-                let next_addr = self.spec.layers[i + 1].address_or_id.as_deref();
+                let next_addr = layers[i + 1].address_or_id.as_deref();
                 let sep = format!(
                     "{} {}{}{}",
                     prefix_pad(next_addr),
@@ -192,10 +255,10 @@ impl<'a> StackRenderer<'a> {
         }
 
         // Bottom line (last layer's color owns it)
-        let last_color = self.spec.layers.last().and_then(|l| l.color);
+        let last_color = layers.last().and_then(|l| l.color);
         let bottom_border = format!(
             "{} {}{}{}",
-            prefix_pad(self.spec.bottom_address.as_deref()),
+            prefix_pad(bottom_address.as_deref()),
             paint(
                 colored,
                 last_color,
@@ -345,6 +408,111 @@ mod tests {
             )
             .unwrap_err(),
             "Stack layer label cannot be empty"
+        );
+    }
+
+    #[test]
+    fn test_stack_address_shaped_tokens() {
+        assert!(is_address_shaped("0xFFFF"));
+        assert!(is_address_shaped("0x7fff5fbff8c0"));
+        assert!(is_address_shaped("0X10"));
+        assert!(is_address_shaped("DEADBEEF"));
+        assert!(is_address_shaped("ff00"));
+        assert!(!is_address_shaped("Note"));
+        assert!(!is_address_shaped("base_pointer"));
+        assert!(!is_address_shaped(""));
+        assert!(!is_address_shaped("0x"));
+        assert!(!is_address_shaped("Stack (grows)"));
+    }
+
+    #[test]
+    fn test_stack_dsl_prose_colon_stays_label() {
+        use crate::parser::parse_stack_dsl;
+        use crate::schema::DiagramSpec;
+
+        // ST-05: prose containing a colon is a label, not `address: label`.
+        let spec = parse_stack_dsl("stack\nNote: x", BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec {
+            assert_eq!(s.layers.len(), 1);
+            assert_eq!(s.layers[0].label, "Note: x");
+            assert_eq!(s.layers[0].address_or_id, None);
+            let out = StackRenderer::new(&s, Theme::new(BoxStyle::Rounded)).render(false);
+            assert!(out.contains("Note: x"));
+            // No address column anywhere: the top border starts at column 0
+            // (single leading gutter space only).
+            let first = out.lines().next().expect("non-empty render");
+            assert!(first.starts_with(" ╭"), "no address gutter: {first:?}");
+        } else {
+            panic!("Expected stack diagram");
+        }
+
+        // Address-shaped prefixes keep the address column.
+        let spec = parse_stack_dsl("stack\n0xFF: Top\nDEADBEEF: magic", BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec {
+            assert_eq!(s.layers[0].address_or_id.as_deref(), Some("0xFF"));
+            assert_eq!(s.layers[1].address_or_id.as_deref(), Some("DEADBEEF"));
+            assert_eq!(s.layers[1].label, "magic");
+        } else {
+            panic!("Expected stack diagram");
+        }
+
+        // A non-address-shaped trailing `word:` line becomes a layer, not a
+        // bottom address.
+        let spec = parse_stack_dsl("stack\n0xFF: Top\nNote:", BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec {
+            assert_eq!(s.bottom_address, None);
+            assert_eq!(s.layers.len(), 2);
+            assert_eq!(s.layers[1].label, "Note:");
+        } else {
+            panic!("Expected stack diagram");
+        }
+
+        // Shaped trailing `0x0:` still becomes the bottom address.
+        let spec = parse_stack_dsl("stack\n0xFF: Top\n0x0000:", BoxStyle::Rounded).unwrap();
+        if let DiagramSpec::Stack(s) = spec {
+            assert_eq!(s.bottom_address.as_deref(), Some("0x0000"));
+            assert_eq!(s.layers.len(), 1);
+        } else {
+            panic!("Expected stack diagram");
+        }
+    }
+
+    #[test]
+    fn test_expand_tabs_stops() {
+        assert!(matches!(expand_tabs("clean"), Cow::Borrowed("clean")));
+        assert_eq!(expand_tabs("a\tb"), "a   b");
+        assert_eq!(expand_tabs("\t\tx"), "        x");
+        assert_eq!(expand_tabs(""), "");
+    }
+
+    #[test]
+    fn test_stack_tab_in_label_expands() {
+        let spec = StackSpec {
+            style: BoxStyle::Rounded,
+            title: Some("t\ttle".to_string()),
+            layers: vec![StackLayerSpec {
+                label: "push a\tb".to_string(),
+                address_or_id: None,
+                description: None,
+                color: None,
+            }],
+            bottom_address: None,
+            grows_down: true,
+        };
+        let out = StackRenderer::new(&spec, Theme::new(BoxStyle::Rounded)).render(false);
+        assert!(!out.contains('\t'), "raw tab must not survive: {out:?}");
+        assert!(
+            out.contains("push a  b"),
+            "tab expands to 4-col stop: {out:?}"
+        );
+        // Box lines (top border, rows, bottom border) share one DISPLAY
+        // width, so borders cannot drift; the centered title and its blank
+        // spacer are free-standing. (Byte lengths differ regardless: borders
+        // are multi-byte glyphs.)
+        let widths: Vec<usize> = out.lines().map(UnicodeWidthStr::width).collect();
+        assert!(
+            widths.iter().skip(2).all(|&w| w == widths[2]),
+            "widths: {widths:?}"
         );
     }
 }

@@ -131,6 +131,9 @@ impl<'a> ArchitectureRenderer<'a> {
                 route.src_anchor.1,
                 line_conn_toward(route.src_dir),
             );
+            let seed = route.cells[0];
+            let (dx, dy) = dir_delta(route.src_dir);
+            canvas.draw_corner(seed.0, seed.1, line_conn_toward(delta_to_dir(-dx, -dy)));
             canvas.draw_corner(
                 route.dst_anchor.0,
                 route.dst_anchor.1,
@@ -1249,6 +1252,25 @@ mod tests {
                 assert!(matches!(route.arrow, Direction::Down));
             }
             let out = renderer.render(false).unwrap();
+            if layout == "column" {
+                let source_y = out
+                    .lines()
+                    .position(|line| line.contains("Source"))
+                    .unwrap();
+                let source_border = out.lines().nth(source_y + 1).unwrap();
+                let join_x = source_border
+                    .chars()
+                    .position(|ch| ch == '┬')
+                    .expect("source attachment");
+                let source_turn = out
+                    .lines()
+                    .nth(source_y + 2)
+                    .and_then(|line| line.chars().nth(join_x));
+                assert!(
+                    matches!(source_turn, Some('╰' | '╯' | '┼' | '├' | '┤')),
+                    "source turn must connect upward to its border:\n{out}"
+                );
+            }
             for text in ["Source", "Neighbor", "Target", "Keep: intact", "Around"] {
                 assert_eq!(out.matches(text).count(), 1, "{out}");
             }

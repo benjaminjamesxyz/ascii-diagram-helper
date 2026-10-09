@@ -61,9 +61,9 @@ Alignment checks per style:
 
 ### 1.5 Output modes
 
-- `--markdown`: output wrapped in a fenced code block; inner content byte-identical to the plain render
+- `--markdown`: output wrapped in a safe fenced code block; inner content byte-identical to the plain render, with a newline after the closing fence
 - `--color always` / `--color never` / default auto: with `never` the output must contain **zero ANSI escape bytes** (`grep -c $'\033'` = 0); with `always`, SGR appears exactly around intended glyphs
-- `NO_COLOR=1` env: plain output. Documented precedence: explicit `--color always` **wins over** `NO_COLOR` (no-color.org compliant) — verify this exact behavior
+- `NO_COLOR=1` suppresses unstyled auto output; explicitly styled input activates auto color by design. Explicit `--color always` forces color; `--color never` suppresses even explicit styling. Tool `color:false` must suppress ANSI too — verify each path rather than treating all auto inputs alike.
 - Colored vs plain render of the same spec must differ **only** in escape bytes (strip SGR, compare)
 
 ### 1.6 Input modes — all four paths, same result

@@ -1,3 +1,42 @@
+# Sprint v0.12.1 — Firmware Review Fixes
+
+**Status:** Implementation and integrated verification complete.
+**Integration branch:** `sprint/v0.12.1`; base `93fcae5`.
+**Coordination:** four GPT implementation workers in isolated worktrees; Scrum Master maintained the deduplicated common ledger at `local://sprint-v0.12.1-ledger.md`. Parent owned merges, final gates, runtime acceptance and release synchronization. No upstream push.
+
+## Fix ledger
+
+| Owner | Review IDs | Implemented behavior | Commits |
+|---|---|---|---|
+| FlowDev | ALIGN-01/STRESS-01, ALIGN-03, ALIGN-04, ROUTE-01/STRESS-02 | Recursive whole-group packing, member/nesting padding, odd-width decision ingress, intact titles with connected crossing detours; LR groups pack on Y without changing X/ranks. | `81d8d31`, `cc139d27`, `a116d54` |
+| ArchDev + parent | ALIGN-02, ALIGN-05/ROUTE-02 | Common top-level frame width without widening nested containers; sibling corridor clearance; route-first label placement retains all three firmware connection labels; legal terminal bends and joined source turns. | `9f802df`, `79ec81e`, `c63c604` |
+| CliDev | MODES-01, MODES-02/CLI-OMP-03 | Closing markdown fence ends in LF; options may follow bare files/quoted DSL; literal `--` and argument-error exits preserved. Color help now describes the intentional explicit-style auto behavior. | `ea07415` |
+| ExtDev | CLI-OMP-01, CLI-OMP-04, CLI-OMP-05 | Header-anchored Mermaid auto-color guard preserves JSON; tool `color:false` sends `--color never`; local command help; ANSI/CJK-aware result framing. | `31db238` |
+
+Runtime verification caught two follow-ups beyond the initially green suite: overlapping README LR groups and an unjoined narrow architecture source turn. Both are fixed and covered by actual render checks. The incidental moved-child ordering assertion was removed, retaining the original orientation/non-origin geometry invariants (`6f531d5`). The obsolete production `find_subgraph` helper was removed after LR cutover; the remaining test locates its top-level fixture groups directly.
+
+## Intentional behavior
+
+- CLI-OMP-02: explicit diagram colors activate CLI auto color even when piped or with `NO_COLOR`; unstyled auto honors `NO_COLOR`. Explicit `never` suppresses styles; `always` forces color. No precedence reversal.
+- COLOR-01: extended names such as `orange` legitimately use truecolor.
+- MODES-03: four-space-indented backticks cannot close a CommonMark fence.
+- ALIGN-06: sibling node widths remain content-sized; only outer architecture frames are normalized.
+
+## Observed verification
+
+- `cargo test`: **308 passed** (285 library, 23 CLI); targeted source-connectivity and group-containment regressions also passed.
+- `cargo clippy --all-targets`: passed with only the three existing warnings (`int_plus_one`, `module_inception`, `too_many_arguments`). `cargo fmt --check`: passed. Release build succeeded.
+- Extension behavior suite passed with `ASCII_DIAGRAM_BIN` pointing to the current integrated release, not stale `bin/`.
+- Firmware Spec A/B × five styles: complete group titles and all three architecture connection labels retained; colored output is byte-identical after stripping SGR; ASCII variants are 7-bit. Final ASCII sizes: **A 54 rows × 181 columns**, **B 28 × 83**.
+- Seven input paths × two specs × five styles: **70 byte-identical runs**. Ten markdown bodies match plain output and close with LF; trailing flags, literal `--`, exit-2 option errors and intended color precedence exercised.
+- All **35** built-in example/style renders succeeded; **25** unaffected renderer/style outputs stayed byte-identical to the local v0.12.0 binary.
+- Exact README LR input and four-/eight-motor fan-outs exercised in all five styles; narrow column/nested-column/row routes preserve neighboring properties and labels.
+- Real installed `pi-tui` Markdown/Text components exercised tool JSON, explicit color suppression, command, transformer and assistant-message output. CJK/ANSI frame geometry and color fidelity passed. This is component-level runtime evidence, **not a live user-session reload claim**.
+
+README flowchart/architecture examples were regenerated from the release CLI; CLI/color/width contracts and bundled skills updated. Wide firmware views may still wrap in narrow terminals; split them into focused diagrams. No automatic fit-to-terminal feature was added.
+
+---
+
 # Sprint v0.12.0 — Post-QA Hardening: 88-Defect Fix Campaign
 
 **Goal:** Fix every verified defect from the 2026-10-09 QA campaign

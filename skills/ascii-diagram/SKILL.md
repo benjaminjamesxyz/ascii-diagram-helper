@@ -116,8 +116,7 @@ You can also run the binary directly via bash:
 ./bin/ascii-diagram --color always dsl "graph TD; A --> B; classDef hot stroke:red; class A hot"
 ```
 
-Pi `/diagram` command accepts `--color` to force ANSI colors in the rendered fence
-(e.g. `/diagram --color graph TD; A --> B`); default is plain for transcript/copy safety.
+Pi `/diagram --color` forces ANSI colors even with `NO_COLOR`; unstyled command input is plain by default. `/diagram --help` or `-h` shows usage. `draw_diagram` and automatic Mermaid rendering enable color by default, with cyan/blue defaults for unstyled flowcharts; `draw_diagram` `color:false` suppresses explicit styles too.
 
 ## Terminal Display & Width Guidelines (Avoid Diagram Wrapping)
 
@@ -141,11 +140,11 @@ To ensure diagrams always display cleanly in any terminal:
 
 - **Edges**: solid `-->`, dashed `-.->`, no arrow `---`, bidirectional `<-->` / `<==>`, reverse `<--`, thick `==>` / `<==>` (heavy line weight); labels via `-->|label|` or `-- "label" -->`
 - **Shapes**: `[box]`, `(rounded)`, `((circle))`, `[[subprocess]]`, `{diamond}`, `([stadium])`, `[(database)]`
-- Mermaid `subgraph id [Title]` ... `end` renders as a labeled group box (nesting supported; members = nodes first declared inside). Per-subgraph `direction` is ignored
-- **Colors**: `classDef`/`class`/`style` `stroke:<name|#hex>` colorizes node borders + edge lines; `linkStyle N stroke:<color>` colorizes edges. Named colors: `red green yellow blue magenta cyan white black grey gray orange purple brown bright*`. Hex: `#ff8800` / `#f80`. Label text stays terminal-default — colors emphasize structure without hurting text readability. Emits ANSI 16 (theme-adaptive) for names, truecolor for hex
-- `classDef` / `class` / `style` / `linkStyle`: only `stroke-dasharray` (dashed) and `stroke:<color>` are applied; `fill`, `stroke-width` and other props are ignored
+- Mermaid `subgraph id [Title]` ... `end` renders as a labeled group box (nesting supported; members = nodes first declared inside). Edge-isolated subgraphs honor their own `direction`. Shared-rank groups reserve padding and route crossings around complete titles.
+- **Colors**: `classDef`/`class`/`style` `stroke:<name|#hex>` colorizes borders; `fill:<name|#hex>` tints labels. `classDef default` styles unclassed nodes; `linkStyle default` styles otherwise unstyled edges. Named colors: `red green yellow blue magenta cyan white black grey gray orange purple brown bright*`. Standard ANSI names are theme-adaptive; extended names (`orange`, `purple`, `brown`) and hex (`#ff8800`, `#f80`) use truecolor. Explicit styles activate CLI auto color even when piped or with `NO_COLOR`; `--color never` suppresses them.
+- `stroke-dasharray` sets dashed lines; node `stroke-width:2px` / `3px` selects heavy / double borders. Unsupported style properties are ignored.
 - **Empty labels / dangling edges**: `A -->` or `--> B` is a hard error; an explicitly empty label (`A[ ]`) falls back to the node id with a stderr warning. Undeclared edge endpoints are auto-declared as nodes (Mermaid parity)
 - **Widths**: sequence message/note labels never wrap or truncate (the diagram grows; target $\le 100$ cols); `U+FE0F` counts 1 col but renders 2 in emoji terminals; zero-width chars (ZWSP, bidi controls) are stripped; max 2 combining marks kept per base character
 - **Trees**: an annotation is only the final `(…)` group of a line (`foo(1).rs` stays literal); one leading bullet (`- `/`* `/`+ `) is stripped; a trailing `/` is plain text (no directory styling)
-- **Architecture JSON**: unknown fields are ignored — connections take `color`, not Mermaid's `stroke`
+- **Architecture JSON**: top-level container frames align at a common outer width; nested containers keep their measured widths. Routes reserve a blank column beside unrelated component walls. Unknown fields are ignored — connections take `color`, not Mermaid's `stroke`.
 - **Tips**: prefer `TB` for cascades with multiple feedback loops; declare same-rank branch targets left-to-right in escape order so loop-back channels stay clear.

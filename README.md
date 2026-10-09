@@ -1,4 +1,4 @@
-# ascii-diagram v0.12.0
+# ascii-diagram v0.12.1
 
 High-precision, Rust-powered terminal ASCII & Unicode diagram generator for humans and AI agents.
 
@@ -83,17 +83,29 @@ graph LR
 
 **Rendered Output:**
 ```text
- ╭─ Frontend Layer ─╮
- │                  │
- │ ╭─────────╮      ├─ Backend Cluster ──────────────────────────────────╮
- │ │ Web App │─────╮│                                                    │
- │ ╰─────────╯     ││                                 ╭────────────────╮ │
- │                 ││ ╭────── ◇ ──────╮  Token Check  (                ) │
- │                 ├┼►├  API Gateway  ┤──────────────►(  User Auth DB  ) │
- │ ╭────────────╮  ││ ╰───────────────╯               (                ) │
- │ │ Mobile App │──╯│                                 ╰────────────────╯ │
- │ ╰────────────╯   ├────────────────────────────────────────────────────╯
- ╰──────────────────╯
+
+
+ ╭  Frontend Layer  ──────────────────╮
+ │                                    │
+ │ ╭─────────╮                        │
+ │ │ Web App │─────╮                  │
+ │ ╰─────────╯     │                  │
+ │                 │                  │
+ │                 │                  │
+ │ ╭────────────╮  │                  │
+ │ │ Mobile App │──┤                  │
+ │ ╰────────────╯  │                  │
+ ╰─────────────────┼──────────────────╯
+                   │
+                   │
+                   │╭  Backend Cluster  ─────────────────────────────────╮
+                   ││                                                    │
+                   ││                                 ╭────────────────╮ │
+                   ││ ╭────── ◇ ──────╮  Token Check  (                ) │
+                   ╰┼►├  API Gateway  ┤──────────────►(  User Auth DB  ) │
+                    │ ╰───────────────╯               (                ) │
+                    │                                 ╰────────────────╯ │
+                    ╰────────────────────────────────────────────────────╯
 ```
 
 ---
@@ -168,10 +180,10 @@ Declarative JSON specifications with row/column layouts, component property badg
 
 ╭─────────────────── Production VPC ───────────────────╮
 │                                                      │
-│ ╭────────────╮                ╭────────────────────╮ │
-│ │ API Server │                │      Database      │ │
-│ ├────────────┤   SQL Query    ├────────────────────┤ │
-│ │ Port: 8080 │───────────────►│ Engine: PostgreSQL │ │
+│ ╭────────────╮   SQL Query    ╭────────────────────╮ │
+│ │ API Server ├───────────────►┤      Database      │ │
+│ ├────────────┤                ├────────────────────┤ │
+│ │ Port: 8080 │                │ Engine: PostgreSQL │ │
 │ │ Lang: Rust │                │ Port: 5432         │ │
 │ ╰────────────╯                ╰────────────────────╯ │
 │                                                      │
@@ -464,8 +476,10 @@ Choose from 5 distinct box-drawing character sets:
 #### Global CLI Options
 
 - `-s, --style <STYLE>`: `rounded` (default), `sharp`, `double`, `heavy`, `ascii`.
-- `-m, --markdown`: Wrap output in a markdown fenced code block (` ```text `).
-- `--color <MODE>`: `auto` (default, checks TTY & `NO_COLOR`), `always` (force ANSI), `never`.
+- `-m, --markdown`: Wrap output in a safe markdown fenced code block (` ```text `), with a newline after the closing fence.
+- `--color <MODE>`: `auto` colors explicitly styled input, even when piped or when `NO_COLOR` is set; otherwise it checks TTY and `NO_COLOR`. `always` forces ANSI; `never` suppresses all ANSI.
+
+Options may precede or follow a bare file or quoted DSL input: `ascii-diagram spec.mmd -s double -m`. Quote DSL containing option-like tokens, or use `--` before literal arguments: `ascii-diagram -s ascii -- "graph TD; A --> B"`.
 
 ---
 
@@ -473,7 +487,7 @@ Choose from 5 distinct box-drawing character sets:
 
 `ascii-diagram` integrates directly with the **Pi AI Agent Harness**:
 
-1. **`draw_diagram` Tool**: Agents automatically invoke `draw_diagram` to render flowcharts, sequence diagrams, architectures, stacks, tables, and data structures.
+1. **`draw_diagram` Tool**: Render flowcharts, sequence diagrams, architectures, stacks, tables, and data structures. Color is enabled by default; `color:false` suppresses even explicit styles. Automatic flowchart colors never modify JSON specifications. Result frames fit the diagram's visible width, including ANSI and CJK content.
 2. **`/diagram` Interactive Command**: Users can render diagrams interactively inside Pi TUI:
    ```bash
    /diagram graph TD; Client --> Server
@@ -481,9 +495,11 @@ Choose from 5 distinct box-drawing character sets:
    /diagram --style ascii ds tree 8 3 10 1 6
    ```
    Leading flags combine in any order before the diagram text:
-   - `--color`: opt-in ANSI colors (superseded by `NO_COLOR`)
+   - `--color`: force ANSI colors, including cyan/blue defaults for unstyled flowcharts; overrides `NO_COLOR`
    - `--style <rounded|sharp|double|heavy|ascii>`: border style
    - `--example <type>`: render a built-in reference example instead of DSL
+   - `--help` / `-h`: show usage without invoking the renderer
+   Assistant Mermaid blocks are rendered automatically through the `assistant_message` hook in omp (or the Markdown transformer in upstream Pi). Unstyled flowcharts receive cyan borders and blue connectors; user-defined classes are preserved. Reload an existing session after updating the installed extension.
 3. **Bundled Agent Skills**:
    - `skills/ascii-diagram`: Prompts AI agents to generate structured terminal diagrams instead of breaking text layouts.
    - `skills/ascii-diagram-qa`: Systematic QA testing probe matrix and reviewer audit protocol for diagram types.
@@ -495,8 +511,9 @@ Choose from 5 distinct box-drawing character sets:
 | Feature / Category | Limitation / Behavior | Recommendation / Workaround |
 |---|---|---|
 | **Subgraph Direction** | `direction` per subgraph applies when the subgraph is edge-isolated | Minimize cross-edges between subgraphs if custom subgraph direction is needed |
+| **Group Layout Width** | Padding and whole-title separation can widen parallel subgraph layouts beyond the terminal; sibling node widths remain content-sized | Shorten group titles or split a dense firmware diagram into focused views |
 | **Edge Density** | Dense cross-branch edges (>2 per node) share corridor tracks | Keep cross-branch feeds $\le 2$ per node; use dashed `-.->` lines for supervisory control |
-| **Color Support** | `stroke:<color>` colorizes borders/lines; `fill:<color>` tints text labels | Use `--color always` to override `NO_COLOR` when explicit ANSI output is required |
+| **Color Support** | `stroke:<color>` colorizes borders/lines; `fill:<color>` tints labels. Standard ANSI names adapt to the theme; extended names (`orange`, `purple`, `brown`) and hex use truecolor | Use `--color never` for guaranteed plain output, or `--color always` to force ANSI |
 | **Header-only DSL** | `flowchart TD` or `sequenceDiagram` without nodes returns empty output | Always declare at least one node or participant |
 | **Pipe Disambiguation** | Single-pipe text without headers parses as `tree`, not `table` | Use explicit `table` keyword or standard pipe headers for tables |
 | **Implicit Nodes** | Undeclared edge endpoints (`A --> Z`) are auto-declared as new nodes — Mermaid parity, by design | Declare participants explicitly when a typo should error instead of creating a node |

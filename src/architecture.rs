@@ -241,13 +241,22 @@ impl<'a> ArchitectureRenderer<'a> {
     }
 
     fn place_label(canvas: &mut Canvas, bounds: Rect, px: usize, py: usize, label: &str) -> bool {
-        if let Some((sx, sy)) = canvas.find_safe_text_pos_within(bounds, px, py, label) {
+        let label_w = UnicodeWidthStr::width(label);
+        let has_clearance = |x: usize, y: usize| {
+            x > bounds.x
+                && x + label_w < bounds.x + bounds.width
+                && canvas.can_place_text(x - 1, y, " ")
+                && canvas.can_place_text(x + label_w, y, " ")
+        };
+        if let Some((sx, sy)) = canvas.find_safe_text_pos_within(bounds, px, py, label)
+            && has_clearance(sx, sy)
+        {
             canvas.draw_text(sx, sy, label);
             return true;
         }
-        // The local search can miss a free corridor on a long vertical route.
-        // Keep the nearest safe position in the same bounded search window.
-        let label_w = UnicodeWidthStr::width(label);
+        // The local search can miss a free corridor on a long vertical route,
+        // or find text space without a blank display cell beside each end.
+        // Keep the nearest clear position in the same bounded search window.
         let mut best = None;
         if label_w <= bounds.width {
             for y in bounds.y..bounds.y + bounds.height {
@@ -255,6 +264,7 @@ impl<'a> ArchitectureRenderer<'a> {
                     let distance = x.abs_diff(px) + y.abs_diff(py);
                     if best.is_none_or(|(_, _, d)| distance < d)
                         && canvas.can_place_text(x, y, label)
+                        && has_clearance(x, y)
                     {
                         best = Some((x, y, distance));
                     }
@@ -1023,6 +1033,74 @@ mod tests {
     use crate::theme::BoxStyle;
 
     #[test]
+    fn connection_labels_keep_display_cell_clearance_at_region_boundaries() {
+        for label in ["DMA", "接口"] {
+            let label_w = UnicodeWidthStr::width(label);
+            for left in [0, 5] {
+                let bounds = Rect::new(left, 1, label_w + 2, 1);
+                let mut canvas = Canvas::new(20, 3);
+                assert!(ArchitectureRenderer::place_label(
+                    &mut canvas,
+                    bounds,
+                    left,
+                    1,
+                    label,
+                ));
+                let output = canvas.render(&Theme::new(BoxStyle::Rounded));
+                assert_eq!(output.matches(label).count(), 1, "{output}");
+                let row = output.lines().find(|line| line.contains(label)).unwrap();
+                let (before, _) = row.split_once(label).unwrap();
+                let x = UnicodeWidthStr::width(before);
+                assert!(x > bounds.x && x + label_w < bounds.x + bounds.width);
+                for margin_x in [x - 1, x + label_w] {
+                    let margin = canvas.get_cell(margin_x, 1).unwrap();
+                    assert_eq!(margin.ch, ' ');
+                    assert!(!margin.is_line && !margin.is_continuation);
+                }
+
+                let mut too_narrow = Canvas::new(20, 3);
+                assert!(!ArchitectureRenderer::place_label(
+                    &mut too_narrow,
+                    Rect::new(left, 1, label_w + 1, 1),
+                    left,
+                    1,
+                    label,
+                ));
+                assert!(!too_narrow.render(&Theme::ascii()).contains(label));
+            }
+        }
+    }
+
+    #[test]
+    fn connection_labels_clear_vertical_routes_without_entering_components() {
+        for label in ["DMA", "接口"] {
+            for preferred_x in [3, 9] {
+                let mut canvas = Canvas::new(20, 3);
+                canvas.draw_vline(2, 0, 2);
+                canvas.draw_vline(13, 0, 2);
+                canvas.add_obstacle(Rect::new(4, 1, 2, 1));
+                assert!(ArchitectureRenderer::place_label(
+                    &mut canvas,
+                    Rect::new(2, 1, 12, 1),
+                    preferred_x,
+                    1,
+                    label,
+                ));
+                let output = canvas.render(&Theme::new(BoxStyle::Rounded));
+                assert_eq!(output.matches(label).count(), 1, "{output}");
+                let row = output.lines().find(|line| line.contains(label)).unwrap();
+                let (before, after) = row.split_once(label).unwrap();
+                assert!(before.ends_with(' ') && after.starts_with(' '), "{row}");
+                let x = UnicodeWidthStr::width(before);
+                assert!(x > 5 && x + UnicodeWidthStr::width(label) < 13);
+                for route_x in [2, 13] {
+                    assert!(canvas.get_cell(route_x, 1).unwrap().is_line);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn component_stroke_colors_the_complete_property_divider() {
         let spec: ArchitectureSpec = serde_json::from_str(
             r#"{"type":"architecture","containers":[{"id":"c","title":"Container",
@@ -1179,6 +1257,13 @@ mod tests {
                     out.matches(conn.label.as_deref().unwrap()).count(),
                     1,
                     "{out}"
+                );
+                let label = conn.label.as_deref().unwrap();
+                let row = out.lines().find(|line| line.contains(label)).unwrap();
+                let (before, after) = row.split_once(label).unwrap();
+                assert!(
+                    before.ends_with(' ') && (after.is_empty() || after.starts_with(' ')),
+                    "{style:?}: connection label needs blank clearance: {row}"
                 );
             }
             let (canvas, bounds, containers) = routing_layout(&renderer);

@@ -14,6 +14,7 @@
     "ascii-diagram": "bin/ascii-diagram"
   },
   "scripts": {
+    "prepare": "command -v cargo >/dev/null 2>&1 && npm run build || echo 'ascii-diagram: cargo not found — run \"cargo build --release\" manually or install the binary to ~/.local/bin'",
     "build": "cargo build --release && mkdir -p bin && cp target/release/ascii-diagram bin/ascii-diagram && (mkdir -p ~/.local/bin && cp target/release/ascii-diagram ~/.local/bin/ascii-diagram 2>/dev/null || echo 'note: skipped ~/.local/bin install')",
     "sync:pi": "mkdir -p ~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper/bin ~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper/target/release && cp bin/ascii-diagram ~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper/bin/ascii-diagram && cp bin/ascii-diagram ~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper/target/release/ascii-diagram && cp extensions/ascii-diagram.ts ~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper/extensions/ascii-diagram.ts && cp -r skills/. ~/.pi/agent/git/github.com/benjaminjamesxyz/ascii-diagram-helper/skills/ && echo 'synced to installed pi package — reload session to apply'",
     "test": "cargo test && node --experimental-strip-types tests/extension.test.js"

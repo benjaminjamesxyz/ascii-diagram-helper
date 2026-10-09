@@ -116,7 +116,7 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         // An unrecognized `xxxDiagram` / `gitGraph` header must not render
         // as a node label (stateDiagram-v2 used to become a box).
         Err(format!(
-            "unsupported diagram type `{}` — supported: `graph|flowchart <TB|LR|RL|BT>`, `sequenceDiagram`, `tree`, `stack`/`memory`, `table`, `ds <tree|btree|linkedlist|array>`, or a JSON diagram spec",
+            "unsupported diagram type `{}` — supported: `graph|flowchart <TB|LR|RL|BT>`, `sequenceDiagram`, `tree`, `stack`/`memory`, `table`, `ds <tree|btree|linkedlist|doublylinkedlist|array>`, or a JSON diagram spec",
             first_line.split_whitespace().next().unwrap_or(first_line)
         ))
     } else if first_line.starts_with("stack")
@@ -163,7 +163,7 @@ pub fn parse_dsl_or_json(input: &str, default_style: BoxStyle) -> Result<Diagram
         // prose as a one-node diagram with exit 0; the documented contract
         // (and CLI-04) is a clear error instead.
         Err(
-            "unrecognized diagram input — supported: `graph|flowchart <TB|LR|RL|BT>` (e.g. `graph TD; A --> B`), `sequenceDiagram` (e.g. `sequenceDiagram A->>B: hi`), `tree` (indented lines, or `- ` bullet lists), `stack`/`memory`, `table`, `ds <tree|btree|linkedlist|array>`, or a JSON diagram spec"
+            "unrecognized diagram input — supported: `graph|flowchart <TB|LR|RL|BT>` (e.g. `graph TD; A --> B`), `sequenceDiagram` (e.g. `sequenceDiagram A->>B: hi`), `tree` (indented lines, or `- ` bullet lists), `stack`/`memory`, `table`, `ds <tree|btree|linkedlist|doublylinkedlist|array>`, or a JSON diagram spec"
                 .to_string(),
         )
     }
@@ -244,29 +244,31 @@ fn is_table_dsl(input: &str) -> bool {
 /// message names the fix.
 const DS_DSL_HINT: &str = "expected `ds tree <value...>`, \
     `ds btree <rootkeys> | <level cells> | ...`, \
-    `ds linkedlist <node...>`, or `ds array <value...>`, e.g. \
-    `ds tree 8 3 10 1 6`, `ds btree 10,20 | 3,5 12,15 25,30`, \
-    `ds linkedlist 10 20 30`, or `ds array a b c`";
+    `ds linkedlist <node...>`, `ds doublylinkedlist <node...>`, or \
+    `ds array <value...>`, e.g. `ds tree 8 3 10 1 6`, \
+    `ds btree 10,20 | 3,5 12,15 25,30`, `ds linkedlist 10 20 30`, \
+    `ds doublylinkedlist 10 20 30`, or `ds array a b c`";
 
 /// Parses the `ds` DSL shorthand into a [`DataStructureSpec`] diagram.
 ///
-/// Two forms are supported:
+/// Supported forms:
 /// - `ds tree <v...>` — binary tree from insertion order (BST build), e.g.
 ///   `ds tree 8 3 10 1 6`
 /// - `ds btree <rootkeys> | <next-level cells> | ...` — pipe-separated
 ///   levels; each cell is a comma-separated key list, cells within a level
-///   are whitespace-separated. Children are assigned level-order (BFS): a
-///   node with `n` keys consumes up to `n + 1` cells as its children, and
-///   fewer cells render as-is (same as the JSON path).
+///   are whitespace-separated. Each level fills only the prior level's
+///   parents left-to-right, up to `keys.len() + 1` children per parent.
+///   Partial child sets are allowed; excess cells error at their level.
 /// - `ds linkedlist <n...>` — linked list of the given values, e.g.
 ///   `ds linkedlist 10 20 30`
+/// - `ds doublylinkedlist <n...>` — bidirectional list with head/tail labels
 /// - `ds array <v...>` — array cells with an index ruler, e.g.
 ///   `ds array a b c`
 ///
 /// # Errors
 ///
-/// Returns `Err` naming the expected syntax when the kind is unknown or a
-/// key list (root keys or a level cell) is empty.
+/// Returns `Err` naming the expected syntax when the kind is unknown,
+/// values or keys are empty, or a B-tree level exceeds its parent capacity.
 pub fn parse_datastructure_dsl(
     input: &str,
     default_style: BoxStyle,
@@ -313,33 +315,32 @@ pub fn parse_datastructure_dsl(
             }
             let levels = rest.split('|').skip(1);
 
-            // Flatten the remaining levels into a cell stream and attach
-            // children level-order (BFS). A node with `n` keys takes up to
-            // `n + 1` cells; running dry early is permissive (rendered
-            // as-is), leftovers mean no parent had a free slot.
-            let mut cells = levels
-                .flat_map(str::split_whitespace)
-                .map(|cell| parse_ds_keys(cell, "level cell"))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_iter()
-                .peekable();
+            // Newly attached children cannot consume cells from their own level.
             let mut queue: std::collections::VecDeque<&mut DsNode> =
                 std::collections::VecDeque::new();
             queue.push_back(&mut root);
-            while let Some(node) = queue.pop_front() {
-                if cells.peek().is_none() {
-                    break;
+            for (idx, level) in levels.enumerate() {
+                let mut cells = level
+                    .split_whitespace()
+                    .map(|cell| parse_ds_keys(cell, "level cell"))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter();
+                for _ in 0..queue.len() {
+                    let node = queue.pop_front().expect("prior frontier node");
+                    for keys in cells.by_ref().take(node.keys.len() + 1) {
+                        node.children.push(DsNode {
+                            keys,
+                            ..DsNode::default()
+                        });
+                    }
+                    queue.extend(node.children.iter_mut());
                 }
-                for _ in 0..=node.keys.len() {
-                    let Some(keys) = cells.next() else {
-                        break;
-                    };
-                    node.children.push(DsNode {
-                        keys,
-                        ..DsNode::default()
-                    });
+                if cells.next().is_some() {
+                    return Err(format!(
+                        "too many cells at level {} in `ds btree` input; cells must fit the previous level's child slots; {DS_DSL_HINT}",
+                        idx + 2
+                    ));
                 }
-                queue.extend(node.children.iter_mut());
             }
             Ok(DiagramSpec::DataStructure(DataStructureSpec {
                 style: default_style,
@@ -348,16 +349,18 @@ pub fn parse_datastructure_dsl(
                 ..DataStructureSpec::default()
             }))
         }
-        "linkedlist" => {
+        "linkedlist" | "doublylinkedlist" => {
             let nodes: Vec<String> = rest.split_whitespace().map(str::to_string).collect();
             if nodes.is_empty() {
-                return Err(format!(
-                    "ds linkedlist needs at least one node; {DS_DSL_HINT}"
-                ));
+                return Err(format!("ds {kind} needs at least one node; {DS_DSL_HINT}"));
             }
             Ok(DiagramSpec::DataStructure(DataStructureSpec {
                 style: default_style,
-                kind: DsKind::LinkedList,
+                kind: if kind == "linkedlist" {
+                    DsKind::LinkedList
+                } else {
+                    DsKind::DoublyLinkedList
+                },
                 nodes,
                 ..DataStructureSpec::default()
             }))
@@ -3254,18 +3257,82 @@ mod tests {
     }
 
     #[test]
-    fn test_ds_btree_extra_cells_nest_deeper() {
-        // Permissive arity cuts both ways: 1-key root takes 2 cells, the
-        // third cell fills the first child's second slot (BFS order).
-        let spec = match parse_dsl_or_json("ds btree 10 | 3 5 7", BoxStyle::Rounded).unwrap() {
-            DiagramSpec::DataStructure(ds) => ds,
-            other => panic!("Expected datastructure, got {other:?}"),
+    fn test_ds_btree_sparse_levels_match_explicit_topology() {
+        let dsl = parse_dsl_or_json("ds btree 40 | 20 | 10 30", BoxStyle::Rounded).unwrap();
+        let json = parse_dsl_or_json(
+            r#"{"type":"datastructure","kind":"btree","btree_root":{"keys":[40],"children":[{"keys":[20],"children":[{"keys":[10]},{"keys":[30]}]}]}}"#,
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&dsl).unwrap(),
+            serde_json::to_value(&json).unwrap()
+        );
+        assert_eq!(ds_render(&dsl), ds_render(&json));
+    }
+
+    #[test]
+    fn test_ds_btree_overfull_level_errors_but_json_remains_permissive() {
+        for (input, level) in [
+            ("ds btree 40 | 10 20 50", 2),
+            ("ds btree 40 | 20 | 10 30 50", 3),
+        ] {
+            let err = parse_dsl_or_json(input, BoxStyle::Rounded).unwrap_err();
+            assert!(
+                err.contains(&format!("too many cells at level {level}")),
+                "{err}"
+            );
+        }
+        let json = parse_dsl_or_json(
+            r#"{"type":"datastructure","kind":"btree","btree_root":{"keys":[40],"children":[{"keys":[10]},{"keys":[20]},{"keys":[50]}]}}"#,
+            BoxStyle::Rounded,
+        )
+        .unwrap();
+        let DiagramSpec::DataStructure(ds) = &json else {
+            panic!("expected data structure");
         };
-        let root = spec.btree_root.as_ref().unwrap();
-        assert_eq!(root.children.len(), 2);
-        assert_eq!(root.children[0].children.len(), 1);
-        assert_eq!(root.children[0].children[0].keys, vec!["7".to_string()]);
-        assert_eq!(root.children[1].children.len(), 0);
+        assert_eq!(ds.btree_root.as_ref().unwrap().children.len(), 3);
+        assert!(ds_render(&json).contains("50"));
+    }
+
+    #[test]
+    fn test_ds_btree_partial_frontier_keeps_duplicate_occurrences() {
+        let spec =
+            parse_dsl_or_json("ds btree 40 | 20 60 | 10 10 50 | 5", BoxStyle::Rounded).unwrap();
+        let DiagramSpec::DataStructure(ds) = spec else {
+            panic!("expected data structure");
+        };
+        let root = ds.btree_root.unwrap();
+        assert_eq!(root.children[0].children.len(), 2);
+        assert_eq!(root.children[1].children.len(), 1);
+        assert_eq!(root.children[0].children[0].keys, ["10"]);
+        assert_eq!(root.children[0].children[1].keys, ["10"]);
+        assert_eq!(root.children[1].children[0].keys, ["50"]);
+        assert_eq!(root.children[0].children[0].children[0].keys, ["5"]);
+        assert!(root.children[0].children[1].children.is_empty());
+        assert!(root.children[1].children[0].children.is_empty());
+    }
+
+    #[test]
+    fn test_ds_doublylinkedlist_numeric_json_matches_whitespace_tokens() {
+        for values in ["10", "10 20 10"] {
+            let dsl =
+                parse_dsl_or_json(&format!("ds doublylinkedlist {values}"), BoxStyle::Rounded)
+                    .unwrap();
+            let json = parse_dsl_or_json(
+                &format!(
+                    r#"{{"type":"datastructure","kind":"doublylinkedlist","nodes":[{}]}}"#,
+                    values.replace(' ', ",")
+                ),
+                BoxStyle::Rounded,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(&dsl).unwrap(),
+                serde_json::to_value(&json).unwrap()
+            );
+            assert_eq!(ds_render(&dsl), ds_render(&json));
+        }
     }
 
     #[test]
@@ -3279,6 +3346,7 @@ mod tests {
             ("ds btree 10, | 3", "empty root key"),
             ("ds btree 10 | 3,,5", "empty level cell"),
             ("ds linkedlist", "needs at least one node"),
+            ("ds doublylinkedlist", "needs at least one node"),
             ("ds array", "needs at least one value"),
         ] {
             let err = parse_dsl_or_json(input, BoxStyle::Rounded)

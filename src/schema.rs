@@ -389,7 +389,8 @@ pub struct ArchitectureSpec {
 
 /// Data-structure diagram kind: `tree` (binary tree, `value`/`left`/`right`
 /// nodes or `values` insertion order), `btree` (multi-key nodes with
-/// `keys`/`children`), `linkedlist` (value chain in `nodes`), `array`
+/// `keys`/`children`), `linkedlist` (value chain in `nodes`),
+/// `doublylinkedlist` (prev/value/next chain with head/tail), `array`
 /// (boxed cells from `values`), `queue` (front/rear-labeled single row of
 /// `nodes`), `heap` (complete binary tree from `values`), or `graph`
 /// (adjacency buckets over `nodes` + `edges`).
@@ -400,6 +401,7 @@ pub enum DsKind {
     Tree,
     BTree,
     LinkedList,
+    DoublyLinkedList,
     Array,
     Queue,
     Heap,
@@ -443,8 +445,10 @@ impl DsNode {
 }
 
 /// Data-structure diagram: textbook-style trees with pointer links.
-/// JSON-only input, e.g.
+/// JSON input or `ds tree|btree|linkedlist|doublylinkedlist|array` shorthand, e.g.
 /// `{"type":"datastructure","kind":"tree","values":[8,3,10,1,6]}`.
+/// Native cells display controls, quotes, backslashes, and edge whitespace
+/// with reversible JSON-compatible quoting; stored values remain unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct DataStructureSpec {
     #[serde(default)]
@@ -465,7 +469,8 @@ pub struct DataStructureSpec {
     /// B-tree root (`kind: "btree"`).
     #[serde(default)]
     pub btree_root: Option<DsNode>,
-    /// Value chain for `kind: "linkedlist"` (rendered head → … → ∅), the
+    /// Value chain for `kind: "linkedlist"` (head → … → ∅) or
+    /// `"doublylinkedlist"` (head/tail with bidirectional links), the
     /// single-cell boxes for `kind: "queue"`, and the vertices for
     /// `kind: "graph"`. Numbers may be given unquoted in JSON.
     #[serde(default, deserialize_with = "string_or_number::vec")]
@@ -474,6 +479,9 @@ pub struct DataStructureSpec {
     /// `"head"`).
     #[serde(default)]
     pub head_label: Option<String>,
+    /// Label drawn after the last doubly linked-list node (default `"tail"`).
+    #[serde(default)]
+    pub tail_label: Option<String>,
     /// Label drawn before the first queue box (`kind: "queue"`; default
     /// `"front"`).
     #[serde(default)]
@@ -538,6 +546,37 @@ mod tests {
             assert_eq!(ds.nodes, vec!["1", "2", "3"]);
         } else {
             panic!("expected DataStructure variant");
+        }
+    }
+
+    #[test]
+    fn test_doublylinkedlist_json_preserves_values_and_endpoint_text() {
+        let parsed: DiagramSpec = serde_json::from_str(
+            r#"{"type":"datastructure","kind":"doublylinkedlist","nodes":[10,"10",0,"","NULL","a\nb","中🚀"],"head_label":"","tail_label":" t\t "}"#,
+        )
+        .unwrap();
+        let DiagramSpec::DataStructure(ds) = parsed else {
+            panic!("expected data structure");
+        };
+        assert_eq!(ds.kind, DsKind::DoublyLinkedList);
+        assert_eq!(ds.nodes, ["10", "10", "0", "", "NULL", "a\nb", "中🚀"]);
+        assert_eq!(ds.head_label.as_deref(), Some(""));
+        assert_eq!(ds.tail_label.as_deref(), Some(" t\t "));
+        let encoded = serde_json::to_value(&ds).unwrap();
+        assert_eq!(encoded["kind"], "doublylinkedlist");
+        assert_eq!(encoded["nodes"][5], "a\nb");
+        assert_eq!(encoded["tail_label"], " t\t ");
+    }
+
+    #[test]
+    fn test_doublylinkedlist_json_rejects_null_and_nonsequence_nodes() {
+        for nodes in ["null", "10", "\"node\"", "{}"] {
+            let json =
+                format!(r#"{{"type":"datastructure","kind":"doublylinkedlist","nodes":{nodes}}}"#);
+            assert!(
+                serde_json::from_str::<DiagramSpec>(&json).is_err(),
+                "{json}"
+            );
         }
     }
 

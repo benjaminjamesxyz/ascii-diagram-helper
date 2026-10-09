@@ -1,4 +1,4 @@
-# ascii-diagram v0.12.1
+# ascii-diagram v0.13.0
 
 High-precision, Rust-powered terminal ASCII & Unicode diagram generator for humans and AI agents.
 
@@ -34,13 +34,17 @@ High-precision, Rust-powered terminal ASCII & Unicode diagram generator for huma
 
 ---
 
-## v0.12.1 release highlights
+## v0.13.0 release highlights
 
-Firmware diagrams now keep nested groups padded and separated, preserve title-crossing routes and decision ingress, and use less space for group titles. Flowchart labels are placed after routing, with multiline blocks kept in their own connection corridors. Architecture routes retain label margins, sibling clearance, and connected source turns; column layouts reserve enough width to keep connection labels visible beside their routes.
+Native doubly linked lists now support `ds doublylinkedlist 10 20 30` and JSON `kind:"doublylinkedlist"`, with prev/value/next cells, bidirectional links, head/tail labels, and null endpoints. Rounded Unicode borders, arrows, and pointer glyphs remain the default; explicit styles, including ASCII, remain supported.
 
-Stroke redraws preserve color, including complete architecture property dividers. The CLI accepts trailing options after bare input and terminates markdown fences with LF. The extension preserves JSON during automatic coloring, honors explicit `color:false` when freshly loaded, adds command help, and measures ANSI/CJK result frames by visible width.
+Binary trees preserve left/right child placement and heap depth rows. Integral BST labels compare exactly. B-tree shorthand respects pipe-separated levels and reports overflow instead of silently changing ancestry. Colored compartments retain their plain geometry. Reversible label escaping protects native frames and endpoints while preserving raw values; graphs reject duplicate identifiers without collapsing repeated edges. Multiline hierarchy labels retain their gutters, and extension direction options preserve native diagram types.
 
-Release verification passed: **322 Rust tests**, the extension suite, both original firmware specifications in all five styles, **70 byte-identical input-path runs**, and **35 unchanged built-in example/style outputs**. The flight-control diagram measures **54 × 158** rows × columns, down from **54 × 181**; the architecture remains **28 × 83**. See [SPRINT.md](SPRINT.md) for release checks and historical implementation evidence.
+**Compatibility notes:** special labels now display as quoted escapes; B-tree level overflow and duplicate graph identifiers now return errors. Consumers that snapshot binary-tree/heap layouts must allow the corrected geometry. Rust struct-literal consumers of `DataStructureSpec` must supply the new optional `tail_label` field or use `..Default::default()`. No heapification, native deque, or queue/heap/graph shorthand is introduced.
+
+The data-structure sprint passed **338 Rust tests**, the extension suite, and independent all-five-style runtime acceptance. All eight README native examples matched real output. See [SPRINT.md](SPRINT.md) for versioned release checks, the ten-item improvement board, and preserved v0.12.1 release history.
+
+Releases use annotated upstream Git tags with GitHub-generated source archives: [ZIP](https://github.com/benjaminjamesxyz/ascii-diagram-helper/archive/refs/tags/v0.13.0.zip) or [tar.gz](https://github.com/benjaminjamesxyz/ascii-diagram-helper/archive/refs/tags/v0.13.0.tar.gz). Build the tagged source using the instructions below. This distribution path does not imply npm registry publication or a separately uploaded binary.
 
 There is no automatic fit-to-terminal width cap: dense diagrams can still wrap. An already-running session may retain an old tool wrapper that ignores `color:false`; reload after updating. A live session reload has not yet been verified. Use CLI `--color never` when plain output is required.
 
@@ -69,11 +73,11 @@ npm install && npm run build
 
 ### 3. Update an Existing Installation
 
-You need Rust/Cargo, Node.js, and npm. To install the tagged `v0.12.1` release, run the following in your existing repository checkout with a clean working tree:
+You need Rust/Cargo, Node.js, and npm. To install the tagged `v0.13.0` release, run the following in your existing repository checkout with a clean working tree:
 
 ```bash
 git fetch origin --tags
-git switch --detach v0.12.1
+git switch --detach v0.13.0
 npm install && npm run build
 ./bin/ascii-diagram --version
 ```
@@ -319,28 +323,34 @@ Renders standard Computer Science data structures via JSON specs or instant `ds`
 
 ## 🌳 Complete Data Structures Guide
 
-Supports all 7 core data structure visualizers via JSON specifications, with instant CLI `ds` shorthand for trees, B-trees, linked lists, and arrays.
+Supports eight native data structures via JSON: `tree`, `btree`, `linkedlist`, `doublylinkedlist`, `array`, `queue`, `heap`, and `graph`. The `ds` shorthand supports trees, B-trees, singly/doubly linked lists, and arrays.
+
+Native cell and endpoint labels stay on one physical line. Labels containing controls, backslashes, quotes, or leading/trailing whitespace use reversible JSON-compatible quoted escapes; this includes DEL/C1 controls. Widths use the displayed text, while BST comparisons and graph identity use the original values. Ordinary labels and printable Unicode remain intact, including under ASCII border style. Use JSON for labels containing spaces or controls; shorthand splits on whitespace.
 
 ### 1. Binary Search Tree (BST)
 - **CLI Shorthand:** `ascii-diagram "ds tree 8 3 10 1 6 14 4"`
 - **JSON Spec:** `{"type":"datastructure","kind":"tree","values":["8","3","10","1","6","14","4"]}`
 
+`values` builds a BST in insertion order; an explicit `root` with `left`/`right` preserves supplied topology instead. Integral string labels compare exactly by sign and magnitude, without floating-point rounding; decimal labels retain floating-point comparison and other labels compare lexically. Use strings for integers beyond JSON's exact numeric range. Unary children retain their left/right side, and equal-depth binary nodes share a rank.
+
 ```text
-         ╭───╮
-         │ 8 │
-         ╰───╯
-           │
-      ╭────┴─────────╮
-      │              │
-    ╭───╮         ╭────╮
-    │ 3 │         │ 10 │
-    ╰───╯         ╰────╯
-      │              │
-  ╭───┴────╮      ╭────╮
-  │        │      │ 14 │
-╭───╮    ╭───╮    ╰────╯
-│ 1 │    │ 6 │
-╰───╯    ╰───╯
+             ╭───╮
+             │ 8 │
+             ╰───╯
+               │
+       ╭───────┴───────╮
+       │               │
+     ╭───╮          ╭────╮
+     │ 3 │          │ 10 │
+     ╰───╯          ╰────╯
+       │               │
+  ╭────┴─────╮         ╰─╮
+  │          │           │
+╭───╮      ╭───╮      ╭────╮
+│ 1 │      │ 6 │      │ 14 │
+╰───╯      ╰───╯      ╰────╯
+             │
+           ╭─╯
            │
          ╭───╮
          │ 4 │
@@ -350,6 +360,8 @@ Supports all 7 core data structure visualizers via JSON specifications, with ins
 ### 2. B-Tree
 - **CLI Shorthand:** `ascii-diagram "ds btree 10,20 | 3,5 12,15 25,30"`
 - **JSON Spec:** `{"type":"datastructure","kind":"btree","btree_root":{"keys":["10","20"],"children":[{"keys":["3","5"]},{"keys":["12","15"]},{"keys":["25","30"]}]}}`
+
+Each `|` starts a new depth. Cells fill the previous level's child capacities from left to right; partial levels are allowed. `ds btree 40 | 20 | 10 30` preserves the chain from 40 to 20, then branches to 10/30. Too many cells at a declared level produce an error instead of silently moving nodes deeper. Use explicit JSON for arbitrary child placement; it remains permissive rather than enforcing B-tree balancing.
 
 ```text
               ╭─────────╮
@@ -373,7 +385,19 @@ head ─► │ 10 │ ● │ ─► │ 20 │ ● │ ─► │ 30 │ ∅ �
         ╰────────╯    ╰────────╯    ╰────────╯
 ```
 
-### 4. Array with Index Ruler
+### 4. Doubly Linked List
+- **CLI Shorthand:** `ascii-diagram "ds doublylinkedlist 10 20 30"`
+- **JSON Spec:** `{"type":"datastructure","kind":"doublylinkedlist","nodes":[10,20,30]}`
+
+Each node has `prev | value | next` cells. Adjacent nodes connect in both directions; only the first prev and last next pointers are null. `head_label` and `tail_label` customize the endpoint text. A singleton has two null pointers and both endpoints point to that one node. Duplicate, blank, and literal `NULL` values remain data. ASCII uses `X`/`NULL` instead of `●`/`∅`.
+
+```text
+        ╭────────────╮     ╭────────────╮     ╭────────────╮
+head ─► │ ∅ │ 10 │ ● │ ◄─► │ ● │ 20 │ ● │ ◄─► │ ● │ 30 │ ∅ │ ◄─ tail
+        ╰────────────╯     ╰────────────╯     ╰────────────╯
+```
+
+### 5. Array with Index Ruler
 - **CLI Shorthand:** `ascii-diagram "ds array 10 20 30 40"`
 - **JSON Spec:** `{"type":"datastructure","kind":"array","values":["10","20","30","40"]}`
 
@@ -384,8 +408,10 @@ head ─► │ 10 │ ● │ ─► │ 20 │ ● │ ─► │ 30 │ ∅ �
 ╰───────────────────╯
 ```
 
-### 5. Queue & Deque
+### 6. Queue
 - **JSON Spec:** `{"type":"datastructure","kind":"queue","title":"Job Queue","nodes":["build","test","deploy"]}`
+
+`front_label` and `rear_label` customize endpoint text only; arrows remain rightward. There is no native `deque` kind or double-ended operation mode.
 
 ```text
                        Job Queue
@@ -395,31 +421,35 @@ front ─► │ build  │ ─► │ test   │ ─► │ deploy │ ─► r
          ╰────────╯    ╰────────╯    ╰────────╯
 ```
 
-### 6. Complete Min/Max Heap
+### 7. Complete Min/Max Heap
 - **JSON Spec:** `{"type":"datastructure","kind":"heap","title":"Min-Heap","values":[1,3,2,6,4,5]}`
 
-```text
-       Min-Heap
+Values already supply level order: node `i` connects to `2i+1` and `2i+2` when present. This visualizer does not heapify, sort, or validate min/max ordering. A final lone child retains its left slot and its depth's row.
 
-         ╭───╮
-         │ 1 │
-         ╰───╯
-           │
-      ╭────┴────────╮
-      │             │
-    ╭───╮         ╭───╮
-    │ 3 │         │ 2 │
-    ╰───╯         ╰───╯
-      │             │
-  ╭───┴────╮      ╭───╮
-  │        │      │ 5 │
-╭───╮    ╭───╮    ╰───╯
-│ 6 │    │ 4 │
-╰───╯    ╰───╯
+```text
+        Min-Heap
+
+            ╭───╮
+            │ 1 │
+            ╰───╯
+              │
+      ╭───────┴───────╮
+      │               │
+    ╭───╮           ╭───╮
+    │ 3 │           │ 2 │
+    ╰───╯           ╰───╯
+      │               │
+  ╭───┴────╮        ╭─╯
+  │        │        │
+╭───╮    ╭───╮    ╭───╮
+│ 6 │    │ 4 │    │ 5 │
+╰───╯    ╰───╯    ╰───╯
 ```
 
-### 7. Graph Adjacency List
+### 8. Graph Adjacency List
 - **JSON Spec:** `{"type":"datastructure","kind":"graph","title":"Adjacency List","nodes":["a","b","c","d"],"edges":[["a","b"],["a","c"],["b","d"],["c","d"],["d","a"],["d","d"]]}`
+
+Node identifiers must be unique after numeric-to-string conversion; duplicates return a named error. Repeated edges and self-loops retain their order and multiplicity. Whitespace-sensitive identifiers remain distinct and display with visible quoting rather than being trimmed.
 
 ```text
     Adjacency List
@@ -504,8 +534,8 @@ Unstyled redraws retain existing stroke color, including shared connectors and a
 
 - `ascii-diagram dsl "<dsl>"`: Render inline DSL string directly.
 - `ascii-diagram render <file|->`: Render from file or stdin.
-- `ascii-diagram example <type>`: Output reference examples (`flowchart`, `sequence`, `architecture`, `tree`, `table`, `stack`, `datastructure`, `queue`, `heap`, `graph`, `linkedlist`, `array`; aliases `ds`, `btree`, `bst`, `binarytree`). Bare `example` defaults to `flowchart`; an unknown type exits non-zero with an error naming the valid types.
-- `ascii-diagram "ds <kind> <args>"`: CLI shorthand for data structures (`tree`, `btree`, `linkedlist`, `array`).
+- `ascii-diagram example <type>`: Output reference examples (`flowchart`, `sequence`, `architecture`, `tree`, `table`, `stack`, `datastructure`, `queue`, `heap`, `graph`, `linkedlist`, `doublylinkedlist`, `array`; aliases `ds`, `btree`, `bst`, `binarytree`). Bare `example` defaults to `flowchart`; an unknown type exits non-zero with an error naming the valid types.
+- `ascii-diagram "ds <kind> <args>"`: CLI shorthand for data structures (`tree`, `btree`, `linkedlist`, `doublylinkedlist`, `array`).
 
 #### Global CLI Options
 

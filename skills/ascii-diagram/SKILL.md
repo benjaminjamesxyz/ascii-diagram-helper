@@ -98,13 +98,74 @@ Pass markdown table syntax:
 }
 ```
 
+### 7. Native Data Structures
+
+Use `type: "datastructure"` with one of eight JSON kinds: `tree`, `btree`,
+`linkedlist`, `doublylinkedlist`, `array`, `queue`, `heap`, or `graph`.
+Five native DSL shorthands accept whitespace-separated tokens:
+
+```json
+{"dsl":"ds tree 8 3 10 1 6"}
+{"dsl":"ds btree 40 | 20 | 10 30"}
+{"dsl":"ds linkedlist 10 20 30"}
+{"dsl":"ds doublylinkedlist 10 20 30"}
+{"dsl":"ds array red green blue"}
+```
+
+Use JSON for labels containing spaces, quotes, backslashes, or controls; the
+shorthand has no quoted-string grammar. Numbers in JSON value/node arrays use
+the existing number-to-string conversion.
+
+```json
+{
+  "spec": "{\"type\":\"datastructure\",\"kind\":\"doublylinkedlist\",\"nodes\":[10,20,30],\"head_label\":\"first\",\"tail_label\":\"last\"}",
+  "color": false
+}
+```
+
+- **Doubly linked list**: ordered prev/value/next cells, forward and reverse
+  links, and null outer ends. `nodes` must be nonempty; duplicates remain separate
+  cells. `head_label` and `tail_label` default to `head` and `tail`. A singleton
+  has both endpoints on the same node. Run `example doublylinkedlist` in the CLI.
+- **Binary tree**: `values` inserts a BST; `root` specifies explicit `left`/`right`
+  children. Integral tokens compare by exact sign/magnitude before the existing
+  decimal/lexical fallback. Equal values insert right; original text remains.
+  Unary children keep their side, and equal depths share a rank.
+- **B-tree**: `btree_root` specifies `keys` and `children`. Each DSL pipe starts
+  a new level, filled left-to-right from the previous level's child capacities.
+  Partial levels are allowed: `40 | 20 | 10 30` nests 10/30 under 20.
+  `40 | 10 20 50` overflows level 2 and errors; `/` is not a level separator.
+- **Array**: `values` renders indexed cells.
+- **Queue**: `nodes`, optional `front_label`/`rear_label`; labels change text,
+  not rightward arrow direction. There is no native deque and no `ds queue`.
+  The CLI `example queue` remains available.
+- **Heap**: JSON `values` renders the supplied level-order complete binary tree
+  (children at `2i+1` and `2i+2`). It does not heapify, sort, or validate heap order.
+  Use this native renderer, not an array stand-in. There is no `ds heap`.
+- **Graph**: JSON `nodes` and `edges` renders adjacency lists. Node identifiers
+  must be unique after numeric conversion; repeated edges and self-loops remain
+  ordered entries. Raw identifiers, including whitespace, determine identity.
+  There is no `ds graph`.
+
+Native cells and list/queue endpoint labels stay single-line. Ordinary printable
+text is unchanged. Labels containing controls, quotes, backslashes, or edge
+whitespace display as JSON-compatible quoted/escaped text. All control characters,
+including DEL/C1, escape; printable Unicode and empty values remain supported.
+Decoding a quoted display recovers the raw value: actual LF and literal `\n` stay
+distinct. Widths measure the displayed text, without generated ANSI. Hierarchy
+`type: "tree"` is separate: its multiline names/annotations keep physical lines.
+
+Tool `direction` affects headerless flowchart arrows only. It does not reinterpret
+native DSL/JSON, hierarchy, stack, or table inputs; explicit headers take precedence.
+
+
 ## Styling Options
 
 - `rounded` (Default): Smooth curved corners (`╭ ╮ ╰ ╯ ─ │`)
 - `sharp`: Sharp box-drawing characters (`┌ ┐ └ ┘ ─ │`)
 - `double`: Double lines (`╔ ╗ ╚ ╝ ═ ║`)
 - `heavy`: Bold heavy lines (`┏ ┓ ┗ ┛ ━ ┃`)
-- `ascii`: Pure 7-bit ASCII (`+ - | > v`) - safe for all terminals and strict markdown renderers
+- `ascii`: ASCII geometry (`+ - | > v`); user Unicode labels are preserved.
 
 ## CLI Usage
 
@@ -125,7 +186,7 @@ In terminal environments (TUI), lines wider than the user's terminal window (typ
 To ensure diagrams always display cleanly in any terminal:
 
 1. **Target Width $\le 100$ Columns**:
-   - Keep node labels concise (e.g. 1–3 words or break lines with `\n`).
+   - Keep node labels concise (e.g. 1–3 words). Native data-structure cells display `\n` as an escape, not a line break.
    - For sequence diagrams, use concise participant aliases (e.g., `participant CPU as CPU Core`) and limit to 3–4 participants per diagram.
 2. **Decompose Complex / Wide Architectures**:
    - If a system has many parallel branches (e.g., 4–5 Bottom Half mechanisms), **do not place them all in a single horizontal rank**.

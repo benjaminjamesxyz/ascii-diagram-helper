@@ -1,3 +1,115 @@
+# Release v0.13.0 — Native Data Structures
+
+**Distribution:** annotated upstream Git tag `v0.13.0`, following the existing source/tag release process. GitHub supplies source ZIP/tar archives from the tag; no npm registry publication or separately uploaded binary is implied. Version metadata in Cargo/npm manifests and lockfiles is `0.13.0`.
+
+This minor pre-1.0 release adds native doubly linked lists and closes all ten data-structure sprint improvements below. Rounded Unicode remains the default; explicit styles remain authoritative.
+
+**Compatibility:** binary tree/heap geometry and special-label presentation change intentionally. B-tree shorthand rejects declared-level overflow; graph input rejects duplicate identifiers. Rust `DataStructureSpec` struct literals need the new optional `tail_label` or a default struct update. Decimal comparison and JSON number coercion remain unchanged.
+
+The sprint's acceptance results below refer to the pre-version-bump candidate. Historical release and sprint evidence is retained, not relabeled as fresh execution.
+
+## Versioned release verification
+
+- Cargo manifest/lockfile, npm manifest/lockfile/root package, and CLI runtime agree on `0.13.0`.
+- `cargo build --release --locked`, `cargo test --locked` (**338 passed**), `cargo fmt --check`, and `cargo clippy --all-targets --locked` passed. Clippy retains only the three pre-existing warnings (`int_plus_one`, `module_inception`, `too_many_arguments`).
+- The extension suite passed against the rebuilt release binary.
+- Release CLI smoke verified all eight exact README native diagrams, forty native-kind/style renders, default rounded Unicode, explicit ASCII preservation, and sparse B-tree DSL/JSON topology equality.
+- `npm pack --ignore-scripts` validated the local package contents: 33 files including the native binary, Rust sources, extension, bundled skills, tests, and documentation. This packaging check is not npm publication.
+- Repository/release binaries share SHA-256 `6f209ccb64b43e5689db24aaf9bd98f726af5c144dc8f02c5f88eafc847e05aa`.
+
+Upstream inspection found annotated tags but no GitHub Release objects or release workflow. Git SSH access is available; GitHub CLI has no authenticated host. Publication therefore uses the established source/tag channel, not an unverified GitHub Release asset upload. Installed plugins and running sessions are outside this rollout.
+
+---
+
+# Data-structure correctness sprint — 2026-10-09
+
+**Status:** Complete. All ten board items passed parent integration gates and independent final source review/runtime acceptance. No unresolved board findings.
+
+## Goal and coordination
+
+Improve semantic fidelity and label safety across native data structures, add native doubly linked lists, and preserve the correct renderer through the extension.
+
+- Eight parallel QA agents exercised tree/hierarchy, B-tree, singly linked list, the doubly linked use case, array, queue, heap, and graph.
+- Three independent finding reviewers reproduced tree-family, linear, and graph/integration defects. Their own runs covered 100 tree-family CLI probes, 168 linear CLI probes, and 40 graph CLI plus 90 fresh-extension calls. These are baseline defect-verification counts, not post-fix passes.
+- ScrumMaster consolidated the reviewed findings into this ten-item sprint with no deferred rows. Shared label defects count once, not once per structure.
+- Four parallel implementation tracks had exclusive files: NativeRenderer (`src/datastructure.rs`), ParserSchema (`src/parser.rs`, `src/schema.rs`, `src/main.rs`), Hierarchy (`src/tree.rs`), and ToolIntegration (extension, extension tests, bundled skills). Parent owned integration, README, this board, and the repository binary.
+- The implementation sprint did not bump versions, commit, push, publish packages, install plugins, or reload sessions. The subsequent v0.13.0 upstream source/tag rollout is recorded above.
+
+## Reviewed improvement board
+
+All ten rows are **closed**. Each has both implementation evidence and independent acceptance below; none closed solely from a developer receipt.
+
+| ID | Priority | Verified baseline problem | Implemented outcome | Track |
+|---|---|---|---|---|
+| DS-01 | P1 | Unary binary children lose left/right identity; partial heaps compress one child's rank. | Side-correct unary placement and consistent binary ranks without phantom subtrees. | NativeRenderer |
+| DS-02 | P1 | Adjacent integral labels above 2^53 compare equal through f64 and create wrong BST topology. | Exact sign/magnitude integral comparison before existing decimal/lexical fallback. | NativeRenderer |
+| DS-03 | P1 | B-tree shorthand flattens pipe levels and silently reparents cells. | Each level consumes only the previous frontier; numbered overflow errors replace silent reparenting. | ParserSchema |
+| DS-04 | P1 | Colored multi-key separators inflate measured box width. | Width calculations exclude ANSI; colored/plain geometry agrees. | NativeRenderer |
+| DS-05 | P1 | Controls break native frames/endpoints; whitespace graph keys become visually identical. | One reversible quoted display policy; all control bytes escape, widths use displayed text, raw identity stays intact. | NativeRenderer |
+| DS-06 | P1 | Duplicate graph identifiers split one logical vertex across contradictory adjacency rows. | Named duplicate-key error after numeric coercion; repeated edges and self-loops remain valid. | NativeRenderer |
+| DS-07 | P2 feature | Doubly linked lists require a generic flowchart workaround. | Native `doublylinkedlist` JSON, shorthand, and example; prev/value/next cells, head/tail, bidirectional links, and null ends. | NativeRenderer + ParserSchema |
+| DS-08 | P2 | Multiline hierarchy labels lose ancestor/sibling gutters. | Physical continuation lines retain nested and last-child prefixes, tabs, and inherited colors. | Hierarchy |
+| DS-09 | P1 | A flowchart direction option rejects or silently reinterprets native DSL/JSON. | Header injection applies only to headerless arrow input; explicit diagram kinds retain their renderer. | ToolIntegration |
+| DS-10 | P2/P3 | Tool metadata claims JSON-only data structures; queue wording claims unsupported deque behavior. | Eight native JSON kinds/five shorthands documented; native DLL/display/parser contracts and refreshed examples; queue claims corrected. | ToolIntegration + parent |
+
+### Reproduction and acceptance fixtures
+
+Use `./bin/ascii-diagram --style STYLE --color never dsl 'INPUT'` for these inputs, with `STYLE` set to each of rounded, sharp, double, heavy, and ascii. JSON control escapes below are input data, not raw terminal controls.
+
+| Board | Minimal input or scenario | Required result |
+|---|---|---|
+| DS-01 | `{"type":"datastructure","kind":"tree","root":{"value":"P","left":{"value":"C"}}}` versus `right` | C appears strictly left/right respectively. Heap `[1,3,2,6,4,5]` puts 6/4/5 on one rank. |
+| DS-02 | `ds tree 9007199254740993 9007199254740992 0` | Descending left chain, not two root children. Negative/huge/signed/zero-prefixed labels retain exact integral order. |
+| DS-03 | `ds btree 40 \| 20 \| 10 30`; `ds btree 40 \| 10 20 50` | First matches explicit 40-to-20-to-10/30 JSON; second exits nonzero naming level 2. |
+| DS-04 | `{"type":"datastructure","kind":"btree","btree_root":{"keys":[10,20],"color":"red"}}` | `--color always` stripped of SGR equals `--color never`; each root box row is 11 columns. |
+| DS-05 | `{"type":"datastructure","kind":"linkedlist","nodes":["a\nb","a\\nb"]}` | Distinct reversible quoted labels in intact three-row frames. Repeat across all native kinds and endpoints with CR/tab/ESC/DEL/C1, quotes, edge whitespace, and Unicode. |
+| DS-06 | `{"type":"datastructure","kind":"graph","nodes":["a","a","b"],"edges":[["a","b"]]}` | Error names duplicate a. Numeric/string collision `[1,"1"]` also errors; unique raw whitespace keys stay distinct. |
+| DS-07 | `ds doublylinkedlist 10`; `ds doublylinkedlist 10 20 30` | Two null endpoint pointers; singleton has head/tail on one node, three nodes have four non-null pointers and both link directions. |
+| DS-08 | `{"type":"tree","root":{"name":"root","children":[{"name":"one\ntwo"},{"name":"last"}]}}` | Continuation `two` retains the pending-sibling gutter, not column zero. |
+| DS-09 | Fresh `draw_diagram` with `dsl:"ds linkedlist 10 20",direction:"LR",color:false` | Same output as omitted direction; tree/stack/table/JSON and new DLL also preserve kind. Headerless `A --> B` still honors LR. |
+| DS-10 | Fresh registered tool metadata; native guide; `example doublylinkedlist`; `example queue` | Capability descriptions match real accepted inputs; native deque remains unsupported and is not advertised. |
+
+The shared label fix deliberately changes presentation of special labels. Controls, backslashes, quotes, and edge whitespace get JSON-compatible quoted escapes. Printable Unicode and raw comparison/lookup values are preserved. Native cells remain single-line; hierarchy labels retain physical multiline rendering. Exact numeric comparison applies to integral tokens, not arbitrary decimal arithmetic. JSON numeric coercion remains unchanged; use string labels for larger exact numbers.
+
+## Parent integration verification
+
+- `cargo build --release --locked` passed; the resulting binary was copied to repository `bin/ascii-diagram`.
+- Final `cargo test --locked`: **338 passed** (316 library, 22 CLI; no doctests), after review removed two incidental example tests.
+- `cargo fmt --check` passed after the centralized formatting pass.
+- `cargo clippy --all-targets --locked` passed with only the three existing warnings: `int_plus_one`, `module_inception`, `too_many_arguments`.
+- Existing extension suite passed against the new release binary.
+- Actual CLI smoke passed **130 board assertions** across all five styles, including topology, integral ordering, B-tree levels, colored widths, special labels across all eight kinds, graph errors, DLL pointers, and hierarchy continuation.
+- Fresh extension smoke passed **160 dispatch/orientation/CLI/frame checks**, including real `Text` result rendering, and the `/diagram` native DLL command.
+- Compared 60 built-in example/style outputs with the frozen source baseline: **55 unchanged**; the five heap style outputs changed intentionally for side/rank fidelity. All 30 non-data-structure example/style outputs remained identical.
+- README BST, heap, and native DLL examples were captured from the new binary, not hand-drawn.
+
+## Final independent verification
+
+Three independent reviewers and three runtime testers assessed the integrated candidate in parallel. All assigned criteria passed.
+
+| Acceptance track | Board coverage | Personally observed evidence | Verdict |
+|---|---|---|---|
+| FinalNativeReview | DS-01/02/04/05/06/07 and queue wording | Complete native production/test source review; no runtime claims. | PASS |
+| FinalContractReview | DS-03/07 API/08/09 and help | Parser/schema/hierarchy/extension consumer traces and regression-test review. One low-value test finding closed by removal. | PASS |
+| FinalTreeTester | DS-01/02/03/04/08; tree/B-tree/heap portion of DS-05 | 755 candidate CLI calls, 6 unchanged-baseline calls, 601 semantic assertions; all five styles. Includes 90-digit integer topology, 96-node chain attachment/ranks, and a 2,050-value depth-guard error. | PASS |
+| FinalLinearTester | Linear portion of DS-05, DS-07, queue/DLL docs | 634 candidate CLI calls, 60 unchanged-baseline comparisons, 2,629 assertions; all five styles. Includes every C0/DEL/C1 control, index 100, endpoint preservation, pointer fields, errors, and five input modes. | PASS |
+| FinalGraphToolTester | Graph portion of DS-05, DS-06, DS-07 integration, DS-09/10 | 150 captured candidate CLI calls plus 5 baseline calls; 655 fresh tool executions, 5 real Text frames, 10 command executions, 1,442 assertions. | PASS |
+| FinalDocsReview | DS-10 and documented cross-board contracts | 281 candidate CLI probes; 38 exact comparisons, including all eight README output blocks. | PASS |
+
+The source reviewers found no remaining production defect. Contract review rejected a new fixed-example forwarding test; the parent removed it and the touched registry-only nonempty test rather than pinning copied output. Meaningful topology, pointer, error, identity, and geometry regressions remain. Final Rust tests, formatting, and clippy passed after those test-only removals; production code and the reviewed runtime binary were unchanged.
+
+Runtime evidence from the three family testers jointly covers every DS-05 native consumer; no family-level PASS was treated as global coverage by itself. Graph identity probes independently decoded source/neighbor cells, preserved duplicate edges/self-loops, and rejected duplicate/coerced identifiers. Fresh extension probes covered all eight JSON kinds, native DSL, both direction values, BOM/leading whitespace, explicit headers, command output, and real result frames.
+
+All runtime tracks verified the pre-version-bump candidate SHA-256 `ba898fc7fa430ab02aaf3d3eb627da41165a8887742d89f55ff9a12afefde495`; its repository and release-build binaries matched. Exact session-local captures accompany each track report; the fixtures above and permanent behavior tests retain reproducible acceptance in the repository.
+
+## Intentional limits
+
+No heapification, strict B-tree balancing, arbitrary pointer graphs, native deque, queue/heap/graph shorthand, variable-height native cells, terminal-width clamp, or Unicode transliteration was added. Side-faithful binary chains grow linearly in width and may wrap in narrow terminals. Existing resource guards remain. Fresh component-level extension verification is not a live user-session reload claim.
+
+Historical release records follow unchanged.
+
+---
+
 # Release v0.12.1 — Firmware Renderer, CLI, and Extension Polish
 
 **Status:** Verified v0.12.1 patch release. Rust/npm metadata, documentation, and the runtime version agree.

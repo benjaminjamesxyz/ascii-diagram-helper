@@ -89,6 +89,59 @@ assert.ok(tblResult.content[0].text.includes("Active"));
 // and whitespace. Exercise both tool parameters and explicit plain suppression.
 const renderDiagram = (params) =>
 	registeredTool.execute("regression", params, null, null, { cwd: process.cwd() });
+
+// Direction cannot turn native input into a flowchart, even behind BOM/space.
+const nativeInputs = [
+	"ds linkedlist 10 20",
+	"ds tree 8 3 10",
+	"ds btree 10,20 / 3,5 12,15 25,30",
+	"ds array a b",
+	"tree\n  root\n    child",
+	"stack\n  a\n  b",
+	"table\nKey | Value\na | b",
+	'{"type":"datastructure","kind":"graph","nodes":["a","b"],"edges":[["a","b"]]}',
+	"ds doublylinkedlist 10 20",
+	"ds linkedlist left->right end",
+	"tree\n  root\n    left->right",
+	"stack\n  left->right\n  end",
+	"table\nKey | Value\narrow | left->right",
+];
+for (const style of ["rounded", "sharp", "double", "heavy", "ascii"]) {
+	for (const input of nativeInputs) {
+		const plain = await renderDiagram({ dsl: input, style, color: false });
+		for (const prefix of ["", " \n\uFEFF \n"]) {
+			const directed = await renderDiagram({
+				dsl: prefix + input, direction: "LR", style, color: false,
+			});
+			assert.strictEqual(directed.details.diagram, plain.details.diagram, `${style}: ${input}`);
+		}
+	}
+	const dllSpec = {
+		type: "datastructure", kind: "doublylinkedlist", nodes: [10, 20],
+	};
+	const dllDsl = await renderDiagram({ dsl: "ds doublylinkedlist 10 20", style, color: false });
+	const dllJson = await renderDiagram({ spec: JSON.stringify(dllSpec), direction: "LR", style, color: false });
+	assert.strictEqual(dllJson.details.diagram, dllDsl.details.diagram);
+	const customDll = await renderDiagram({
+		spec: JSON.stringify({ ...dllSpec, head_label: "start", tail_label: "finish" }),
+		direction: "LR", style, color: false,
+	});
+	assert.ok(customDll.details.diagram.includes("start"));
+	assert.ok(customDll.details.diagram.includes("finish"));
+
+	const vertical = await renderDiagram({ dsl: "A --> B", style, color: false });
+	const horizontal = await renderDiagram({ dsl: " \n\uFEFF A --> B", direction: "LR", style, color: false });
+	const verticalRows = vertical.details.diagram.split("\n");
+	const horizontalRows = horizontal.details.diagram.split("\n");
+	assert.ok(verticalRows.findIndex((row) => row.includes("A")) < verticalRows.findIndex((row) => row.includes("B")));
+	assert.ok(horizontalRows.some((row) => row.includes("A") && row.indexOf("B") > row.indexOf("A")));
+	assert.ok(horizontalRows.length < verticalRows.length, "LR changes actual flowchart geometry");
+	for (const input of ["graph TD; A --> B", "flowchart TB\nA --> B", "sequenceDiagram\nA -> B: Ping"]) {
+		const plain = await renderDiagram({ dsl: input, style, color: false });
+		const directed = await renderDiagram({ dsl: ` \n\uFEFF ${input}`, direction: "LR", style, color: false });
+		assert.strictEqual(directed.details.diagram, plain.details.diagram, "explicit headers stay authoritative");
+	}
+}
 const graphJson = ` \n\uFEFF ${JSON.stringify({
 	type: "architecture",
 	title: "Dual-core flowchart architecture",

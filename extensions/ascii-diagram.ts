@@ -144,13 +144,13 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			dsl: Type.Optional(
 				Type.String({
 					description:
-						"Diagram DSL string: supports Mermaid flowchart ('graph TD' / 'flowchart LR'), sequence ('sequenceDiagram'), tree, or stack syntax. Data structures (binary tree, B-tree) are JSON-only via `spec`.",
+						"Diagram DSL: Mermaid flowchart ('graph TD' / 'flowchart LR'), sequence ('sequenceDiagram'), tree, stack, table, or five native shorthands: ds tree, ds btree, ds linkedlist, ds doublylinkedlist, ds array. Shorthand values are whitespace tokens; use JSON for complex labels.",
 				}),
 			),
 			spec: Type.Optional(
 				Type.String({
 					description:
-						"JSON diagram specification matching the DiagramSpec schema (flowchart, sequence, architecture, tree, table, stack, datastructure — binary tree / B-tree, e.g. {\"type\":\"datastructure\",\"kind\":\"tree\",\"values\":[\"8\",\"3\",\"10\"]}).",
+						"JSON DiagramSpec: flowchart, sequence, architecture, tree, table, stack, or datastructure. Eight native kinds: tree, btree, linkedlist, doublylinkedlist, array, queue, heap, graph. Example: {\"type\":\"datastructure\",\"kind\":\"doublylinkedlist\",\"nodes\":[10,20],\"head_label\":\"head\",\"tail_label\":\"tail\"}. Queue uses nodes; heap uses values in supplied level order (no heapify). No native deque.",
 				}),
 			),
 			style: Type.Optional(
@@ -162,7 +162,7 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			direction: Type.Optional(
 				StringEnum(["TB", "LR"] as const, {
 					description:
-						"Flowchart orientation: 'TB' (Top-to-Bottom) or 'LR' (Left-to-Right).",
+						"Headerless flowchart orientation: 'TB' (Top-to-Bottom) or 'LR' (Left-to-Right). Explicit headers take precedence; native DSL and JSON are unchanged.",
 				}),
 			),
 			color: Type.Optional(
@@ -179,14 +179,15 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 
 			if (params.dsl) {
 				inputContent = params.dsl;
-				// If direction specified and not in DSL, prepend if flowchart
+				// Only headerless arrow syntax opts into flowchart orientation.
+				const trimmed = inputContent.trimStart();
 				if (
 					params.direction &&
-					!inputContent.includes("graph ") &&
-					!inputContent.includes("flowchart ") &&
-					!inputContent.includes("sequenceDiagram")
+					!/^(?:\{|graph|flowchart|sequenceDiagram|tree|stack|memory|table|datastructure|\||ds(?:\s|$))/.test(trimmed) &&
+					/->/.test(trimmed) &&
+					!/->>|<->|^\s*(?:participant |actor |- )/m.test(trimmed)
 				) {
-					inputContent = `graph ${params.direction}\n${inputContent}`;
+					inputContent = `graph ${params.direction}\n${trimmed}`;
 				}
 			} else if (params.spec) {
 				inputContent = params.spec;

@@ -1,6 +1,8 @@
 use crate::color::Color;
 use crate::schema::{DataStructureSpec, DsKind, DsNode};
 use crate::theme::{BoxStyle, Theme};
+use std::borrow::Cow;
+use std::fmt::Write;
 use unicode_width::UnicodeWidthStr;
 
 /// Paints `s` when `colored` and a color is set; otherwise returns it plain.
@@ -8,6 +10,45 @@ fn paint(colored: bool, color: Option<Color>, s: &str) -> String {
     match (colored, color) {
         (true, Some(c)) => c.paint(s),
         _ => s.to_string(),
+    }
+}
+
+/// A single-line presentation, measured before any border color is applied.
+struct DisplayLabel<'a> {
+    text: Cow<'a, str>,
+    width: usize,
+}
+
+impl<'a> DisplayLabel<'a> {
+    fn new(raw: &'a str) -> Self {
+        let special = raw.starts_with(char::is_whitespace)
+            || raw.ends_with(char::is_whitespace)
+            || raw
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '"' | '\\'));
+        let text = if special {
+            let mut quoted = String::with_capacity(raw.len() + 2);
+            quoted.push('"');
+            for ch in raw.chars() {
+                match ch {
+                    '"' => quoted.push_str("\\\""),
+                    '\\' => quoted.push_str("\\\\"),
+                    '\n' => quoted.push_str("\\n"),
+                    '\r' => quoted.push_str("\\r"),
+                    '\t' => quoted.push_str("\\t"),
+                    c if c.is_control() => {
+                        write!(quoted, "\\u{:04x}", u32::from(c)).unwrap();
+                    }
+                    c => quoted.push(c),
+                }
+            }
+            quoted.push('"');
+            Cow::Owned(quoted)
+        } else {
+            Cow::Borrowed(raw)
+        };
+        let width = UnicodeWidthStr::width(text.as_ref());
+        Self { text, width }
     }
 }
 
@@ -35,10 +76,9 @@ const MAX_RENDER_DEPTH: usize = 2048;
 const MAX_HEAP_NODES: usize = 2048;
 
 /// Renders textbook-style data-structure diagrams: binary trees
-/// (`kind: "tree"`), B-trees (`kind: "btree"`), linked lists
-/// (`kind: "linkedlist"`), arrays (`kind: "array"`), queues
-/// (`kind: "queue"`), heaps (`kind: "heap"`), and graphs
-/// (`kind: "graph"`).
+/// (`kind: "tree"`), B-trees (`kind: "btree"`), singly and doubly linked
+/// lists (`kind: "linkedlist"` / `"doublylinkedlist"`), arrays (`"array"`),
+/// queues (`"queue"`), heaps (`"heap"`), and graphs (`"graph"`).
 pub struct DataStructureRenderer<'a> {
     spec: &'a DataStructureSpec,
     theme: Theme,
@@ -55,13 +95,14 @@ impl<'a> DataStructureRenderer<'a> {
     /// # Errors
     ///
     /// Returns `Err` when the spec carries nothing renderable: `tree` needs
-    /// `root` or `values`, `btree` needs `btree_root`, `linkedlist` needs
-    /// `nodes`, `array` needs `values`, `queue` needs `nodes`, `heap` needs
+    /// `root` or `values`, `btree` needs `btree_root`, either linked-list kind
+    /// needs `nodes`, `array` needs `values`, `queue` needs `nodes`, `heap` needs
     /// `values`, and `graph` needs `nodes` (with every edge endpoint among
     /// them).
     pub fn render(&self, colored: bool) -> Result<String, String> {
         let (mut lines, width) = match self.spec.kind {
             DsKind::LinkedList => self.render_linkedlist()?,
+            DsKind::DoublyLinkedList => self.render_doublylinkedlist()?,
             DsKind::Array => self.render_array()?,
             DsKind::Queue => self.render_queue()?,
             DsKind::Graph => self.render_graph()?,
@@ -155,13 +196,27 @@ impl<'a> DataStructureRenderer<'a> {
                 .collect(),
             DsKind::BTree => node.children.iter().collect(),
             // Linear kinds render their own single-row layouts.
-            DsKind::LinkedList | DsKind::Array | DsKind::Queue | DsKind::Graph => Vec::new(),
+            DsKind::LinkedList
+            | DsKind::DoublyLinkedList
+            | DsKind::Array
+            | DsKind::Queue
+            | DsKind::Graph => Vec::new(),
         };
         // Recurse in a slim stack frame: debug-build frames for the full
         // layout body are far too wide to stack 2048 deep, so the recursion
         // lives in `render_children` and assembly runs in `assemble_block`.
         let child_blocks = self.render_children(&child_nodes, effective, colored, depth)?;
-        Ok(self.assemble_block(effective, colored, box_lines, box_w, child_blocks))
+        let unary_left = (matches!(self.spec.kind, DsKind::Tree | DsKind::Heap)
+            && child_blocks.len() == 1)
+            .then_some(node.left.is_some());
+        Ok(self.assemble_block(
+            effective,
+            colored,
+            box_lines,
+            box_w,
+            child_blocks,
+            unary_left,
+        ))
     }
 
     /// Recurses into `children` one level deeper. Kept separate from
@@ -191,6 +246,7 @@ impl<'a> DataStructureRenderer<'a> {
         box_lines: Vec<String>,
         box_w: usize,
         child_blocks: Vec<Block>,
+        unary_left: Option<bool>,
     ) -> Block {
         if child_blocks.is_empty() {
             return Block {
@@ -202,9 +258,25 @@ impl<'a> DataStructureRenderer<'a> {
 
         let children_total: usize = child_blocks.iter().map(|b| b.width).sum::<usize>()
             + SIBLING_GAP * (child_blocks.len() - 1);
-        let sub_w = box_w.max(children_total);
-        let child_start = (sub_w - children_total) / 2;
-        let box_x = (sub_w - box_w) / 2;
+        let binary = matches!(self.spec.kind, DsKind::Tree | DsKind::Heap);
+        let (box_x, child_start, sub_w) = if binary {
+            // Center between actual child roots, not subtree bounds. A unary
+            // slot offsets only two columns; absent subtrees never expand.
+            let first = child_blocks[0].center;
+            let desired_center = match unary_left {
+                Some(true) => first + 2,
+                Some(false) => first - 2,
+                None => (first + child_blocks[0].width + SIBLING_GAP + child_blocks[1].center) / 2,
+            };
+            let child_start = (box_w / 2).saturating_sub(desired_center);
+            let parent_center = desired_center + child_start;
+            let box_x = parent_center - box_w / 2;
+            let sub_w = (child_start + children_total).max(box_x + box_w);
+            (box_x, child_start, sub_w)
+        } else {
+            let sub_w = box_w.max(children_total);
+            ((sub_w - box_w) / 2, (sub_w - children_total) / 2, sub_w)
+        };
         let parent_center = box_x + box_w / 2;
 
         let mut centers = Vec::with_capacity(child_blocks.len());
@@ -228,9 +300,9 @@ impl<'a> DataStructureRenderer<'a> {
             })
             .collect();
 
-        // Connector rows. A single aligned child is one `│` row; any other
-        // shape gets a descender, a branch bar, and child descenders.
-        if centers.len() == 1 && centers[0] == parent_center {
+        // Binary ranks always use three connector rows; B-trees retain the
+        // compact connector for an aligned single child.
+        if !binary && centers.len() == 1 && centers[0] == parent_center {
             lines.push(painted_row(
                 colored,
                 effective,
@@ -307,6 +379,7 @@ impl<'a> DataStructureRenderer<'a> {
                     None => row.push_str(&" ".repeat(child.width)),
                 }
             }
+            row.push_str(&" ".repeat(sub_w - child_start - children_total));
             lines.push(row);
         }
 
@@ -325,36 +398,34 @@ impl<'a> DataStructureRenderer<'a> {
         if self.spec.nodes.is_empty() {
             return Err("linkedlist diagram needs a `nodes` value chain".to_string());
         }
-        let head = self.spec.head_label.as_deref().unwrap_or("head");
+        let head = DisplayLabel::new(self.spec.head_label.as_deref().unwrap_or("head"));
         let is_ascii = self.theme.box_style == BoxStyle::Ascii;
         let (pointer, null) = if is_ascii {
             ("X", "NULL")
         } else {
             ("●", "∅")
         };
-
-        // Uniform value-cell width keeps the chain boxes visually level.
-        let value_w = self
+        let pointer = DisplayLabel::new(pointer);
+        let null = DisplayLabel::new(null);
+        let values: Vec<_> = self
             .spec
             .nodes
             .iter()
-            .map(|v| UnicodeWidthStr::width(v.as_str()))
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let boxes: Vec<(Vec<String>, usize)> = self
-            .spec
-            .nodes
+            .map(|v| DisplayLabel::new(v))
+            .collect();
+
+        // Uniform value-cell width keeps the chain boxes visually level.
+        let value_w = values.iter().map(|v| v.width).max().unwrap_or(1).max(1);
+        let boxes: Vec<(Vec<String>, usize)> = values
             .iter()
             .enumerate()
             .map(|(i, v)| {
                 let ptr = if i + 1 == self.spec.nodes.len() {
-                    null
+                    &null
                 } else {
-                    pointer
+                    &pointer
                 };
-                let ws = [value_w, UnicodeWidthStr::width(ptr).max(1)];
-                self.cells_box_widths(&[v.as_str(), ptr], &ws, None, false)
+                self.cells_box_widths([(v, value_w), (ptr, ptr.width.max(1))], None, false)
             })
             .collect();
 
@@ -366,10 +437,10 @@ impl<'a> DataStructureRenderer<'a> {
         let conn = format!(" {arrow} ");
         let join_w = UnicodeWidthStr::width(conn.as_str());
         let joiner = " ".repeat(join_w);
-        let pad = " ".repeat(UnicodeWidthStr::width(head) + join_w);
+        let pad = " ".repeat(head.width + join_w);
 
         let mut top = pad.clone();
-        let mut mid = format!("{head}{conn}");
+        let mut mid = format!("{}{conn}", head.text);
         let mut bot = pad;
         for (i, (lines, _)) in boxes.iter().enumerate() {
             if i > 0 {
@@ -390,10 +461,78 @@ impl<'a> DataStructureRenderer<'a> {
         Ok((lines, width))
     }
 
+    /// Ordered prev/value/next cells. Adjacent boxes share both directions;
+    /// only first.prev and last.next are null, including a singleton.
+    fn render_doublylinkedlist(&self) -> Result<(Vec<String>, usize), String> {
+        if self.spec.nodes.is_empty() {
+            return Err("doublylinkedlist diagram needs a `nodes` value chain".to_string());
+        }
+        let head = DisplayLabel::new(self.spec.head_label.as_deref().unwrap_or("head"));
+        let tail = DisplayLabel::new(self.spec.tail_label.as_deref().unwrap_or("tail"));
+        let ascii = self.theme.box_style == BoxStyle::Ascii;
+        let pointer = DisplayLabel::new(if ascii { "X" } else { "●" });
+        let null = DisplayLabel::new(if ascii { "NULL" } else { "∅" });
+        let values: Vec<_> = self
+            .spec
+            .nodes
+            .iter()
+            .map(|v| DisplayLabel::new(v))
+            .collect();
+        let value_w = values.iter().map(|v| v.width).max().unwrap_or(1).max(1);
+        let pointer_w = pointer.width.max(null.width);
+        let widths = [pointer_w, value_w, pointer_w];
+        let forward = format!(
+            " {}{} ",
+            self.theme.horizontal_line(),
+            self.theme.arrow_right()
+        );
+        let reverse = format!(
+            " {}{} ",
+            self.theme.arrow_left(),
+            self.theme.horizontal_line()
+        );
+        let both = format!(
+            " {}{}{} ",
+            self.theme.arrow_left(),
+            self.theme.horizontal_line(),
+            self.theme.arrow_right()
+        );
+        let gap = " ".repeat(UnicodeWidthStr::width(both.as_str()));
+        let pad = " ".repeat(head.width + UnicodeWidthStr::width(forward.as_str()));
+        let mut lines = vec![pad.clone(), format!("{}{forward}", head.text), pad];
+        for (i, value) in values.iter().enumerate() {
+            if i > 0 {
+                lines[0].push_str(&gap);
+                lines[1].push_str(&both);
+                lines[2].push_str(&gap);
+            }
+            let prev = if i == 0 { &null } else { &pointer };
+            let next = if i + 1 == values.len() {
+                &null
+            } else {
+                &pointer
+            };
+            let (cell_lines, _) =
+                self.cells_box_widths([prev, value, next].into_iter().zip(widths), None, false);
+            for (line, cell) in lines.iter_mut().zip(cell_lines) {
+                line.push_str(&cell);
+            }
+        }
+        lines[1].push_str(&reverse);
+        lines[1].push_str(&tail.text);
+        let width = UnicodeWidthStr::width(lines[1].as_str());
+        Ok((lines, width))
+    }
+
     /// Renders `kind: "array"`: one boxed row of cells with separators and
     /// a centered index ruler row above.
     fn render_array(&self) -> Result<(Vec<String>, usize), String> {
-        let values = &self.spec.values;
+        let values: Vec<_> = self
+            .spec
+            .values
+            .iter()
+            .map(|v| DisplayLabel::new(v))
+            .collect();
         if values.is_empty() {
             return Err("array diagram needs a `values` list".to_string());
         }
@@ -403,13 +542,13 @@ impl<'a> DataStructureRenderer<'a> {
             .iter()
             .enumerate()
             .map(|(i, v)| {
-                UnicodeWidthStr::width(v.as_str())
+                v.width
                     .max(UnicodeWidthStr::width(i.to_string().as_str()))
                     .max(1)
             })
             .collect();
-        let cells: Vec<&str> = values.iter().map(String::as_str).collect();
-        let (box_lines, _) = self.cells_box_widths(&cells, &widths, None, false);
+        let (box_lines, _) =
+            self.cells_box_widths(values.iter().zip(widths.iter().copied()), None, false);
 
         // Ruler indices centered in each cell block (` w `), with a blank
         // over every `│` separator column.
@@ -440,29 +579,26 @@ impl<'a> DataStructureRenderer<'a> {
     /// Renders `kind: "queue"`: a single left→right row of single-cell node
     /// boxes between the `front` and `rear` labels (`front_label`/
     /// `rear_label`, defaults `"front"`/`"rear"`). The front label points
-    /// into the first box and the last box points at the rear label, so the
-    /// same layout doubles as a deque when both labels are set.
+    /// into the first box and the last box points at the rear label.
+    /// Custom labels change text only; arrows remain rightward.
     fn render_queue(&self) -> Result<(Vec<String>, usize), String> {
         if self.spec.nodes.is_empty() {
             return Err("queue diagram needs a `nodes` list".to_string());
         }
-        let front = self.spec.front_label.as_deref().unwrap_or("front");
-        let rear = self.spec.rear_label.as_deref().unwrap_or("rear");
+        let front = DisplayLabel::new(self.spec.front_label.as_deref().unwrap_or("front"));
+        let rear = DisplayLabel::new(self.spec.rear_label.as_deref().unwrap_or("rear"));
+        let values: Vec<_> = self
+            .spec
+            .nodes
+            .iter()
+            .map(|v| DisplayLabel::new(v))
+            .collect();
 
         // Uniform cell width keeps the boxes visually level.
-        let cell_w = self
-            .spec
-            .nodes
+        let cell_w = values.iter().map(|v| v.width).max().unwrap_or(1).max(1);
+        let boxes: Vec<(Vec<String>, usize)> = values
             .iter()
-            .map(|v| UnicodeWidthStr::width(v.as_str()))
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let boxes: Vec<(Vec<String>, usize)> = self
-            .spec
-            .nodes
-            .iter()
-            .map(|v| self.cells_box_widths(&[v.as_str()], &[cell_w], None, false))
+            .map(|v| self.cells_box_widths([(v, cell_w)], None, false))
             .collect();
 
         let arrow = format!(
@@ -473,10 +609,10 @@ impl<'a> DataStructureRenderer<'a> {
         let conn = format!(" {arrow} ");
         let join_w = UnicodeWidthStr::width(conn.as_str());
         let joiner = " ".repeat(join_w);
-        let pad = " ".repeat(UnicodeWidthStr::width(front) + join_w);
+        let pad = " ".repeat(front.width + join_w);
 
         let mut top = pad.clone();
-        let mut mid = format!("{front}{conn}");
+        let mut mid = format!("{}{conn}", front.text);
         let mut bot = pad;
         for (i, (lines, _)) in boxes.iter().enumerate() {
             if i > 0 {
@@ -488,7 +624,7 @@ impl<'a> DataStructureRenderer<'a> {
             mid.push_str(&lines[1]);
             bot.push_str(&lines[2]);
         }
-        mid.push_str(&format!("{conn}{rear}"));
+        mid.push_str(&format!("{conn}{}", rear.text));
         let lines = vec![top, mid, bot];
         let width = lines
             .iter()
@@ -507,20 +643,19 @@ impl<'a> DataStructureRenderer<'a> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` when `nodes` is empty, an edge is not a `[from, to]`
-    /// pair, or an edge references an unknown node (named in the error).
+    /// Returns `Err` when `nodes` is empty or contains duplicate identifiers,
+    /// an edge is not a pair, or an edge references an unknown node.
     fn render_graph(&self) -> Result<(Vec<String>, usize), String> {
         if self.spec.nodes.is_empty() {
             return Err("graph diagram needs a `nodes` list".to_string());
         }
-        let mut neighbors: Vec<Vec<&str>> = vec![Vec::new(); self.spec.nodes.len()];
-        let index: std::collections::HashMap<&str, usize> = self
-            .spec
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.as_str(), i))
-            .collect();
+        let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); self.spec.nodes.len()];
+        let mut index = std::collections::HashMap::with_capacity(self.spec.nodes.len());
+        for (i, node) in self.spec.nodes.iter().enumerate() {
+            if index.insert(node.as_str(), i).is_some() {
+                return Err(format!("graph has duplicate node identifier: {node:?}"));
+            }
+        }
         for edge in &self.spec.edges {
             let [from, to] = edge.as_slice() else {
                 return Err("graph edges must be [from, to] pairs".to_string());
@@ -538,19 +673,27 @@ impl<'a> DataStructureRenderer<'a> {
                 return Err(format!("graph edge references unknown node(s): {list}"));
             }
             let from_idx = index[from.as_str()];
-            neighbors[from_idx].push(to.as_str());
+            neighbors[from_idx].push(index[to.as_str()]);
         }
 
         // One uniform cell width across sources and neighbors keeps every
         // bucket box the same size, so rows align vertically.
-        let mut labels: Vec<&str> = self.spec.nodes.iter().map(String::as_str).collect();
-        labels.extend(neighbors.iter().flatten().copied());
+        let labels: Vec<_> = self
+            .spec
+            .nodes
+            .iter()
+            .map(|n| DisplayLabel::new(n))
+            .collect();
         let cell_w = labels
             .iter()
-            .map(|l| UnicodeWidthStr::width(*l))
+            .map(|label| label.width)
             .max()
             .unwrap_or(1)
             .max(1);
+        let boxes: Vec<_> = labels
+            .iter()
+            .map(|label| self.cells_box_widths([(label, cell_w)], None, false).0)
+            .collect();
 
         let arrow = format!(
             "{}{}",
@@ -566,17 +709,12 @@ impl<'a> DataStructureRenderer<'a> {
             if i > 0 {
                 lines.push(String::new());
             }
-            let source = self
-                .cells_box_widths(&[self.spec.nodes[i].as_str()], &[cell_w], None, false)
-                .0;
-            let chain: Vec<(Vec<String>, usize)> = bucket
-                .iter()
-                .map(|n| self.cells_box_widths(&[n], &[cell_w], None, false))
-                .collect();
+            let source = &boxes[i];
             let mut top = source[0].clone();
             let mut mid = source[1].clone();
             let mut bot = source[2].clone();
-            for (cell_lines, _) in &chain {
+            for &target in bucket {
+                let cell_lines = &boxes[target];
                 top.push_str(&joiner);
                 top.push_str(&cell_lines[0]);
                 mid.push_str(&conn);
@@ -599,52 +737,47 @@ impl<'a> DataStructureRenderer<'a> {
     /// separated by the theme's vertical glyph. Border glyphs (corners,
     /// bars, cell separators) take `color`; label text stays default.
     fn node_box(&self, node: &DsNode, color: Option<Color>, colored: bool) -> (Vec<String>, usize) {
-        let cells: Vec<&str> = match self.spec.kind {
-            DsKind::Tree | DsKind::Heap => vec![&node.value],
-            // B-tree nodes render `keys`; a keyless node falls back to its
-            // `value` so `DsNode::leaf("5")` still renders a labeled cell.
-            DsKind::BTree if !node.keys.is_empty() => {
-                node.keys.iter().map(String::as_str).collect()
-            }
-            DsKind::BTree if node.value.is_empty() => vec![""],
-            DsKind::BTree => vec![&node.value],
-            // Linear kinds build their boxes in their own render fns.
-            DsKind::LinkedList | DsKind::Array | DsKind::Queue | DsKind::Graph => {
-                vec![&node.value]
-            }
-        };
-        let cell_w = cells
+        // A keyless B-tree node uses `value`, just like a binary node.
+        if !matches!(self.spec.kind, DsKind::BTree) || node.keys.is_empty() {
+            let label = DisplayLabel::new(&node.value);
+            return self.cells_box_widths([(&label, label.width.max(1))], color, colored);
+        }
+        let labels: Vec<_> = node.keys.iter().map(|key| DisplayLabel::new(key)).collect();
+        let cell_w = labels
             .iter()
-            .map(|c| UnicodeWidthStr::width(*c))
+            .map(|label| label.width)
             .max()
-            .unwrap_or(0)
+            .unwrap_or(1)
             .max(1);
-        let ws = vec![cell_w; cells.len()];
-        self.cells_box_widths(&cells, &ws, color, colored)
+        self.cells_box_widths(labels.iter().map(|label| (label, cell_w)), color, colored)
     }
 
-    /// Builds the 3-line box around `cells` laid out at the per-cell widths
-    /// in `widths` (parallel to `cells`), separated by the theme's vertical
-    /// glyph: `┌──┬──┐ / │ c1 │ c2 │ / └──┴──┘`. Border glyphs (corners,
+    /// Builds the 3-line box from displayed cells and their padded widths,
+    /// separated by the theme's vertical glyph:
+    /// `┌──┬──┐ / │ c1 │ c2 │ / └──┴──┘`. Border glyphs (corners,
     /// bars, separators) are painted `color` when `colored`; cell text is
     /// never painted, so labels stay terminal-default.
-    fn cells_box_widths(
+    fn cells_box_widths<'label, 'text: 'label>(
         &self,
-        cells: &[&str],
-        widths: &[usize],
+        cells: impl IntoIterator<Item = (&'label DisplayLabel<'text>, usize)>,
         color: Option<Color>,
         colored: bool,
     ) -> (Vec<String>, usize) {
         let sep = paint(colored, color, &self.theme.vertical_line().to_string());
-        let inner = cells
-            .iter()
-            .zip(widths)
-            .map(|(c, &w)| {
-                let pad = w.saturating_sub(UnicodeWidthStr::width(*c));
-                format!(" {c}{} ", " ".repeat(pad))
-            })
-            .collect::<Vec<_>>()
-            .join(&sep);
+        let mut inner = String::new();
+        let mut box_w = 1;
+        for (i, (cell, width)) in cells.into_iter().enumerate() {
+            if i > 0 {
+                inner.push_str(&sep);
+            }
+            inner.push(' ');
+            inner.push_str(&cell.text);
+            inner.extend(std::iter::repeat_n(
+                ' ',
+                width.saturating_sub(cell.width) + 1,
+            ));
+            box_w += width + 3;
+        }
 
         let (tl, tr, bl, br, h) = (
             self.theme.top_left_corner(),
@@ -653,7 +786,6 @@ impl<'a> DataStructureRenderer<'a> {
             self.theme.bottom_right_corner(),
             self.theme.horizontal_line(),
         );
-        let box_w = UnicodeWidthStr::width(inner.as_str()) + 2;
         let bar: String = std::iter::repeat_n(h, box_w - 2).collect();
         (
             vec![
@@ -744,10 +876,34 @@ fn insert_bst(node: &mut Option<Box<DsNode>>, value: String) {
 }
 
 fn less_than(a: &str, b: &str) -> bool {
+    if let (Some((a_negative, a_digits)), Some((b_negative, b_digits))) =
+        (integer_parts(a), integer_parts(b))
+    {
+        let magnitude = a_digits
+            .len()
+            .cmp(&b_digits.len())
+            .then_with(|| a_digits.cmp(b_digits));
+        return match (a_negative, b_negative) {
+            (true, false) => true,
+            (false, true) => false,
+            (true, true) => magnitude.is_gt(),
+            (false, false) => magnitude.is_lt(),
+        };
+    }
     match (a.parse::<f64>(), b.parse::<f64>()) {
         (Ok(x), Ok(y)) => x < y,
         _ => a < b,
     }
+}
+
+/// Normalize only integral tokens; retain the original label in the tree.
+fn integer_parts(value: &str) -> Option<(bool, &str)> {
+    let digits = value.strip_prefix(['+', '-']).unwrap_or(value);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let magnitude = digits.trim_start_matches('0');
+    Some((value.starts_with('-') && !magnitude.is_empty(), magnitude))
 }
 
 /// Builds a complete binary tree from `values` by index: the children of
@@ -1114,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_custom_labels_double_as_deque() {
+    fn test_queue_custom_labels_keep_rightward_arrows() {
         let spec = DataStructureSpec {
             front_label: Some("push_back".into()),
             rear_label: Some("push_front".into()),
@@ -1511,66 +1667,6 @@ mod tests {
     }
 
     #[test]
-    fn test_tree_root_box_centered_over_children() {
-        // values ["2","1","3"]: two leaf children (w 5 each, gap 4) give
-        // sub_w 14, so box_x = (14-5)/2 = 4 and the parent center (box col 6)
-        // must equal the descender column.
-        let spec = DataStructureSpec {
-            style: BoxStyle::Sharp,
-            kind: DsKind::Tree,
-            values: vec!["2".into(), "1".into(), "3".into()],
-            ..DataStructureSpec::default()
-        };
-        let out = DataStructureRenderer::new(&spec, Theme::ascii())
-            .render(false)
-            .unwrap();
-        let box_idx = out.lines().position(|l| l.contains("| 2 |")).unwrap();
-        let box_line = out.lines().nth(box_idx).unwrap();
-        assert_eq!(
-            box_line.trim_end(),
-            "    | 2 |",
-            "root box indented by box_x=4"
-        );
-        let descender = out
-            .lines()
-            .skip(box_idx + 1) // past the box rows (they contain `|` too)
-            .find(|l| l.contains('|'))
-            .unwrap();
-        let descender_col = descender.chars().position(|c| c == '|').unwrap();
-        let box_center = box_line.chars().position(|c| c == '2').unwrap();
-        assert_eq!(descender_col, 6, "descender under box center");
-        assert_eq!(descender_col, box_center, "descender under box center");
-    }
-
-    #[test]
-    fn test_wide_child_centers_parent_box() {
-        // Single wider child "333" (w 7): parent box "| 2 |" (w 5) must be
-        // centered at the child's center so the connector lines up.
-        let root = DsNode {
-            value: "2".into(),
-            right: Some(Box::new(DsNode::leaf("333"))),
-            ..DsNode::default()
-        };
-        let out = DataStructureRenderer::new(&spec(DsKind::Tree, root), Theme::ascii())
-            .render(false)
-            .unwrap();
-        let box_idx = out.lines().position(|l| l.contains("| 2 |")).unwrap();
-        let box_line = out.lines().nth(box_idx).unwrap();
-        let box_center = box_line.chars().position(|c| c == '2').unwrap();
-        let descender = out
-            .lines()
-            .skip(box_idx + 1) // past the box rows (they contain `|` too)
-            .find(|l| l.contains('|'))
-            .unwrap();
-        let descender_col = descender.chars().position(|c| c == '|').unwrap();
-        assert!(
-            box_line.starts_with(' '),
-            "parent box indented over wider child"
-        );
-        assert_eq!(descender_col, box_center, "connector meets box center");
-    }
-
-    #[test]
     fn test_btree_root_box_indented_over_children() {
         // 3-child btree (keys 10,20): root box must be left-indented so its
         // center sits over the middle child, and the bar tee marks that spot.
@@ -1704,5 +1800,559 @@ mod tests {
             .render(false)
             .unwrap();
         assert!(out.contains("│ 0 │"), "boundary heap renders");
+    }
+
+    const STYLES: [BoxStyle; 5] = [
+        BoxStyle::Rounded,
+        BoxStyle::Sharp,
+        BoxStyle::Double,
+        BoxStyle::Heavy,
+        BoxStyle::Ascii,
+    ];
+
+    fn node_position(out: &str, theme: &Theme, raw: &str) -> (usize, usize) {
+        let label = DisplayLabel::new(raw);
+        let needle = format!("{} {} ", theme.vertical_line(), label.text);
+        out.lines()
+            .enumerate()
+            .find_map(|(row, line)| {
+                line.find(&needle).map(|offset| {
+                    (
+                        row,
+                        UnicodeWidthStr::width(&line[..offset]) + (label.width.max(1) + 4) / 2,
+                    )
+                })
+            })
+            .unwrap_or_else(|| panic!("missing {raw:?}: {out}"))
+    }
+
+    #[test]
+    fn binary_unary_side_and_connectors_survive_unequal_widths() {
+        for style in STYLES {
+            let theme = Theme::new(style);
+            for (parent, child) in [("P", "C"), ("parent-wide", "中"), ("P", "wide-child🚀")] {
+                let mut outputs = Vec::new();
+                for left in [true, false] {
+                    let mut root = DsNode::leaf(parent);
+                    root.color = Some(Color::Red);
+                    if left {
+                        root.left = Some(Box::new(DsNode::leaf(child)));
+                    } else {
+                        root.right = Some(Box::new(DsNode::leaf(child)));
+                    }
+                    let tree = spec(DsKind::Tree, root);
+                    let renderer = DataStructureRenderer::new(&tree, theme.clone());
+                    let out = renderer.render(false).unwrap();
+                    let (pr, pc) = node_position(&out, &theme, parent);
+                    let (cr, cc) = node_position(&out, &theme, child);
+                    assert_eq!(cr - pr, 6, "{out}");
+                    assert_eq!(cc < pc, left, "{out}");
+                    assert_ne!(cc, pc, "{out}");
+                    for (row, col) in [(pr + 2, pc), (cr - 2, cc)] {
+                        assert_eq!(
+                            out.lines().nth(row).unwrap().chars().nth(col),
+                            Some(theme.vertical_line()),
+                            "connector must meet its node center: {out}"
+                        );
+                    }
+                    assert_eq!(Color::strip_ansi(&renderer.render(true).unwrap()), out);
+                    assert_eq!(
+                        out.matches(&format!("{} ", theme.vertical_line())).count(),
+                        2
+                    );
+                    outputs.push(out);
+                }
+                assert_ne!(outputs[0], outputs[1]);
+            }
+        }
+    }
+
+    #[test]
+    fn binary_ranks_and_sides_follow_heap_topology() {
+        for style in STYLES {
+            let theme = Theme::new(style);
+            for count in [2, 6, 10] {
+                let values: Vec<String> = (0..count)
+                    .map(|i| format!("node{i}{}", "中".repeat(i % 3)))
+                    .collect();
+                let heap = DataStructureSpec {
+                    kind: DsKind::Heap,
+                    values,
+                    ..DataStructureSpec::default()
+                };
+                let out = DataStructureRenderer::new(&heap, theme.clone())
+                    .render(false)
+                    .unwrap();
+                for (i, value) in heap.values.iter().enumerate().skip(1) {
+                    let parent = &heap.values[(i - 1) / 2];
+                    let (pr, pc) = node_position(&out, &theme, parent);
+                    let (cr, cc) = node_position(&out, &theme, value);
+                    assert_eq!(cr, 1 + 6 * (i + 1).ilog2() as usize, "{out}");
+                    assert_eq!(cr - pr, 6, "{out}");
+                    assert_eq!(cc < pc, i % 2 == 1, "{out}");
+                    assert_ne!(cc, pc, "{out}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alternating_binary_chain_has_no_phantom_subtrees() {
+        let mut root = DsNode::leaf("n32");
+        for i in (0..32).rev() {
+            let mut parent = DsNode::leaf(format!("n{i}"));
+            if i % 2 == 0 {
+                parent.left = Some(Box::new(root));
+            } else {
+                parent.right = Some(Box::new(root));
+            }
+            root = parent;
+        }
+        let tree = spec(DsKind::Tree, root);
+        let theme = Theme::ascii();
+        let out = DataStructureRenderer::new(&tree, theme.clone())
+            .render(false)
+            .unwrap();
+        assert_eq!(out.lines().count(), 33 * 6 - 3);
+        assert!(out.lines().map(str::len).max().unwrap() < 20);
+        for i in 0..32 {
+            let (pr, pc) = node_position(&out, &theme, &format!("n{i}"));
+            let (cr, cc) = node_position(&out, &theme, &format!("n{}", i + 1));
+            assert_eq!(cr - pr, 6);
+            assert_eq!(cc < pc, i % 2 == 0);
+        }
+    }
+
+    #[test]
+    fn integral_ordering_is_exact_and_retains_raw_topology() {
+        for values in [
+            ["9007199254740993", "9007199254740992", "0"],
+            [
+                "-9007199254740992",
+                "-9007199254740993",
+                "-999999999999999999999999",
+            ],
+        ] {
+            let strings: Vec<_> = values.iter().map(|s| (*s).to_string()).collect();
+            let root = build_bst(&strings).unwrap();
+            let mut node = &root;
+            for (i, raw) in values.iter().enumerate() {
+                assert_eq!(node.value, *raw);
+                assert!(node.right.is_none());
+                if i + 1 < values.len() {
+                    node = node.left.as_deref().unwrap();
+                } else {
+                    assert!(node.left.is_none());
+                }
+            }
+            let reverse: Vec<_> = strings.into_iter().rev().collect();
+            let root = build_bst(&reverse).unwrap();
+            assert!(root.left.is_none());
+            assert_eq!(
+                root.right.as_ref().unwrap().right.as_ref().unwrap().value,
+                values[0]
+            );
+        }
+        for equal in [
+            ["2", "+0002", "02"],
+            ["-0", "+000", "0"],
+            ["-02", "-2", "-0002"],
+            ["2", "2", "2"],
+        ] {
+            let values: Vec<_> = equal.iter().map(|s| (*s).to_string()).collect();
+            let root = build_bst(&values).unwrap();
+            assert_eq!(root.value, equal[0]);
+            assert!(root.left.is_none());
+            let child = root.right.as_ref().unwrap();
+            assert_eq!(child.value, equal[1]);
+            assert!(child.left.is_none());
+            assert_eq!(child.right.as_ref().unwrap().value, equal[2]);
+        }
+        for (a, b) in [
+            ("2.5", "10.25"),
+            ("-1.5", "-1"),
+            ("apple", "pear"),
+            ("1e2", "101"),
+        ] {
+            assert!(less_than(a, b));
+            assert!(!less_than(b, a));
+        }
+        let json: DataStructureSpec = serde_json::from_str(
+            r#"{"kind":"tree","values":[9007199254740993,9007199254740992,0]}"#,
+        )
+        .unwrap();
+        let root = build_bst(&json.values).unwrap();
+        assert_eq!(root.left.as_ref().unwrap().value, "9007199254740992");
+        assert_eq!(
+            root.left.as_ref().unwrap().left.as_ref().unwrap().value,
+            "0"
+        );
+    }
+
+    #[test]
+    fn display_labels_borrow_plain_and_roundtrip_every_control() {
+        for raw in ["", "plain", "中🚀", "a b"] {
+            let label = DisplayLabel::new(raw);
+            assert!(matches!(label.text, Cow::Borrowed(_)));
+            assert_eq!(label.text, raw);
+            assert_eq!(label.width, UnicodeWidthStr::width(raw));
+        }
+        let mut special = vec![
+            " a ".to_string(),
+            "\"quoted\"".to_string(),
+            "a\\nb".to_string(),
+            "a\nb".to_string(),
+            "a\\tb".to_string(),
+            "\u{2003}x".to_string(),
+        ];
+        special.extend(
+            (0..=0x9f)
+                .filter_map(char::from_u32)
+                .filter(|c| c.is_control())
+                .map(|c| format!("a{c}b")),
+        );
+        for raw in special {
+            let label = DisplayLabel::new(&raw);
+            assert!(
+                !label.text.chars().any(char::is_control),
+                "{:?}",
+                label.text
+            );
+            assert_eq!(serde_json::from_str::<String>(&label.text).unwrap(), raw);
+            assert_eq!(label.width, UnicodeWidthStr::width(label.text.as_ref()));
+        }
+        assert_ne!(
+            DisplayLabel::new("a\nb").text,
+            DisplayLabel::new("a\\nb").text
+        );
+        assert_ne!(DisplayLabel::new("\t").text, DisplayLabel::new("\\t").text);
+    }
+
+    #[test]
+    fn special_labels_reach_every_native_cell_and_endpoint_once() {
+        let raw = " a\nb\t\r\u{1b}\u{7f}\u{85}\\\"中🚀 ";
+        let encoded = DisplayLabel::new(raw);
+        for style in STYLES {
+            for kind in [
+                DsKind::Tree,
+                DsKind::BTree,
+                DsKind::Heap,
+                DsKind::LinkedList,
+                DsKind::DoublyLinkedList,
+                DsKind::Array,
+                DsKind::Queue,
+                DsKind::Graph,
+            ] {
+                let spec = DataStructureSpec {
+                    kind,
+                    nodes: vec![raw.into(), "other".into()],
+                    values: vec![raw.into(), "other".into()],
+                    btree_root: Some(DsNode {
+                        keys: vec![raw.into(), "other".into()],
+                        ..DsNode::default()
+                    }),
+                    edges: vec![vec![raw.into(), "other".into()]],
+                    head_label: Some(raw.into()),
+                    tail_label: Some(raw.into()),
+                    front_label: Some(raw.into()),
+                    rear_label: Some(raw.into()),
+                    ..DataStructureSpec::default()
+                };
+                let renderer = DataStructureRenderer::new(&spec, Theme::new(style));
+                let out = renderer.render(false).unwrap();
+                assert!(out.contains(encoded.text.as_ref()), "{kind:?}: {out}");
+                assert!(!out.chars().any(|c| c.is_control() && c != '\n'));
+                assert_eq!(
+                    out.matches(encoded.text.as_ref()).count(),
+                    match kind {
+                        DsKind::LinkedList => 2,
+                        DsKind::Queue | DsKind::DoublyLinkedList => 3,
+                        _ => 1,
+                    },
+                    "{out}"
+                );
+                assert_eq!(
+                    out.lines().count(),
+                    match kind {
+                        DsKind::Array => 4,
+                        DsKind::Graph => 7,
+                        DsKind::Tree | DsKind::Heap => 9,
+                        _ => 3,
+                    },
+                    "{out}"
+                );
+                assert_eq!(renderer.render(true).unwrap(), out);
+                match kind {
+                    DsKind::LinkedList => assert_linear_frames(&out, &Theme::new(style), 2),
+                    DsKind::Queue => assert_linear_frames(&out, &Theme::new(style), 1),
+                    DsKind::DoublyLinkedList => assert_linear_frames(&out, &Theme::new(style), 3),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    fn assert_linear_frames(out: &str, theme: &Theme, cells_per_box: usize) {
+        let lines: Vec<_> = out.lines().collect();
+        let columns = |line: &str, a: char, b: char| {
+            line.char_indices()
+                .filter(|(_, ch)| *ch == a || *ch == b)
+                .map(|(offset, _)| UnicodeWidthStr::width(&line[..offset]))
+                .collect::<Vec<_>>()
+        };
+        let walls = columns(lines[1], theme.vertical_line(), theme.vertical_line());
+        let borders: Vec<_> = walls
+            .chunks_exact(cells_per_box + 1)
+            .flat_map(|cell| [cell[0], cell[cells_per_box]])
+            .collect();
+        assert_eq!(walls.len() % (cells_per_box + 1), 0);
+        assert_eq!(
+            columns(lines[0], theme.top_left_corner(), theme.top_right_corner()),
+            borders,
+            "{out}"
+        );
+        assert_eq!(
+            columns(
+                lines[2],
+                theme.bottom_left_corner(),
+                theme.bottom_right_corner()
+            ),
+            borders,
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn array_ruler_uses_displayed_widths_through_index_100() {
+        let values: Vec<_> = (0..=100)
+            .map(|i| {
+                if i % 10 == 0 {
+                    "中\n🚀".into()
+                } else {
+                    "".into()
+                }
+            })
+            .collect();
+        let spec = DataStructureSpec {
+            kind: DsKind::Array,
+            values,
+            ..DataStructureSpec::default()
+        };
+        for style in STYLES {
+            let theme = Theme::new(style);
+            let out = DataStructureRenderer::new(&spec, theme.clone())
+                .render(false)
+                .unwrap();
+            let lines: Vec<_> = out.lines().collect();
+            assert_eq!(lines.len(), 4);
+            let frame_w = UnicodeWidthStr::width(lines[1]);
+            assert_eq!(frame_w, UnicodeWidthStr::width(lines[2]));
+            assert_eq!(frame_w, UnicodeWidthStr::width(lines[3]));
+            let mut column = 1;
+            for (i, cell) in lines[2]
+                .split(theme.vertical_line())
+                .skip(1)
+                .take(101)
+                .enumerate()
+            {
+                let inner_width = UnicodeWidthStr::width(cell);
+                let index = i.to_string();
+                let start = column + 1 + (inner_width - 2 - index.len()) / 2;
+                assert_eq!(&lines[0][start..start + index.len()], index);
+                column += inner_width + 1;
+            }
+        }
+    }
+
+    #[test]
+    fn btree_color_never_enters_geometry() {
+        for style in STYLES {
+            for count in 1..=3 {
+                let root = DsNode {
+                    keys: ["10", "20", "30"][..count]
+                        .iter()
+                        .map(|s| (*s).into())
+                        .collect(),
+                    color: Some(Color::Red),
+                    ..DsNode::default()
+                };
+                let mut tree = spec(DsKind::BTree, root);
+                let renderer = DataStructureRenderer::new(&tree, Theme::new(style));
+                let plain = renderer.render(false).unwrap();
+                assert_eq!(Color::strip_ansi(&renderer.render(true).unwrap()), plain);
+                assert_eq!(
+                    UnicodeWidthStr::width(plain.lines().next().unwrap()),
+                    count * 5 + 1
+                );
+                tree.btree_root.as_mut().unwrap().children = vec![
+                    DsNode {
+                        keys: vec!["a\nb".into(), "中".into()],
+                        ..DsNode::default()
+                    },
+                    DsNode {
+                        keys: vec!["x".into(), "y".into(), "z".into()],
+                        color: Some(Color::Blue),
+                        ..DsNode::default()
+                    },
+                ];
+                let renderer = DataStructureRenderer::new(&tree, Theme::new(style));
+                let colored = renderer.render(true).unwrap();
+                assert!(colored.contains("\u{1b}[31m") && colored.contains("\u{1b}[34m"));
+                assert_eq!(Color::strip_ansi(&colored), renderer.render(false).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn graph_rejects_coerced_duplicates_without_collapsing_edges() {
+        for json in [
+            r#"{"kind":"graph","nodes":["a","a","b"]}"#,
+            r#"{"kind":"graph","nodes":[1,"1",2]}"#,
+        ] {
+            let spec: DataStructureSpec = serde_json::from_str(json).unwrap();
+            let err = DataStructureRenderer::new(&spec, Theme::ascii())
+                .render(false)
+                .unwrap_err();
+            assert!(err.contains("duplicate"));
+            assert!(err.contains(&spec.nodes[0]));
+        }
+        let spec = graph_spec(&["a", "b"], &[&["a", "b"], &["a", "b"], &["a", "a"]]);
+        let out = DataStructureRenderer::new(&spec, Theme::ascii())
+            .render(false)
+            .unwrap();
+        assert_eq!(
+            out.lines().nth(1).unwrap(),
+            "| a | -> | b | -> | b | -> | a |"
+        );
+        assert_eq!(out.lines().nth(5).unwrap(), "| b |");
+    }
+
+    #[test]
+    fn graph_whitespace_and_escape_keys_keep_raw_identity() {
+        let nodes = ["", " ", "a", "a ", "a\nb", "a\\nb", "\"a \""];
+        let spec = graph_spec(
+            &nodes,
+            &[
+                &["a", "a "],
+                &["a ", " "],
+                &["", "a\nb"],
+                &["a\nb", "a\\nb"],
+                &["a\\nb", "\"a \""],
+            ],
+        );
+        let targets = [Some(4), None, Some(3), Some(1), Some(5), Some(6), None];
+        for style in STYLES {
+            let theme = Theme::new(style);
+            let out = DataStructureRenderer::new(&spec, theme.clone())
+                .render(false)
+                .unwrap();
+            let lines: Vec<_> = out.lines().collect();
+            assert_eq!(lines.len(), 27);
+            for (i, target) in targets.iter().enumerate() {
+                let fields: Vec<_> = lines[i * 4 + 1]
+                    .split(theme.vertical_line())
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::trim)
+                    .collect();
+                assert_eq!(fields[0], DisplayLabel::new(nodes[i]).text);
+                assert_eq!(fields.len(), 1 + usize::from(target.is_some()));
+                if let Some(target) = target {
+                    assert_eq!(fields[1], DisplayLabel::new(nodes[*target]).text);
+                }
+                let width = UnicodeWidthStr::width(lines[i * 4]);
+                assert_eq!(width, UnicodeWidthStr::width(lines[i * 4 + 1]));
+                assert_eq!(width, UnicodeWidthStr::width(lines[i * 4 + 2]));
+            }
+        }
+    }
+
+    #[test]
+    fn doublylinkedlist_pointer_cells_and_endpoints_follow_occurrences() {
+        for nodes in [
+            vec!["one"],
+            vec!["10", "20", "30"],
+            vec!["dup", "dup", "0", "", "NULL"],
+            vec!["long-value", "中🚀", "a\nb", "a\\nb"],
+        ] {
+            for style in STYLES {
+                let theme = Theme::new(style);
+                let spec = DataStructureSpec {
+                    kind: DsKind::DoublyLinkedList,
+                    nodes: nodes.iter().map(|s| (*s).into()).collect(),
+                    head_label: Some(" h\t".into()),
+                    tail_label: Some("t\r ".into()),
+                    ..DataStructureSpec::default()
+                };
+                let renderer = DataStructureRenderer::new(&spec, theme.clone());
+                let out = renderer.render(false).unwrap();
+                assert_eq!(out, renderer.render(true).unwrap());
+                let lines: Vec<_> = out.lines().collect();
+                assert_eq!(lines.len(), 3);
+                let fields: Vec<_> = lines[1].split(theme.vertical_line()).collect();
+                assert_eq!(fields.len(), 4 * nodes.len() + 1);
+                assert_eq!(
+                    fields[0],
+                    format!(
+                        "{} {}{} ",
+                        DisplayLabel::new(" h\t").text,
+                        theme.horizontal_line(),
+                        theme.arrow_right()
+                    )
+                );
+                assert_eq!(
+                    fields.last().unwrap(),
+                    &format!(
+                        " {}{} {}",
+                        theme.arrow_left(),
+                        theme.horizontal_line(),
+                        DisplayLabel::new("t\r ").text
+                    )
+                );
+                let (pointer, null) = if style == BoxStyle::Ascii {
+                    ("X", "NULL")
+                } else {
+                    ("●", "∅")
+                };
+                for (i, raw) in nodes.iter().enumerate() {
+                    assert_eq!(
+                        fields[i * 4 + 1].trim(),
+                        if i == 0 { null } else { pointer }
+                    );
+                    assert_eq!(fields[i * 4 + 2].trim(), DisplayLabel::new(raw).text);
+                    assert_eq!(
+                        fields[i * 4 + 3].trim(),
+                        if i + 1 == nodes.len() { null } else { pointer }
+                    );
+                    if i > 0 {
+                        assert_eq!(
+                            fields[i * 4],
+                            format!(
+                                " {}{}{} ",
+                                theme.arrow_left(),
+                                theme.horizontal_line(),
+                                theme.arrow_right()
+                            )
+                        );
+                    }
+                }
+                assert_eq!(
+                    UnicodeWidthStr::width(lines[0]),
+                    UnicodeWidthStr::width(lines[2])
+                );
+                assert_linear_frames(&out, &theme, 3);
+                if style == BoxStyle::Ascii && nodes.iter().all(|s| s.is_ascii()) {
+                    assert!(out.is_ascii());
+                }
+            }
+        }
+        let empty = DataStructureSpec {
+            kind: DsKind::DoublyLinkedList,
+            ..DataStructureSpec::default()
+        };
+        let err = DataStructureRenderer::new(&empty, Theme::ascii())
+            .render(false)
+            .unwrap_err();
+        assert!(err.contains("doublylinkedlist") && err.contains("nodes"));
     }
 }

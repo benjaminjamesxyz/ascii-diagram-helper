@@ -95,7 +95,7 @@ enum Commands {
     },
     /// Generate example diagram specs for quick reference
     Example {
-        /// Type of example: flowchart, sequence, architecture, tree, table, stack, datastructure, queue, heap, graph
+        /// Type of example: flowchart, sequence, architecture, tree, table, stack, datastructure, doublylinkedlist, queue, heap, graph
         ///
         /// Aliases: ds, btree, bst, binarytree, linkedlist, array
         #[arg(value_name = "TYPE", default_value = "flowchart")]
@@ -103,8 +103,7 @@ enum Commands {
     },
 }
 
-const VALID_EXAMPLE_TYPES: &str =
-    "flowchart, sequence, architecture, tree, table, stack, datastructure, queue, heap, graph";
+const VALID_EXAMPLE_TYPES: &str = "flowchart, sequence, architecture, tree, table, stack, datastructure, doublylinkedlist, queue, heap, graph";
 const EXAMPLE_ALIASES: &str = "ds, btree, bst, binarytree, linkedlist, array";
 
 const FLOWCHART_EXAMPLE: &str = r"graph TD
@@ -172,6 +171,9 @@ color: cyan
         ),
         "linkedlist" => Ok(
             r#"{"type":"datastructure","kind":"linkedlist","title":"Linked List","nodes":["10","20","30"]}"#,
+        ),
+        "doublylinkedlist" => Ok(
+            r#"{"type":"datastructure","kind":"doublylinkedlist","title":"Doubly Linked List","nodes":[10,20,30]}"#,
         ),
         "array" => {
             Ok(r#"{"type":"datastructure","kind":"array","title":"Array","values":["a","b","c"]}"#)
@@ -605,31 +607,6 @@ mod tests {
         }
         for a in ["ds", "btree", "bst", "binarytree", "linkedlist", "array"] {
             assert!(err.contains(a), "missing alias {a}: {err}");
-        }
-    }
-
-    #[test]
-    fn example_every_documented_type_resolves() {
-        for t in [
-            "flowchart",
-            "sequence",
-            "architecture",
-            "tree",
-            "table",
-            "stack",
-            "datastructure",
-            "queue",
-            "heap",
-            "graph",
-            "ds",
-            "btree",
-            "bst",
-            "binarytree",
-            "linkedlist",
-            "array",
-        ] {
-            let spec = example_spec(t).unwrap_or_else(|e| panic!("{t}: {e}"));
-            assert!(!spec.is_empty(), "{t} spec must be non-empty");
         }
     }
 

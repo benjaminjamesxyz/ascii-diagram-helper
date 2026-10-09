@@ -85,19 +85,19 @@ impl<'a> TreeRenderer<'a> {
 
         let name = expand_tabs(&node.name);
         let label = match &node.annotation {
-            Some(ann) => format!(
-                "{}{}{} ({})",
-                prefix,
-                paint(colored, effective, branch),
-                name,
-                expand_tabs(ann)
-            ),
-            None => format!("{}{}{}", prefix, paint(colored, effective, branch), name),
+            Some(ann) => format!("{name} ({})", expand_tabs(ann)).into(),
+            None => name,
         };
-        lines.push(label);
 
         let child_prefix = if is_last { "    " } else { gutter };
         let new_prefix = format!("{prefix}{}", paint(colored, effective, child_prefix));
+        for (i, line) in label.split('\n').enumerate() {
+            lines.push(if i == 0 {
+                format!("{prefix}{}{line}", paint(colored, effective, branch))
+            } else {
+                format!("{new_prefix}{line}")
+            });
+        }
 
         let num_children = node.children.len();
         for (i, child) in node.children.iter().enumerate() {
@@ -370,6 +370,113 @@ mod tests {
         assert!(
             out.contains("a   b (x   y)"),
             "4-col-stop expansion: {out:?}"
+        );
+    }
+
+    #[test]
+    fn test_multiline_child_names_and_annotations_keep_style_gutters() {
+        for (style, tee, elbow, gutter) in [
+            (BoxStyle::Rounded, "├── ", "╰── ", "│   "),
+            (BoxStyle::Sharp, "├── ", "└── ", "│   "),
+            (BoxStyle::Double, "╠══ ", "╚══ ", "║   "),
+            (BoxStyle::Heavy, "┣━━ ", "┗━━ ", "┃   "),
+            (BoxStyle::Ascii, "|-- ", "\\-- ", "|   "),
+        ] {
+            for (name, annotation, first, continuation) in [
+                ("one\ntwo", None, "one", "two"),
+                ("item", Some("a\nb"), "item (a", "b)"),
+            ] {
+                let spec = TreeSpec {
+                    style,
+                    root: TreeNodeSpec {
+                        name: "root".to_string(),
+                        annotation: None,
+                        color: None,
+                        children: vec![
+                            TreeNodeSpec {
+                                name: name.to_string(),
+                                annotation: annotation.map(str::to_string),
+                                color: None,
+                                children: vec![],
+                            },
+                            TreeNodeSpec {
+                                name: "last".to_string(),
+                                annotation: None,
+                                color: None,
+                                children: vec![],
+                            },
+                        ],
+                    },
+                };
+                assert_eq!(
+                    TreeRenderer::new(&spec, Theme::new(style)).render(false),
+                    format!("root\n{tee}{first}\n{gutter}{continuation}\n{elbow}last")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_multiline_nested_empty_segments_and_inherited_colors() {
+        let spec = TreeSpec {
+            style: BoxStyle::Rounded,
+            root: TreeNodeSpec {
+                name: "root".to_string(),
+                annotation: None,
+                color: Some(Color::Blue),
+                children: vec![
+                    TreeNodeSpec {
+                        name: "dir\n".to_string(),
+                        annotation: None,
+                        color: None,
+                        children: vec![TreeNodeSpec {
+                            name: "\nleaf\n\n".to_string(),
+                            annotation: None,
+                            color: Some(Color::Red),
+                            children: vec![],
+                        }],
+                    },
+                    TreeNodeSpec {
+                        name: "last\nend\n".to_string(),
+                        annotation: None,
+                        color: None,
+                        children: vec![],
+                    },
+                ],
+            },
+        };
+        let renderer = TreeRenderer::new(&spec, Theme::new(spec.style));
+        let plain = renderer.render(false);
+        assert_eq!(
+            plain,
+            "root\n├── dir\n│   \n│   ╰── \n│       leaf\n│       \n│       \n╰── last\n    end\n    "
+        );
+        let colored = renderer.render(true);
+        assert_eq!(Color::strip_ansi(&colored), plain);
+        assert!(colored.contains("\n\u{1b}[34m│   \u{1b}[39m\n"));
+        assert!(colored.contains("\n\u{1b}[34m│   \u{1b}[39m\u{1b}[31m    \u{1b}[39mleaf\n"));
+        assert!(colored.ends_with("\n\u{1b}[34m    \u{1b}[39m"));
+    }
+
+    #[test]
+    fn test_multiline_root_and_child_tabs_preserve_physical_lines() {
+        let spec = TreeSpec {
+            style: BoxStyle::Rounded,
+            root: TreeNodeSpec {
+                name: "root\n".to_string(),
+                annotation: None,
+                color: None,
+                children: vec![TreeNodeSpec {
+                    name: "a\tb\n".to_string(),
+                    annotation: Some("x\ty\n".to_string()),
+                    color: None,
+                    children: vec![],
+                }],
+            },
+        };
+        assert_eq!(
+            TreeRenderer::new(&spec, Theme::new(spec.style)).render(false),
+            "root\n\n╰── a   b\n     (x   y\n    )"
         );
     }
 }

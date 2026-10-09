@@ -1637,3 +1637,283 @@ mod band_gap_tests {
         assert_eq!(rows.len(), 2, "compact band with loop-back present:\n{out}");
     }
 }
+
+#[cfg(test)]
+mod firmware_group_regressions {
+    use super::*;
+    use crate::schema::DiagramSpec;
+    use unicode_width::UnicodeWidthChar;
+
+    const STYLES: [BoxStyle; 5] = [
+        BoxStyle::Rounded,
+        BoxStyle::Sharp,
+        BoxStyle::Double,
+        BoxStyle::Heavy,
+        BoxStyle::Ascii,
+    ];
+
+    fn parse(dsl: &str, style: BoxStyle) -> FlowchartSpec {
+        let DiagramSpec::Flowchart(spec) =
+            crate::parser::parse_dsl_or_json(dsl, style).unwrap()
+        else {
+            panic!("expected flowchart");
+        };
+        spec
+    }
+
+    fn columns(line: &str) -> Vec<char> {
+        let mut cells = Vec::new();
+        for ch in line.chars() {
+            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if width > 0 {
+                cells.push(ch);
+                cells.extend(std::iter::repeat_n(' ', width - 1));
+            }
+        }
+        cells
+    }
+
+    fn is_wire(ch: char) -> bool {
+        "─│┌┐└┘┬┴├┤┼╭╮╰╯═║╔╗╚╝╦╩╠╣╬━┃┏┓┗┛┳┻┣┫╋-+|▼v".contains(ch)
+    }
+
+    #[test]
+    fn shared_rank_groups_move_all_ranks_and_leave_blank_padding() {
+        let spec = parse(
+            "graph TD
+             TOP[Input Source]
+             subgraph S1 [CORE ZERO FLIGHT LOOP]
+               A[Attitude] --> B[Mixer]
+             end
+             subgraph S2 [CORE ONE NAVIGATION]
+               C[Decoder] --> D[Guard]
+             end
+             TOP --> A
+             TOP --> C
+             TOP --> OUTSIDE[External]",
+            BoxStyle::Rounded,
+        );
+        let renderer = FlowchartRenderer::new(&spec, Theme::new(spec.style));
+        let blocks = Blocks::empty();
+        let idx = renderer.index_of();
+        let mut nodes = renderer.prepare_nodes(&blocks);
+        let layers = renderer.assign_ranks(&mut nodes, &idx);
+        for layer in &layers {
+            let mut x = 5;
+            for &i in layer {
+                nodes[i].x = x;
+                nodes[i].y = nodes[i].rank * 10 + 5;
+                x += nodes[i].width + 4;
+            }
+        }
+        let old_x: Vec<_> = nodes.iter().map(|n| n.x).collect();
+        renderer.separate_tb_groups(&mut nodes, &idx, &blocks);
+        let groups = renderer.collect_group_rects(&nodes, &idx, &blocks);
+        assert_eq!(groups.len(), 2);
+        let (left, right) = if groups[0].0.x < groups[1].0.x {
+            (groups[0].0, groups[1].0)
+        } else {
+            (groups[1].0, groups[0].0)
+        };
+        assert!(right.x >= left.x + left.width + 2);
+        for (rect, id, _, _) in &groups {
+            let outsider = &nodes[idx["OUTSIDE"]];
+            assert!(!rect.intersects(&Rect::new(
+                outsider.x,
+                outsider.y,
+                outsider.width,
+                outsider.height,
+            )));
+            let sg = FlowchartRenderer::find_subgraph(&spec.subgraphs, id).unwrap();
+            let members = member_ids(sg);
+            let first = idx[members[0].as_str()];
+            let shift = nodes[first].x - old_x[first];
+            for member in members {
+                let i = idx[member.as_str()];
+                let n = &nodes[i];
+                assert_eq!(n.x - old_x[i], shift, "group ranks move together");
+                assert!(n.x >= rect.x + 2, "blank cell before member");
+                assert!(n.x + n.width < rect.x + rect.width - 1);
+                assert!(n.y >= rect.y + 2);
+                assert!(n.y + n.height < rect.y + rect.height);
+            }
+        }
+    }
+
+    #[test]
+    fn nested_shared_rank_groups_keep_containment_and_whole_titles() {
+        let dsl = "graph TD
+            TOP[Input]
+            subgraph ROOT [Flight Controller]
+              subgraph C0 [实时飞控 CORE ZERO]
+                A[Attitude] --> B[Mixer]
+              end
+              subgraph C1 [导航遥测 CORE ONE]
+                C[Decoder] --> D[Guard]
+              end
+            end
+            TOP --> A
+            TOP --> C";
+        for style in STYLES {
+            let spec = parse(dsl, style);
+            let renderer = FlowchartRenderer::new(&spec, Theme::new(style));
+            let blocks = Blocks::empty();
+            let idx = renderer.index_of();
+            let mut nodes = renderer.prepare_nodes(&blocks);
+            let layers = renderer.assign_ranks(&mut nodes, &idx);
+            for layer in layers {
+                let mut x = 7;
+                for i in layer {
+                    nodes[i].x = x;
+                    nodes[i].y = nodes[i].rank * 12 + 7;
+                    x += nodes[i].width + 4;
+                }
+            }
+            renderer.separate_tb_groups(&mut nodes, &idx, &blocks);
+            let groups = renderer.collect_group_rects(&nodes, &idx, &blocks);
+            let root = groups.iter().find(|(_, id, _, _)| id == "ROOT").unwrap().0;
+            let c0 = groups.iter().find(|(_, id, _, _)| id == "C0").unwrap().0;
+            let c1 = groups.iter().find(|(_, id, _, _)| id == "C1").unwrap().0;
+            assert!(!c0.intersects(&c1));
+            for child in [c0, c1] {
+                assert!(child.x >= root.x + 2);
+                assert!(child.right() + 2 <= root.right());
+                assert!(child.y >= root.y + 2);
+                assert!(child.bottom() < root.bottom());
+            }
+            let out = renderer.render(false);
+            for title in ["Flight Controller", "实时飞控 CORE ZERO", "导航遥测 CORE ONE"] {
+                assert!(out.contains(title), "{style:?}: missing title {title}:\n{out}");
+            }
+            // The shared title-placement code also serves horizontal layouts.
+            let lr = parse(&dsl.replace("graph TD", "graph LR"), style);
+            let out = FlowchartRenderer::new(&lr, Theme::new(style)).render(false);
+            for title in ["Flight Controller", "实时飞控 CORE ZERO", "导航遥测 CORE ONE"] {
+                assert!(out.contains(title), "{style:?}: LR title {title}:\n{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn four_and_eight_motor_drops_cross_group_border_without_title_gaps() {
+        for count in [4, 8] {
+            let mut dsl = String::from("graph TD\nsubgraph ACT [电机 ACTUATORS & MOTORS]\n");
+            for motor in 1..=count {
+                dsl.push_str(&format!("M{motor}[Motor{motor}]\n"));
+            }
+            dsl.push_str("end\nMIX[Mixer]\n");
+            for motor in 1..=count {
+                if motor == 1 {
+                    dsl.push_str("MIX -->|Motor Duty| M1\n");
+                } else {
+                    dsl.push_str(&format!("MIX --> M{motor}\n"));
+                }
+            }
+            for style in STYLES {
+                let spec = parse(&dsl, style);
+                let theme = Theme::new(style);
+                let out = FlowchartRenderer::new(&spec, theme.clone()).render(false);
+                assert!(out.contains("电机 ACTUATORS & MOTORS"), "{out}");
+                assert!(out.contains("Motor Duty"), "{out}");
+                let lines: Vec<_> = out.lines().collect();
+                let grid: Vec<_> = lines.iter().map(|line| columns(line)).collect();
+                let title_y = lines.iter().position(|l| l.contains("ACTUATORS")).unwrap();
+                for motor in 1..=count {
+                    let label = format!("Motor{motor}");
+                    let y = lines.iter().position(|l| l.contains(&label)).unwrap();
+                    let byte_x = lines[y].find(&label).unwrap();
+                    let x = UnicodeWidthStr::width(&lines[y][..byte_x]) + 3;
+                    assert_eq!(grid[y - 2][x], theme.arrow_down(), "{out}");
+                    assert!(title_y < y - 2, "{out}");
+                    for row in &grid[title_y..y - 2] {
+                        assert!(is_wire(row[x]), "Motor {motor} drop broken:\n{out}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn converging_decision_inputs_land_on_the_diamond_not_its_neighbor() {
+        for style in STYLES.into_iter().filter(|s| *s != BoxStyle::Ascii) {
+            let spec = parse(
+                "graph TD
+                 A[Left feed] --> SAFE{Failsafe\\nLink Guard}
+                 B[Right feed] --> SAFE
+                 SAFE --> OUT[Commands]",
+                style,
+            );
+            let theme = Theme::new(style);
+            let out = FlowchartRenderer::new(&spec, theme.clone()).render(false);
+            let grid: Vec<_> = out.lines().map(columns).collect();
+            let y = grid.iter().position(|row| row.contains(&'◇')).unwrap();
+            let x = grid[y].iter().position(|ch| *ch == '◇').unwrap();
+            assert_eq!(grid[y - 1][x], theme.arrow_down(), "{out}");
+            assert_eq!(grid[y][x - 1], ' ', "{out}");
+            assert_eq!(grid[y][x + 1], ' ', "{out}");
+            assert!(out.contains("Failsafe") && out.contains("Link Guard"), "{out}");
+            assert_eq!(
+                grid[y - 1]
+                    .iter()
+                    .filter(|&&ch| ch == theme.arrow_down())
+                    .count(),
+                1,
+                "both inputs converge onto the badge:\n{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn title_crossing_corridor_stays_connected_around_whole_header() {
+        for style in STYLES {
+            let spec = parse(
+                "graph TD; subgraph G [A HEADER WITH CORRIDORS]; A[Node]; end",
+                style,
+            );
+            let renderer = FlowchartRenderer::new(&spec, Theme::new(style));
+            let blocks = Blocks::empty();
+            let idx = renderer.index_of();
+            let mut nodes = renderer.prepare_nodes(&blocks);
+            nodes[0].x = 5;
+            nodes[0].y = 6;
+            let rect = renderer.collect_group_rects(&nodes, &idx, &blocks)[0].0;
+            let mut canvas = Canvas::new(rect.right() + 3, rect.bottom() + 3);
+            for x in rect.x + 1..rect.right() {
+                canvas.draw_vline(x, rect.y - 1, rect.y + 1);
+            }
+            let source = (rect.x + 4, rect.y - 1);
+            let target = (rect.x + 4, rect.y + 1);
+            renderer.draw_subgraphs(&mut canvas, &nodes, &idx, &blocks);
+            let out = canvas.render_impl(&Theme::new(style), false);
+            assert!(out.contains("A HEADER WITH CORRIDORS"), "{out}");
+            let mut queue = VecDeque::from([source]);
+            let mut seen = HashSet::from([source]);
+            while let Some((x, y)) = queue.pop_front() {
+                for (dx, dy) in [(0isize, -1isize), (0, 1), (-1, 0), (1, 0)] {
+                    let (Some(nx), Some(ny)) =
+                        (x.checked_add_signed(dx), y.checked_add_signed(dy))
+                    else {
+                        continue;
+                    };
+                    let connected = canvas
+                        .get_cell(x, y)
+                        .zip(canvas.get_cell(nx, ny))
+                        .is_some_and(|(from, to)| {
+                            let joined = match (dx, dy) {
+                                (0, -1) => from.conn.north && to.conn.south,
+                                (0, 1) => from.conn.south && to.conn.north,
+                                (-1, 0) => from.conn.west && to.conn.east,
+                                (1, 0) => from.conn.east && to.conn.west,
+                                _ => unreachable!(),
+                            };
+                            joined && to.is_line && to.ch == ' ' && to.role != CellRole::Text
+                        });
+                    if connected && seen.insert((nx, ny)) {
+                        queue.push_back((nx, ny));
+                    }
+                }
+            }
+            assert!(seen.contains(&target), "corridor broken by title:\n{out}");
+        }
+    }
+}

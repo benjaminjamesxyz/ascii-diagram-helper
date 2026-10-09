@@ -485,6 +485,9 @@ impl<'a> FlowchartRenderer<'a> {
                     // Solid continuous box-drawing borders with an embedded diamond badge.
                     // Never breaks across terminal fonts or character aspect ratios.
                     let w = (max_text_w + 6).max(10);
+                    // An odd width puts the padded diamond badge and the
+                    // incoming/outgoing anchor on the same display column.
+                    let w = w | 1;
                     let h = lines.len() + 2;
                     (w, h)
                 }
@@ -582,6 +585,31 @@ impl<'a> FlowchartRenderer<'a> {
             .collect()
     }
 
+    /// Dense fan-outs need a contiguous title shelf clear of member anchors.
+    fn group_title_right(
+        sg: &SubgraphSpec,
+        left: usize,
+        right: usize,
+        nodes: &[LayoutNode],
+        idx: &HashMap<&str, usize>,
+    ) -> usize {
+        let label_width = UnicodeWidthStr::width(sg.title.as_deref().unwrap_or(&sg.id)) + 2;
+        let right = right.max(left + label_width + 3);
+        let mut x = left + 2;
+        while x + label_width <= right {
+            let blocker = idx.iter().find_map(|(&id, &i)| {
+                let cx = nodes[i].x + nodes[i].width / 2;
+                (Self::subgraph_contains_node(sg, id) && cx >= x && cx < x + label_width)
+                    .then_some(cx)
+            });
+            let Some(cx) = blocker else {
+                return right;
+            };
+            x = cx + 1;
+        }
+        right + label_width + 2
+    }
+
     /// Group boxes as `(rect, subgraph id, title, color)` in declaration
     /// order — shared by `draw_subgraphs` and the layout-time geometry pass.
     pub(super) fn collect_group_rects(
@@ -631,12 +659,7 @@ impl<'a> FlowchartRenderer<'a> {
             let by = y0.saturating_sub(pad_top);
             let mut br = x1.saturating_add(pad_x);
             let bb = y1.saturating_add(pad_bottom);
-            // Widen the box so the title fits on the top border
-            let title = sg.title.clone().unwrap_or_else(|| sg.id.clone());
-            let min_w = UnicodeWidthStr::width(format!(" {title} ").as_str()) + 4;
-            if br - bx + 1 < min_w {
-                br = bx + min_w - 1;
-            }
+            br = FlowchartRenderer::group_title_right(sg, bx, br, nodes, idx);
             Some(Rect::new(bx, by, br - bx + 1, bb - by + 1))
         }
 
@@ -658,10 +681,7 @@ impl<'a> FlowchartRenderer<'a> {
                     let by = oy.saturating_sub(pad_top);
                     let mut br = ox + w + pad_x;
                     let bb = oy + h + pad_bottom;
-                    let min_w = UnicodeWidthStr::width(format!(" {title} ").as_str()) + 4;
-                    if br - bx + 1 < min_w {
-                        br = bx + min_w - 1;
-                    }
+                    br = FlowchartRenderer::group_title_right(sg, bx, br, nodes, idx);
                     out.push((
                         Rect::new(bx, by, br - bx + 1, bb - by + 1),
                         sg.id.clone(),
@@ -813,6 +833,137 @@ impl<'a> FlowchartRenderer<'a> {
         }
     }
 
+    /// Pack sibling groups as indivisible units, moving every member rank
+    /// together. Packing individual ranks can widen a group back across the
+    /// sibling that was just moved out of it.
+    #[allow(clippy::too_many_lines, reason = "recursive compound group packing")]
+    fn separate_tb_groups(
+        &self,
+        nodes: &mut [LayoutNode],
+        idx: &HashMap<&str, usize>,
+        blocks: &Blocks,
+    ) {
+        if self.spec.subgraphs.is_empty() {
+            return;
+        }
+
+        struct Unit {
+            rect: Rect,
+            members: Vec<usize>,
+        }
+
+        fn pack(mut units: Vec<Unit>, nodes: &mut [LayoutNode]) -> Vec<Unit> {
+            units.sort_by_key(|u| (u.rect.x, u.rect.y));
+            for i in 0..units.len() {
+                let mut x = units[i].rect.x;
+                for previous in &units[..i] {
+                    let r = previous.rect;
+                    let current = units[i].rect;
+                    if current.y < r.y + r.height && r.y < current.y + current.height {
+                        x = x.max(r.x + r.width + 2);
+                    }
+                }
+                let shift = x - units[i].rect.x;
+                for &member in &units[i].members {
+                    nodes[member].x += shift;
+                }
+                units[i].rect.x = x;
+            }
+            units
+        }
+
+        fn group(
+            sg: &SubgraphSpec,
+            nodes: &mut [LayoutNode],
+            idx: &HashMap<&str, usize>,
+            blocks: &Blocks,
+        ) -> Option<Unit> {
+            if let Some(block) = blocks.items.iter().find(|b| b.sg_id == sg.id) {
+                if block.mode != BlockMode::AtPhantom {
+                    return None;
+                }
+                let &i = idx.get(block.phantom_id.as_str())?;
+                let n = &nodes[i];
+                return Some(Unit {
+                    rect: Rect::new(
+                        n.x.saturating_sub(2),
+                        n.y.saturating_sub(2),
+                        FlowchartRenderer::group_title_right(
+                            sg,
+                            n.x.saturating_sub(2),
+                            n.x + n.width + 2,
+                            nodes,
+                            idx,
+                        ) + 1
+                            - n.x.saturating_sub(2),
+                        n.height + 4,
+                    ),
+                    members: vec![i],
+                });
+            }
+            let mut units = Vec::new();
+            for child in &sg.subgraphs {
+                if let Some(unit) = group(child, nodes, idx, blocks) {
+                    units.push(unit);
+                }
+            }
+            for id in &sg.nodes {
+                if let Some(&i) = idx.get(id.as_str()) {
+                    let n = &nodes[i];
+                    units.push(Unit {
+                        rect: Rect::new(n.x, n.y, n.width, n.height),
+                        members: vec![i],
+                    });
+                }
+            }
+            let units = pack(units, nodes);
+            let first = units.first()?;
+            let mut left = first.rect.x;
+            let mut top = first.rect.y;
+            let mut right = first.rect.right();
+            let mut bottom = first.rect.bottom();
+            let mut members = Vec::new();
+            for unit in units {
+                left = left.min(unit.rect.x);
+                top = top.min(unit.rect.y);
+                right = right.max(unit.rect.right());
+                bottom = bottom.max(unit.rect.bottom());
+                members.extend(unit.members);
+            }
+            let x = left.saturating_sub(2);
+            let y = top.saturating_sub(2);
+            Some(Unit {
+                rect: Rect::new(
+                    x,
+                    y,
+                    FlowchartRenderer::group_title_right(sg, x, right + 2, nodes, idx) + 1 - x,
+                    bottom + 2 - y,
+                ),
+                members,
+            })
+        }
+
+        let mut units = Vec::new();
+        let mut grouped = vec![false; nodes.len()];
+        for sg in &self.spec.subgraphs {
+            if let Some(unit) = group(sg, nodes, idx, blocks) {
+                for &member in &unit.members {
+                    grouped[member] = true;
+                }
+                units.push(unit);
+            }
+        }
+        for (i, n) in nodes.iter().enumerate() {
+            if !grouped[i] && !blocks.member_indices.contains(&i) {
+                units.push(Unit {
+                    rect: Rect::new(n.x, n.y, n.width, n.height),
+                    members: vec![i],
+                });
+            }
+        }
+        drop(pack(units, nodes));
+    }
+
     /// Deepest subgraph nesting level (1 for a flat top-level subgraph). Also
     /// the maximum border-chain extent: a member at nesting depth `d` has
     /// `d` group border rows below its box and `2*d` above (pad per level).
@@ -842,6 +993,7 @@ impl<'a> FlowchartRenderer<'a> {
     /// group rects) expanded by padding, with the title embedded in the top
     /// border. Drawn after nodes so borders land on empty cells; edges crossing
     /// a border render as junctions.
+    #[allow(clippy::too_many_lines, reason = "group borders and title crossing detours")]
     pub(super) fn draw_subgraphs(
         &self,
         canvas: &mut Canvas,
@@ -856,6 +1008,54 @@ impl<'a> FlowchartRenderer<'a> {
         for (r, _, title, color) in groups {
             let right = r.x + r.width - 1;
             let bottom = r.y + r.height - 1;
+            let label = format!(" {title} ");
+            let label_w = UnicodeWidthStr::width(label.as_str());
+            if r.width > label_w + 2 {
+                let title_x = (r.x + 2..=right - label_w)
+                    .find(|&x| {
+                        (x..x + label_w).all(|cx| {
+                            canvas.get_cell(cx, r.y).is_none_or(|c| {
+                                !c.conn.north
+                                    && !c.conn.south
+                                    && c.role != CellRole::Arrow
+                                    && !(c.role == CellRole::Text && c.ch != ' ')
+                            })
+                        })
+                    })
+                    .unwrap_or(r.x + 2);
+                // External corridors can still cross the reserved title
+                // shelf. Jog around the entire label, keeping both the title
+                // and the incoming/outgoing wire intact.
+                let bypass = title_x + label_w;
+                let horizontal_crossing = (title_x..bypass).any(|x| {
+                    canvas.get_cell(x, r.y).is_some_and(|c| {
+                        c.is_line && (c.conn.east || c.conn.west)
+                    })
+                });
+                if horizontal_crossing {
+                    canvas.set_pen(color);
+                    canvas.draw_hline(title_x - 1, bypass, r.y + 1);
+                    canvas.draw_vline(title_x - 1, r.y, r.y + 1);
+                    canvas.draw_vline(bypass, r.y, r.y + 1);
+                }
+                for x in title_x..bypass {
+                    let Some(cell) = canvas.get_cell(x, r.y).copied() else {
+                        continue;
+                    };
+                    if (cell.conn.north || cell.conn.south) && r.y > 0 {
+                        canvas.set_pen(cell.color);
+                        if cell.conn.north {
+                            canvas.draw_hline(x, bypass, r.y - 1);
+                        }
+                        if cell.conn.south {
+                            canvas.draw_hline(x, bypass, r.y + 1);
+                        }
+                        canvas.draw_vline(bypass, r.y - 1, r.y + 1);
+                    }
+                }
+                canvas.set_pen(color);
+                canvas.draw_text(title_x, r.y, &label);
+            }
             canvas.set_pen(color);
             canvas.draw_hline(r.x, right, r.y);
             canvas.draw_hline(r.x, right, bottom);
@@ -897,11 +1097,6 @@ impl<'a> FlowchartRenderer<'a> {
                     ..Default::default()
                 },
             );
-            let label = format!(" {title} ");
-            let label_w = UnicodeWidthStr::width(label.as_str());
-            if r.width > label_w + 2 {
-                canvas.draw_text(r.x + 2, r.y, &label);
-            }
             canvas.set_pen(None);
         }
     }
@@ -915,10 +1110,14 @@ impl<'a> FlowchartRenderer<'a> {
             .is_some_and(|c| c.ch == self.theme.arrow_down())
     }
 
-    /// Picks the drop column for an edge entering `v` from above: keeps
-    /// `v_cx` unless an arrowhead already lands at `v_cx` ± 1, in which case
-    /// that column is reused so both lines share one arrowhead.
-    fn drop_x_for(&self, canvas: &Canvas, v_cx: usize, v_top: usize) -> usize {
+    /// Rectangles can converge on a nearby arrowhead; decisions must always
+    /// enter at their diamond badge, never at a neighboring border cell.
+    fn drop_x_for(&self, canvas: &Canvas, v: &LayoutNode) -> usize {
+        let v_cx = v.x + v.width / 2;
+        let v_top = v.y - 1;
+        if v.shape == NodeShape::Diamond {
+            return v_cx;
+        }
         if self.arrow_down_at(canvas, v_cx, v_top) {
             return v_cx;
         }

@@ -35,8 +35,8 @@ fn subgraph_min_rank(
 
 /// Widens bands crossed by a nested group's border chains (FC-SUB-02/04): a
 /// member at nesting depth `d` inside `sg` carries `2*d` rows of title
-/// borders above its box and `d` rows of bottom borders below it. Only depth
-/// ≥ 2 chains bump bands — flat subgraphs keep the historical geometry.
+/// borders above its box and `d` rows of bottom borders below it. Keep the
+/// band's midpoint trunk above the complete incoming title-border chain.
 fn bump_band_chains(
     sg: &SubgraphSpec,
     nodes: &[super::LayoutNode],
@@ -50,7 +50,7 @@ fn bump_band_chains(
             let r = nodes[i].rank;
             if depth >= 2 {
                 if r >= 1 {
-                    band_gap[r - 1] = band_gap[r - 1].max(2 * depth + 1);
+                    band_gap[r - 1] = band_gap[r - 1].max(4 * depth + 2);
                 }
                 if r + 1 < band_gap.len() {
                     band_gap[r] = band_gap[r].max(depth + 2);
@@ -141,7 +141,7 @@ impl<'a> FlowchartRenderer<'a> {
             if let Some(r) = subgraph_min_rank(sg, &nodes, &idx, blocks)
                 && r >= 1
             {
-                band_gap[r - 1] = band_gap[r - 1].max(4);
+                band_gap[r - 1] = band_gap[r - 1].max(6);
             }
         }
 
@@ -198,13 +198,25 @@ impl<'a> FlowchartRenderer<'a> {
         }
 
         // Leave room for subgraph group padding at the diagram edge
-        let sg_margin = if self.spec.subgraphs.is_empty() { 0 } else { 3 };
+        let sg_depth = self.max_subgraph_depth();
+        let sg_margin = if sg_depth == 0 { 0 } else { 2 * sg_depth + 1 };
         if sg_margin > 0 {
             for node in &mut nodes {
                 node.x += sg_margin;
                 node.y += sg_margin;
             }
         }
+
+        // Separate whole groups before any edge anchoring or block placement.
+        // Every member rank moves together, preserving nested containment.
+        self.separate_tb_groups(&mut nodes, &idx, blocks);
+        let max_w = nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !blocks.member_indices.contains(i))
+            .map(|(_, node)| node.x + node.width)
+            .max()
+            .unwrap_or(20);
 
         // Paste isolated-direction subgraph blocks below the main graph.
         // AtPhantom clusters sit at their phantom node's laid-out position
@@ -235,9 +247,23 @@ impl<'a> FlowchartRenderer<'a> {
             .map(|b| b.origin_y + b.height + 4)
             .max()
             .unwrap_or(0);
+        let groups = self.collect_group_rects(&nodes, &idx, blocks);
+        let group_w = groups
+            .iter()
+            .map(|(r, _, _, _)| r.x + r.width)
+            .max()
+            .unwrap_or(0);
+        let group_h = groups
+            .iter()
+            .map(|(r, _, _, _)| r.y + r.height)
+            .max()
+            .unwrap_or(0);
         let canvas_w = (max_w + 10 + sg_margin)
+            .max(group_w + 2)
             .max(blocks.items.iter().map(|b| b.width + 6).max().unwrap_or(0));
-        let canvas_h = (current_y + 4 + sg_margin).max(blocks_extent);
+        let canvas_h = (current_y + 4 + sg_margin)
+            .max(blocks_extent)
+            .max(group_h + 2);
 
         let mut canvas = Canvas::new(canvas_w, canvas_h);
 
@@ -486,7 +512,7 @@ impl<'a> FlowchartRenderer<'a> {
                             }
                             // Reuse a nearby arrowhead column so a target fed
                             // from two sides converges into one arrowhead
-                            let drop_x = self.drop_x_for(&canvas, v_cx, v_top - 1);
+                            let drop_x = self.drop_x_for(&canvas, v);
                             edge_vline(&mut canvas, edge, u_cx, u_bottom + 1, mid_y, &self.theme);
                             edge_hline(&mut canvas, edge, u_cx, drop_x, mid_y, &self.theme);
                             edge_vline(&mut canvas, edge, drop_x, mid_y, v_top - 1, &self.theme);
@@ -562,7 +588,7 @@ impl<'a> FlowchartRenderer<'a> {
                             // Per-target drop from the shared track — reuse a
                             // nearby arrowhead column when one already lands
                             // at the target top (dense supervisory feeds)
-                            let drop_x = self.drop_x_for(&canvas, v_cx, v_top - 1);
+                            let drop_x = self.drop_x_for(&canvas, v);
                             edge_hline(
                                 &mut canvas,
                                 edge,

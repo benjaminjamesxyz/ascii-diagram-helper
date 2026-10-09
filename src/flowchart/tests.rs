@@ -1727,7 +1727,7 @@ mod firmware_group_regressions {
                 outsider.width,
                 outsider.height,
             )));
-            let sg = FlowchartRenderer::find_subgraph(&spec.subgraphs, id).unwrap();
+            let sg = spec.subgraphs.iter().find(|sg| sg.id == *id).unwrap();
             let members = member_ids(sg);
             for member in members {
                 let i = idx[member.as_str()];
@@ -2003,11 +2003,18 @@ mod firmware_group_regressions {
             }
             let (gateway_x, gateway_y) = label_position("API Gateway");
             let (auth_x, auth_y) = label_position("User Auth DB");
-            assert_eq!(gateway_y, auth_y, "LR member centerlines stay aligned:\n{out}");
+            assert_eq!(
+                gateway_y, auth_y,
+                "LR member centerlines stay aligned:\n{out}"
+            );
             assert!(gateway_x < auth_x, "LR rank order:\n{out}");
             assert!(out.contains("Token Check"), "route label:\n{out}");
             for (x, y) in [(gateway_x, gateway_y), (auth_x, auth_y)] {
-                assert_eq!(grid[y][x - 4], theme.arrow_right(), "target ingress:\n{out}");
+                assert_eq!(
+                    grid[y][x - 4],
+                    theme.arrow_right(),
+                    "target ingress:\n{out}"
+                );
                 assert!(is_wire(grid[y][x - 5]), "connected arrow stem:\n{out}");
             }
         }

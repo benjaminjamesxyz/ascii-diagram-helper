@@ -761,7 +761,6 @@ impl<'a> FlowchartRenderer<'a> {
         rec(sg, node_id)
     }
 
-
     /// LR containment entry: preserve whole-group geometry across ranks,
     /// rather than pushing only whichever member intersects a stale rect.
     pub(super) fn push_nodes_out_of_groups(
@@ -982,18 +981,6 @@ impl<'a> FlowchartRenderer<'a> {
                 .unwrap_or(0)
         }
         rec(&self.spec.subgraphs)
-    }
-
-    fn find_subgraph<'b>(sgs: &'b [SubgraphSpec], id: &str) -> Option<&'b SubgraphSpec> {
-        for sg in sgs {
-            if sg.id == id {
-                return Some(sg);
-            }
-            if let Some(found) = Self::find_subgraph(&sg.subgraphs, id) {
-                return Some(found);
-            }
-        }
-        None
     }
 
     /// Draws subgraph grouping boxes: bounding box of member nodes (and nested

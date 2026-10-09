@@ -231,11 +231,22 @@ impl<'a> ArchitectureRenderer<'a> {
             }
             ContainerLayout::Column => {
                 let gap = 2;
+                // Match row layout's label reservation. A vertical route at
+                // x + 3 needs a blank cell before the label, plus a blank
+                // cell and the frame border after it.
+                let label_w = self
+                    .spec
+                    .connections
+                    .iter()
+                    .filter_map(|conn| conn.label.as_deref())
+                    .map(UnicodeWidthStr::width)
+                    .max()
+                    .unwrap_or(0);
                 let max_w = child_sizes.iter().map(|(w, _)| *w).max().unwrap_or(12) + 4;
                 let total_h: usize = child_sizes.iter().map(|(_, h)| *h).sum::<usize>()
                     + gap * (child_sizes.len() - 1)
                     + 4;
-                (max_w.max(title_w), total_h)
+                (max_w.max(title_w).max(label_w + 7), total_h)
             }
         }
     }
@@ -1067,6 +1078,49 @@ mod tests {
                     label,
                 ));
                 assert!(!too_narrow.render(&Theme::ascii()).contains(label));
+            }
+        }
+    }
+
+    #[test]
+    fn column_connection_labels_reserve_route_and_frame_clearance() {
+        let mut spec: ArchitectureSpec = serde_json::from_str(
+            r#"{"type":"architecture","containers":[
+                {"id":"p_group","title":"P","layout":"row","items":[{"id":"p","name":"P"}]},
+                {"id":"m_group","title":"M","layout":"column","items":[{"id":"a","name":"A"},{"id":"b","name":"B"}]},
+                {"id":"q_group","title":"Q","layout":"row","items":[{"id":"q","name":"Q"}]}
+            ],"connections":[{"from":"a","to":"b"},{"from":"p","to":"a"},{"from":"b","to":"q"}]}"#,
+        )
+        .unwrap();
+        for label in ["Internal link", "内部接続リンク"] {
+            spec.connections[0].label = Some(label.to_string());
+            for style in [
+                BoxStyle::Rounded,
+                BoxStyle::Sharp,
+                BoxStyle::Double,
+                BoxStyle::Heavy,
+                BoxStyle::Ascii,
+            ] {
+                let output = ArchitectureRenderer::new(&spec, Theme::new(style))
+                    .render(false)
+                    .unwrap();
+                assert_eq!(output.matches(label).count(), 1, "{style:?}: {output}");
+                let (label_y, row) = output
+                    .lines()
+                    .enumerate()
+                    .find(|(_, line)| line.contains(label))
+                    .unwrap();
+                let (before, after) = row.split_once(label).unwrap();
+                assert!(before.ends_with(' ') && after.starts_with(' '), "{row}");
+                let source_y = output
+                    .lines()
+                    .position(|line| line.contains(" A "))
+                    .unwrap();
+                let target_y = output
+                    .lines()
+                    .position(|line| line.contains(" B "))
+                    .unwrap();
+                assert!(source_y < label_y && label_y < target_y, "{output}");
             }
         }
     }

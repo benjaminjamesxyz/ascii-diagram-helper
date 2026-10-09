@@ -5,7 +5,7 @@
 
 ## Release summary
 
-- **Layout and labels:** recursive group packing/padding, title detours, decision ingress, and LR separation; compact title shelves; deferred multiline flowchart labels bounded to their route corridors; architecture frame widths, sibling clearance, label margins, and joined source turns.
+- **Layout and labels:** recursive group packing/padding, title detours, decision ingress, and LR separation; compact title shelves; deferred multiline flowchart labels bounded to their route corridors; architecture frame widths, column-label width reservation, sibling clearance, label margins, and joined source turns.
 - **Color:** unstyled redraws preserve stroke ownership/color, explicit colors win at shared wire cells, node borders retain their own color, and architecture property dividers receive complete component-border color.
 - **CLI and extension:** trailing options after bare input, LF-terminated markdown fences, JSON-safe default coloring, explicit `color:false` in freshly loaded extensions, command help, and ANSI/CJK-aware result framing.
 - **Verification:** final release checks are recorded below; prior implementation-stage results remain separately identified.
@@ -17,13 +17,14 @@ For the source update/build, installed Pi synchronization, separate omp installa
 ## Final release checks (2026-10-09)
 
 - All five Rust/npm version entries agree on `0.12.1`; the release binary reports `ascii-diagram 0.12.1`.
-- `cargo test --locked`: **321 tests passed**. `cargo fmt --check`, `cargo clippy --all-targets --locked`, and `cargo build --release --locked` passed. Clippy reports only the three existing warnings: `int_plus_one`, `module_inception`, and `too_many_arguments`.
+- `cargo test --locked`: **322 tests passed**, including the targeted column-label regression. `cargo fmt --check`, `cargo clippy --all-targets --locked`, and `cargo build --release --locked` passed. Clippy reports only the three existing warnings: `int_plus_one`, `module_inception`, and `too_many_arguments`.
 - The extension suite passed against the rebuilt release binary. A separate fresh-extension smoke exercised both original firmware diagrams in colored/plain modes, real `Text` result frames, command/help, Mermaid transformation, and JSON input containing `graph`/`flowchart` text.
 - Both original firmware specifications passed all five styles: full title/node/property/edge-label retention, blank label margins, ANSI/plain parity, 7-bit ASCII, and LF-terminated markdown fences. All **70** input-path renders were byte-identical; `Target Angle` remained between its source and target.
 - All **35** built-in example/style outputs matched the installed visual-polish baseline. Raw CLI dimensions remain **54 × 158** for the flight-control diagram and **28 × 83** for memory/bus architecture.
 - Live colored `draw_diagram` output for both original specifications exactly matched the verified native renderer. Fresh-extension plain output passed; a reload of the already-running user session remains unverified.
 - `npm pack --dry-run --ignore-scripts --json` included the required sources, documentation, extension, and skills in **33 files**, excluding build/dependency/index caches. This checks package contents; no npm registry publication is claimed.
 - All **six** paired README input/rendered-output showcases matched the release CLI. The tree showcase's stale sharp final corner was corrected to the actual rounded-style output.
+- Independent release review found a new narrow-column label-loss regression. The actual three-container probe dropped `Internal link` in all five styles before repair. Column measurement now reserves display-width-aware space for the label, route, blank margins, and frame. The regression and **30** original/nested/CJK/long-label style probes pass, retaining each label exactly once with endpoint locality and ANSI/plain parity. The full gates, 70 original firmware input paths, and 35 example/style comparisons were rerun after this repair.
 
 ## Historical implementation stages
 

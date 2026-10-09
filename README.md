@@ -36,11 +36,11 @@ High-precision, Rust-powered terminal ASCII & Unicode diagram generator for huma
 
 ## v0.12.1 release highlights
 
-Firmware diagrams now keep nested groups padded and separated, preserve title-crossing routes and decision ingress, and use less space for group titles. Flowchart labels are placed after routing, with multiline blocks kept in their own connection corridors. Architecture routes retain label margins, sibling clearance, and connected source turns.
+Firmware diagrams now keep nested groups padded and separated, preserve title-crossing routes and decision ingress, and use less space for group titles. Flowchart labels are placed after routing, with multiline blocks kept in their own connection corridors. Architecture routes retain label margins, sibling clearance, and connected source turns; column layouts reserve enough width to keep connection labels visible beside their routes.
 
 Stroke redraws preserve color, including complete architecture property dividers. The CLI accepts trailing options after bare input and terminates markdown fences with LF. The extension preserves JSON during automatic coloring, honors explicit `color:false` when freshly loaded, adds command help, and measures ANSI/CJK result frames by visible width.
 
-Release verification passed: **321 Rust tests**, the extension suite, both original firmware specifications in all five styles, **70 byte-identical input-path runs**, and **35 unchanged built-in example/style outputs**. The flight-control diagram measures **54 × 158** rows × columns, down from **54 × 181**; the architecture remains **28 × 83**. See [SPRINT.md](SPRINT.md) for release checks and historical implementation evidence.
+Release verification passed: **322 Rust tests**, the extension suite, both original firmware specifications in all five styles, **70 byte-identical input-path runs**, and **35 unchanged built-in example/style outputs**. The flight-control diagram measures **54 × 158** rows × columns, down from **54 × 181**; the architecture remains **28 × 83**. See [SPRINT.md](SPRINT.md) for release checks and historical implementation evidence.
 
 There is no automatic fit-to-terminal width cap: dense diagrams can still wrap. An already-running session may retain an old tool wrapper that ignores `color:false`; reload after updating. A live session reload has not yet been verified. Use CLI `--color never` when plain output is required.
 

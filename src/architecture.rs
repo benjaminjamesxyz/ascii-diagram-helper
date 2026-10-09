@@ -367,6 +367,7 @@ impl<'a> ArchitectureRenderer<'a> {
         // Properties with divider if present
         if !leaf.properties.is_empty() && height >= 4 {
             let right = x + width - 1;
+            canvas.set_pen(leaf.color);
             canvas.draw_hline(x + 1, right - 1, y + 2);
             canvas.draw_corner(
                 x,
@@ -388,6 +389,7 @@ impl<'a> ArchitectureRenderer<'a> {
                     east: false,
                 },
             );
+            canvas.set_pen(None);
 
             for (i, (k, v)) in leaf.properties.iter().enumerate() {
                 let prop_text = format!("{k}: {v}");
@@ -1019,6 +1021,34 @@ mod tests {
     use super::*;
     use crate::schema::*;
     use crate::theme::BoxStyle;
+
+    #[test]
+    fn component_stroke_colors_the_complete_property_divider() {
+        let spec: ArchitectureSpec = serde_json::from_str(
+            r#"{"type":"architecture","containers":[{"id":"c","title":"Container",
+                "items":[{"id":"unit","name":"Device","color":"cyan",
+                    "properties":[["Port","8080"],["Mode","DMA"]]}]}]}"#,
+        )
+        .unwrap();
+        for style in [
+            BoxStyle::Rounded,
+            BoxStyle::Sharp,
+            BoxStyle::Double,
+            BoxStyle::Heavy,
+            BoxStyle::Ascii,
+        ] {
+            let renderer = ArchitectureRenderer::new(&spec, Theme::new(style));
+            let plain = renderer.render(false).unwrap();
+            let colored = renderer.render(true).unwrap();
+            let mut rows = plain.lines();
+            rows.find(|line| line.contains("Device")).unwrap();
+            let divider = rows.next().unwrap().trim_matches([' ', '│', '║', '┃', '|']);
+            assert!(
+                colored.contains(&format!("\u{1b}[36m{divider}\u{1b}[39m")),
+                "{style:?}: divider must have the same cyan stroke as its border: {colored:?}"
+            );
+        }
+    }
 
     fn firmware_spec() -> ArchitectureSpec {
         serde_json::from_str(

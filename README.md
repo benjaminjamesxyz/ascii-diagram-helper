@@ -461,6 +461,9 @@ Choose from 5 distinct box-drawing character sets:
 - **Trees & Stacks:** `@red`, `@cyan`, `@green`, `@yellow` trailing tags
 - **Tables:** `color: cyan` grid directive
 - **Data Structures:** `"color": "cyan"` properties on nodes
+- **Architecture:** `"color": "cyan"` on containers, components, and connections; component property dividers use the component's border color.
+
+Unstyled redraws retain existing stroke color, including shared connectors and arrows. At shared wire cells, the last explicit stroke color wins; node borders keep their own color. Flowchart title detours retain the crossing edge's color. Labels stay terminal-default unless explicitly styled.
 
 ---
 

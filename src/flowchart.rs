@@ -1024,13 +1024,13 @@ impl<'a> FlowchartRenderer<'a> {
                 // shelf. Jog around the entire label, keeping both the title
                 // and the incoming/outgoing wire intact.
                 let bypass = title_x + label_w;
-                let horizontal_crossing = (title_x..bypass).any(|x| {
-                    canvas
-                        .get_cell(x, r.y)
-                        .is_some_and(|c| c.is_line && (c.conn.east || c.conn.west))
+                let horizontal_crossing = (title_x..bypass).find_map(|x| {
+                    canvas.get_cell(x, r.y).and_then(|c| {
+                        (c.is_line && (c.conn.east || c.conn.west)).then_some(c.color)
+                    })
                 });
-                if horizontal_crossing {
-                    canvas.set_pen(color);
+                if let Some(edge_color) = horizontal_crossing {
+                    canvas.set_pen(edge_color);
                     canvas.draw_hline(title_x - 1, bypass, r.y + 1);
                     canvas.draw_vline(title_x - 1, r.y, r.y + 1);
                     canvas.draw_vline(bypass, r.y, r.y + 1);

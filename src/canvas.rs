@@ -102,6 +102,19 @@ pub struct Cell {
     pub color: Option<Color>,
 }
 
+impl Cell {
+    /// Unstyled overlaps keep an explicit wire color; node borders own theirs.
+    fn merge_stroke(&mut self, color: Option<Color>) {
+        if self.role == CellRole::Border {
+            return;
+        }
+        if color.is_some() || !matches!(self.role, CellRole::Line | CellRole::Arrow) {
+            self.color = color;
+        }
+        self.role = CellRole::Line;
+    }
+}
+
 impl Default for Cell {
     fn default() -> Self {
         Self {
@@ -243,6 +256,13 @@ impl Canvas {
 
         let i = self.idx(x, y);
         let cell = &mut self.cells[i];
+        let inherited_color = if matches!(role, CellRole::Line | CellRole::Arrow)
+            && matches!(cell.role, CellRole::Line | CellRole::Arrow)
+        {
+            cell.color
+        } else {
+            None
+        };
         cell.ch = ch;
         cell.combining = [None, None];
         cell.is_line = role == CellRole::Line;
@@ -254,7 +274,7 @@ impl Canvas {
         cell.color = if role == CellRole::Text {
             self.text_pen
         } else {
-            self.pen
+            self.pen.or(inherited_color)
         };
 
         if w > 1 {
@@ -600,10 +620,7 @@ impl Canvas {
             cell.is_line = true;
             cell.thick = weight == 1;
             cell.double = weight == 2;
-            if cell.role != CellRole::Border {
-                cell.role = CellRole::Line;
-                cell.color = self.pen;
-            }
+            cell.merge_stroke(self.pen);
             if x > x1 {
                 cell.conn.west = true;
             }
@@ -656,10 +673,7 @@ impl Canvas {
             if cell.is_line && cell.ch == ' ' && (cell.conn.north || cell.conn.south) {
                 cell.conn.east = true;
                 cell.conn.west = true;
-                if cell.role != CellRole::Border {
-                    cell.role = CellRole::Line;
-                    cell.color = self.pen;
-                }
+                cell.merge_stroke(self.pen);
                 continue;
             }
             // Crossing: a dashed vertical run passes here — convert to a
@@ -671,18 +685,13 @@ impl Canvas {
                 cell.conn.south = true;
                 cell.conn.east = true;
                 cell.conn.west = true;
-                if cell.role != CellRole::Border {
-                    cell.role = CellRole::Line;
-                    cell.color = self.pen;
-                }
+                cell.merge_stroke(self.pen);
                 continue;
             }
             cell.ch = dash_char;
             cell.combining = [None, None];
             cell.is_line = false;
-            if cell.role != CellRole::Border {
-                cell.color = self.pen;
-            }
+            cell.merge_stroke(self.pen);
         }
     }
 
@@ -716,10 +725,7 @@ impl Canvas {
             if cell.is_line && cell.ch == ' ' && (cell.conn.east || cell.conn.west) {
                 cell.conn.north = true;
                 cell.conn.south = true;
-                if cell.role != CellRole::Border {
-                    cell.role = CellRole::Line;
-                    cell.color = self.pen;
-                }
+                cell.merge_stroke(self.pen);
                 continue;
             }
             // Crossing: a dashed horizontal run passes here — convert to a
@@ -731,18 +737,13 @@ impl Canvas {
                 cell.conn.south = true;
                 cell.conn.east = true;
                 cell.conn.west = true;
-                if cell.role != CellRole::Border {
-                    cell.role = CellRole::Line;
-                    cell.color = self.pen;
-                }
+                cell.merge_stroke(self.pen);
                 continue;
             }
             cell.ch = dash_char;
             cell.combining = [None, None];
             cell.is_line = false;
-            if cell.role != CellRole::Border {
-                cell.color = self.pen;
-            }
+            cell.merge_stroke(self.pen);
         }
     }
 
@@ -780,10 +781,7 @@ impl Canvas {
             cell.is_line = true;
             cell.thick = weight == 1;
             cell.double = weight == 2;
-            if cell.role != CellRole::Border {
-                cell.role = CellRole::Line;
-                cell.color = self.pen;
-            }
+            cell.merge_stroke(self.pen);
             if y > y1 {
                 cell.conn.north = true;
             }
@@ -798,10 +796,7 @@ impl Canvas {
         let i = self.idx(x, y);
         let cell = &mut self.cells[i];
         cell.is_line = true;
-        if cell.role != CellRole::Border {
-            cell.role = CellRole::Line;
-            cell.color = self.pen;
-        }
+        cell.merge_stroke(self.pen);
         cell.conn.merge(conn);
     }
 
@@ -1601,6 +1596,71 @@ mod tests {
         assert!(colored.contains("\u{1b}[32m"), "green border present");
         assert!(colored.contains("\u{1b}[38;2;1;2;3m"), "hex line present");
         assert_eq!(strip_ansi(&colored), plain, "color never shifts layout");
+    }
+
+    #[test]
+    fn stroke_color_survives_unstyled_redraws() {
+        for style in [
+            BoxStyle::Rounded,
+            BoxStyle::Sharp,
+            BoxStyle::Double,
+            BoxStyle::Heavy,
+            BoxStyle::Ascii,
+        ] {
+            for dashed in [false, true] {
+                let theme = Theme::new(style);
+                let mut canvas = Canvas::new(10, 1);
+                canvas.set_pen(Some(Color::Red));
+                if dashed {
+                    canvas.draw_dashed_hline(0, 8, 0, &theme);
+                } else {
+                    canvas.draw_hline(0, 8, 0);
+                }
+                canvas.draw_arrow(8, 0, Direction::Right, &theme);
+                canvas.set_pen(None);
+                if dashed {
+                    canvas.draw_dashed_hline(2, 6, 0, &theme);
+                } else {
+                    canvas.draw_hline(2, 6, 0);
+                }
+                canvas.draw_corner(
+                    4,
+                    0,
+                    LineConn {
+                        north: true,
+                        ..Default::default()
+                    },
+                );
+                canvas.draw_arrow(8, 0, Direction::Right, &theme);
+                let plain = canvas.render(&theme);
+                assert_eq!(
+                    canvas.render_colored(&theme),
+                    format!("\u{1b}[31m{plain}\u{1b}[39m"),
+                    "{style:?}, dashed={dashed}: entire shared stroke stays red"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_stroke_color_replaces_shared_color_without_recoloring_borders() {
+        let theme = Theme::new(BoxStyle::Rounded);
+        let mut canvas = Canvas::new(14, 5);
+        canvas.set_pen(Some(Color::Green));
+        canvas.draw_box(8, 0, 5, 4, &theme, None);
+        canvas.set_pen(Some(Color::Red));
+        canvas.draw_hline(0, 10, 1);
+        canvas.set_pen(Some(Color::Blue));
+        canvas.draw_hline(2, 10, 1);
+        canvas.set_pen(None);
+        canvas.draw_vline(4, 0, 2);
+        assert_eq!(canvas.get_cell(1, 1).unwrap().color, Some(Color::Red));
+        assert_eq!(canvas.get_cell(4, 1).unwrap().color, Some(Color::Blue));
+        assert_eq!(canvas.get_cell(8, 1).unwrap().color, Some(Color::Green));
+        assert_eq!(canvas.get_cell(4, 0).unwrap().color, None);
+        assert_eq!(canvas.get_cell(4, 2).unwrap().color, None);
+        let colored = canvas.render_colored(&theme);
+        assert_eq!(strip_ansi(&colored), canvas.render(&theme));
     }
 
     #[test]

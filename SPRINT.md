@@ -35,7 +35,16 @@ Runtime verification caught two follow-ups beyond the initially green suite: ove
 
 README flowchart/architecture examples were regenerated from the release CLI; CLI/color/width contracts and bundled skills updated. Wide firmware views may still wrap in narrow terminals; split them into focused diagrams. No automatic fit-to-terminal feature was added.
 
-**Release synchronization:** repository, `~/.local/bin`, Pi binary/cache and omp plugin binary copies share SHA-256 `bfdaf3d3bf650694ae55bbe01bbb248044a1f6f8c3fba97d005d858cf710efbc`. Repository/user/Pi/omp engines report v0.12.1 and render actual firmware Spec B identically. Installed omp extension also passes the real-component smoke using native binary discovery with no `ASCII_DIAGRAM_BIN` override. Reload the active session to load the updated extension; no upstream push was performed.
+**Initial release synchronization:** repository, `~/.local/bin`, Pi binary/cache and omp plugin binary copies shared SHA-256 `bfdaf3d3bf650694ae55bbe01bbb248044a1f6f8c3fba97d005d858cf710efbc`. Repository/user/Pi/omp engines reported v0.12.1 and rendered actual firmware Spec B identically. Installed omp extension also passed the real-component smoke using native binary discovery with no `ASCII_DIAGRAM_BIN` override. No upstream push was performed.
+
+## Color fidelity follow-up
+
+- Fixed partial stroke coloring reported after the firmware review: unstyled connector/arrow redraws preserve existing color, explicit colors take precedence at shared wire cells, and node borders retain their own color.
+- Architecture property dividers now use the component border color; flowchart title bypasses inherit the crossing edge's color rather than the group color. No geometry or CLI color-precedence changes.
+- Four behavior regressions failed before the fix and pass afterward. Full Rust suite: **312 passed**. Clippy retains the three existing warnings; formatting and release build pass.
+- Actual firmware A/B renders pass in all five styles: plain geometry unchanged, SGR-stripped colored/plain parity, and 7-bit ASCII. All **35** example/style geometries remain unchanged. All **20** firmware component/style property dividers have complete stroke color; their labels remain terminal-default.
+- Extension behavior suite passed after installation synchronization. Live `draw_diagram` output for both original firmware specs exactly matches the corrected rounded, colored native renders.
+- Corrected repository/user/Pi/omp binary copies share SHA-256 `ac2099548e77470bebf4ba42bc9fd0537ddce044a35f05b7060dadb314d5bfe7`. This follow-up is local; no upstream push was performed.
 
 ---
 

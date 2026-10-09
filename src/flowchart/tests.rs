@@ -1931,6 +1931,37 @@ mod firmware_group_regressions {
     }
 
     #[test]
+    fn title_bypass_preserves_the_crossing_edge_color() {
+        let title = "A HEADER WITH CORRIDORS";
+        for style in STYLES {
+            let spec = parse(
+                "graph TD; subgraph G [A HEADER WITH CORRIDORS]; A[Node]; end",
+                style,
+            );
+            let renderer = FlowchartRenderer::new(&spec, Theme::new(style));
+            let blocks = Blocks::empty();
+            let idx = renderer.index_of();
+            let mut nodes = renderer.prepare_nodes(&blocks);
+            nodes[0].x = 5;
+            nodes[0].y = 6;
+            let rect = renderer.collect_group_rects(&nodes, &idx, &blocks)[0].0;
+            let mut canvas = Canvas::new(rect.right() + 3, rect.bottom() + 3);
+            canvas.set_pen(Some(crate::color::Color::Red));
+            canvas.draw_hline(rect.x - 1, rect.right() + 1, rect.y);
+            renderer.draw_subgraphs(&mut canvas, &nodes, &idx, &blocks);
+            for x in rect.x + 1..=rect.x + 2 + UnicodeWidthStr::width(title) + 2 {
+                assert_eq!(
+                    canvas.get_cell(x, rect.y + 1).unwrap().color,
+                    Some(crate::color::Color::Red),
+                    "{style:?}: edge detour loses color at {x}"
+                );
+            }
+            assert_eq!(canvas.get_cell(rect.x, rect.bottom()).unwrap().color, None);
+            assert!(canvas.render(&Theme::new(style)).contains(title));
+        }
+    }
+
+    #[test]
     fn readme_lr_sibling_groups_have_disjoint_rendered_bounds() {
         let dsl = "graph LR
             subgraph Client [Frontend Layer]

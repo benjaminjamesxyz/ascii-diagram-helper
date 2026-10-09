@@ -2051,3 +2051,103 @@ mod firmware_group_regressions {
         }
     }
 }
+
+#[cfg(test)]
+mod compact_group_title_regressions {
+    use super::*;
+    use crate::schema::DiagramSpec;
+
+    #[test]
+    fn dense_title_shelves_reuse_member_padding_without_breaking_ingress() {
+        for style in [
+            BoxStyle::Rounded,
+            BoxStyle::Sharp,
+            BoxStyle::Double,
+            BoxStyle::Heavy,
+            BoxStyle::Ascii,
+        ] {
+            for count in [4, 8] {
+                for title in ["ACTUATORS & MOTORS", "执行器与电机 MOTORS"] {
+                    let mut dsl = format!("graph TD\nsubgraph G [{title}]\n");
+                    for motor in 1..=count {
+                        dsl.push_str(&format!("M{motor}[Motor {motor}]\n"));
+                    }
+                    dsl.push_str("end");
+                    let DiagramSpec::Flowchart(spec) =
+                        crate::parser::parse_dsl_or_json(&dsl, style).unwrap()
+                    else {
+                        panic!("expected flowchart");
+                    };
+                    let theme = Theme::new(style);
+                    let renderer = FlowchartRenderer::new(&spec, theme.clone());
+                    let blocks = Blocks::empty();
+                    let idx = renderer.index_of();
+                    let mut nodes = renderer.prepare_nodes(&blocks);
+                    let mut x = 5;
+                    for node in &mut nodes {
+                        node.x = x;
+                        node.y = 6;
+                        x += node.width + 4;
+                    }
+                    let padded_right = nodes.last().unwrap().x + nodes.last().unwrap().width + 1;
+                    let rect = renderer.collect_group_rects(&nodes, &idx, &blocks)[0].0;
+                    let label_width = UnicodeWidthStr::width(title) + 2;
+                    assert!(
+                        rect.right() < padded_right + label_width,
+                        "a shelf must reuse the space after the final member anchor"
+                    );
+                    let mut canvas = Canvas::new(rect.right() + 3, rect.bottom() + 3);
+                    for node in &nodes {
+                        assert!(node.x >= rect.x + 2);
+                        assert!(node.x + node.width < rect.right());
+                        assert!(node.y >= rect.y + 2);
+                        assert!(node.y + node.height <= rect.bottom());
+                        let anchor = node.x + node.width / 2;
+                        canvas.draw_vline(anchor, rect.y - 1, node.y - 1);
+                        canvas.draw_arrow(anchor, node.y - 1, Direction::Down, &theme);
+                    }
+                    renderer.draw_subgraphs(&mut canvas, &nodes, &idx, &blocks);
+                    let out = canvas.render(&theme);
+                    assert!(out.contains(title), "{style:?}:\n{out}");
+                    for node in &nodes {
+                        let anchor = node.x + node.width / 2;
+                        let crossing = canvas.get_cell(anchor, rect.y).unwrap();
+                        assert!(
+                            crossing.conn.north && crossing.conn.south,
+                            "title breaks motor ingress:\n{out}"
+                        );
+                        assert_eq!(
+                            canvas.get_cell(anchor, node.y - 1).unwrap().role,
+                            CellRole::Arrow,
+                            "title bypass overwrites the motor arrow:\n{out}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn title_that_fits_member_padding_needs_no_extra_width() {
+        let DiagramSpec::Flowchart(spec) = crate::parser::parse_dsl_or_json(
+            "graph LR; subgraph G; A[A generously wide member]; end",
+            BoxStyle::Rounded,
+        )
+        .unwrap()
+        else {
+            panic!("expected flowchart");
+        };
+        let renderer = FlowchartRenderer::new(&spec, Theme::new(spec.style));
+        let blocks = Blocks::empty();
+        let idx = renderer.index_of();
+        let mut nodes = renderer.prepare_nodes(&blocks);
+        nodes[0].x = 5;
+        nodes[0].y = 6;
+        let rect = renderer.collect_group_rects(&nodes, &idx, &blocks)[0].0;
+        assert_eq!(
+            rect.right(),
+            nodes[0].x + nodes[0].width + 1,
+            "a complete title already fits inside the padded member bounds"
+        );
+    }
+}

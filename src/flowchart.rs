@@ -596,18 +596,22 @@ impl<'a> FlowchartRenderer<'a> {
         let label_width = UnicodeWidthStr::width(sg.title.as_deref().unwrap_or(&sg.id)) + 2;
         let right = right.max(left + label_width + 3);
         let mut x = left + 2;
-        while x + label_width <= right {
-            let blocker = idx.iter().find_map(|(&id, &i)| {
-                let cx = nodes[i].x + nodes[i].width / 2;
-                (Self::subgraph_contains_node(sg, id) && cx >= x && cx < x + label_width)
-                    .then_some(cx)
-            });
+        loop {
+            let blocker = idx
+                .iter()
+                .filter_map(|(&id, &i)| {
+                    let cx = nodes[i].x + nodes[i].width / 2;
+                    (Self::subgraph_contains_node(sg, id) && cx >= x && cx < x + label_width)
+                        .then_some(cx)
+                })
+                .min();
             let Some(cx) = blocker else {
-                return right;
+                // Only reserve the missing part of the shelf, not another
+                // whole title after the existing member padding.
+                return right.max(x + label_width);
             };
             x = cx + 1;
         }
-        right + label_width + 2
     }
 
     /// Group boxes as `(rect, subgraph id, title, color)` in declaration

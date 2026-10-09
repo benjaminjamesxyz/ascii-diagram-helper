@@ -761,16 +761,9 @@ impl<'a> FlowchartRenderer<'a> {
         rec(sg, node_id)
     }
 
-    /// True when node `i` may be enclosed by `sg`'s group box.
-    fn node_in_subgraph(&self, sg: &SubgraphSpec, i: usize) -> bool {
-        Self::subgraph_contains_node(sg, &self.spec.nodes[i].id)
-    }
 
-    /// Containment pass (FC-SUB-01): group boxes are the bounding box of their
-    /// members — a non-member laid out inside that span gets the group border
-    /// stamped through it. Walk each layer along the layout axis and push any
-    /// non-member past the group rect's trailing edge; the cursor cascades the
-    /// shift to later siblings so boxes never overlap.
+    /// LR containment entry: preserve whole-group geometry across ranks,
+    /// rather than pushing only whichever member intersects a stale rect.
     pub(super) fn push_nodes_out_of_groups(
         &self,
         nodes: &mut [LayoutNode],
@@ -779,57 +772,35 @@ impl<'a> FlowchartRenderer<'a> {
         horizontal: bool,
         gap: usize,
     ) {
+        if geo.rects.is_empty() {
+            return;
+        }
+        let idx = self.index_of();
+        let mut active = vec![false; nodes.len()];
         for layer in layers {
-            let mut order = layer.clone();
-            order.sort_by_key(|&i| {
-                let n = &nodes[i];
-                if horizontal { (n.x, n.y) } else { (n.y, n.x) }
-            });
-            let mut cursor = 0usize;
-            for &i in &order {
-                let len = if horizontal {
-                    nodes[i].width
-                } else {
-                    nodes[i].height
-                };
-                let mut pos = if horizontal {
-                    nodes[i].x.max(cursor)
-                } else {
-                    nodes[i].y.max(cursor)
-                };
-                for (rect, sg_id) in &geo.rects {
-                    let Some(sg) = Self::find_subgraph(&self.spec.subgraphs, sg_id) else {
-                        continue;
-                    };
-                    if self.node_in_subgraph(sg, i) {
-                        continue;
-                    }
-                    let n = &nodes[i];
-                    let (along, cross) = if horizontal {
-                        (n.y..n.y + n.height, pos..pos + len)
-                    } else {
-                        (n.x..n.x + n.width, pos..pos + len)
-                    };
-                    let (r_along, r_cross) = if horizontal {
-                        (rect.y..rect.y + rect.height, rect.x..rect.x + rect.width)
-                    } else {
-                        (rect.x..rect.x + rect.width, rect.y..rect.y + rect.height)
-                    };
-                    if along.start < r_along.end
-                        && r_along.start < along.end
-                        && cross.start < r_cross.end
-                        && r_cross.start < cross.end
-                    {
-                        pos = r_cross.end;
-                    }
-                }
-                if horizontal {
-                    nodes[i].x = pos;
-                } else {
-                    nodes[i].y = pos;
-                }
-                cursor = pos + len + gap;
+            for &i in layer {
+                active[i] = true;
             }
+        }
+        let mut blocks = Blocks::empty();
+        blocks.member_indices.extend(
+            active
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &present)| (!present).then_some(i)),
+        );
+        // LR calls this before applying its final diagram margin. Reserve
+        // the same nesting headroom while measuring compound rectangles,
+        // then remove it so the caller can apply the final margin once.
+        let margin = 2 * self.max_subgraph_depth() + 1;
+        for node in nodes.iter_mut() {
+            node.x += margin;
+            node.y += margin;
+        }
+        self.separate_groups(nodes, &idx, &blocks, horizontal, gap);
+        for node in nodes {
+            node.x -= margin;
+            node.y -= margin;
         }
     }
 
@@ -837,11 +808,13 @@ impl<'a> FlowchartRenderer<'a> {
     /// together. Packing individual ranks can widen a group back across the
     /// sibling that was just moved out of it.
     #[allow(clippy::too_many_lines, reason = "recursive compound group packing")]
-    fn separate_tb_groups(
+    fn separate_groups(
         &self,
         nodes: &mut [LayoutNode],
         idx: &HashMap<&str, usize>,
         blocks: &Blocks,
+        horizontal: bool,
+        gap: usize,
     ) {
         if self.spec.subgraphs.is_empty() {
             return;
@@ -852,22 +825,45 @@ impl<'a> FlowchartRenderer<'a> {
             members: Vec<usize>,
         }
 
-        fn pack(mut units: Vec<Unit>, nodes: &mut [LayoutNode]) -> Vec<Unit> {
-            units.sort_by_key(|u| (u.rect.x, u.rect.y));
+        fn pack(
+            mut units: Vec<Unit>,
+            nodes: &mut [LayoutNode],
+            horizontal: bool,
+            gap: usize,
+        ) -> Vec<Unit> {
+            units.sort_by_key(|u| {
+                if horizontal {
+                    (u.rect.x, u.rect.y)
+                } else {
+                    (u.rect.y, u.rect.x)
+                }
+            });
             for i in 0..units.len() {
-                let mut x = units[i].rect.x;
+                let current = units[i].rect;
+                let mut position = if horizontal { current.x } else { current.y };
                 for previous in &units[..i] {
                     let r = previous.rect;
-                    let current = units[i].rect;
-                    if current.y < r.y + r.height && r.y < current.y + current.height {
-                        x = x.max(r.x + r.width + 2);
+                    if horizontal {
+                        if current.y < r.y + r.height && r.y < current.y + current.height {
+                            position = position.max(r.x + r.width + gap);
+                        }
+                    } else if current.x < r.x + r.width && r.x < current.x + current.width {
+                        position = position.max(r.y + r.height + gap);
                     }
                 }
-                let shift = x - units[i].rect.x;
+                let shift = position - if horizontal { current.x } else { current.y };
                 for &member in &units[i].members {
-                    nodes[member].x += shift;
+                    if horizontal {
+                        nodes[member].x += shift;
+                    } else {
+                        nodes[member].y += shift;
+                    }
                 }
-                units[i].rect.x = x;
+                if horizontal {
+                    units[i].rect.x = position;
+                } else {
+                    units[i].rect.y = position;
+                }
             }
             units
         }
@@ -877,12 +873,21 @@ impl<'a> FlowchartRenderer<'a> {
             nodes: &mut [LayoutNode],
             idx: &HashMap<&str, usize>,
             blocks: &Blocks,
+            horizontal: bool,
+            gap: usize,
         ) -> Option<Unit> {
-            if let Some(block) = blocks.items.iter().find(|b| b.sg_id == sg.id) {
-                if block.mode != BlockMode::AtPhantom {
-                    return None;
-                }
-                let &i = idx.get(block.phantom_id.as_str())?;
+            let block = blocks.items.iter().find(|b| b.sg_id == sg.id);
+            if block.is_some_and(|b| b.mode != BlockMode::AtPhantom) {
+                return None;
+            }
+            let phantom = block
+                .and_then(|b| idx.get(b.phantom_id.as_str()).copied())
+                .or_else(|| {
+                    idx.iter().find_map(|(&id, &i)| {
+                        (id.strip_prefix(PHANTOM_PREFIX) == Some(sg.id.as_str())).then_some(i)
+                    })
+                });
+            if let Some(i) = phantom {
                 let n = &nodes[i];
                 return Some(Unit {
                     rect: Rect::new(
@@ -903,12 +908,14 @@ impl<'a> FlowchartRenderer<'a> {
             }
             let mut units = Vec::new();
             for child in &sg.subgraphs {
-                if let Some(unit) = group(child, nodes, idx, blocks) {
+                if let Some(unit) = group(child, nodes, idx, blocks, horizontal, gap) {
                     units.push(unit);
                 }
             }
             for id in &sg.nodes {
-                if let Some(&i) = idx.get(id.as_str()) {
+                if let Some(&i) = idx.get(id.as_str())
+                    && !blocks.member_indices.contains(&i)
+                {
                     let n = &nodes[i];
                     units.push(Unit {
                         rect: Rect::new(n.x, n.y, n.width, n.height),
@@ -916,7 +923,7 @@ impl<'a> FlowchartRenderer<'a> {
                     });
                 }
             }
-            let units = pack(units, nodes);
+            let units = pack(units, nodes, horizontal, gap);
             let first = units.first()?;
             let mut left = first.rect.x;
             let mut top = first.rect.y;
@@ -946,7 +953,7 @@ impl<'a> FlowchartRenderer<'a> {
         let mut units = Vec::new();
         let mut grouped = vec![false; nodes.len()];
         for sg in &self.spec.subgraphs {
-            if let Some(unit) = group(sg, nodes, idx, blocks) {
+            if let Some(unit) = group(sg, nodes, idx, blocks, horizontal, gap) {
                 for &member in &unit.members {
                     grouped[member] = true;
                 }
@@ -961,7 +968,7 @@ impl<'a> FlowchartRenderer<'a> {
                 });
             }
         }
-        drop(pack(units, nodes));
+        drop(pack(units, nodes, horizontal, gap));
     }
 
     /// Deepest subgraph nesting level (1 for a flat top-level subgraph). Also

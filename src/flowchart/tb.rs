@@ -209,7 +209,7 @@ impl<'a> FlowchartRenderer<'a> {
 
         // Separate whole groups before any edge anchoring or block placement.
         // Every member rank moves together, preserving nested containment.
-        self.separate_tb_groups(&mut nodes, &idx, blocks);
+        self.separate_groups(&mut nodes, &idx, blocks, true, 2);
         let max_w = nodes
             .iter()
             .enumerate()

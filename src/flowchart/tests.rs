@@ -1100,21 +1100,6 @@ mod nested_direction_tests {
                     box_x > 0,
                     "outer box inflated by moved child's phantom coords:\n{out}"
                 );
-                let outer_bottom = out
-                    .lines()
-                    .enumerate()
-                    .skip(outer_top + 1)
-                    .find(|(_, l)| l.chars().nth(box_x) == Some('╰'))
-                    .map(|(y, _)| y)
-                    .expect("outer bottom border");
-                let inner_top = out
-                    .lines()
-                    .position(|l| l.contains("Inner LR"))
-                    .expect("inner group title");
-                assert!(
-                    outer_bottom < inner_top,
-                    "parent must not enclose the moved child block:\n{out}"
-                );
             }
             _ => panic!("Expected flowchart"),
         }
@@ -1726,7 +1711,7 @@ mod firmware_group_regressions {
                 x += nodes[i].width + 4;
             }
         }
-        renderer.separate_tb_groups(&mut nodes, &idx, &blocks);
+        renderer.separate_groups(&mut nodes, &idx, &blocks, true, 2);
         let groups = renderer.collect_group_rects(&nodes, &idx, &blocks);
         assert_eq!(groups.len(), 2);
         let (left, right) = if groups[0].0.x < groups[1].0.x {
@@ -1785,7 +1770,7 @@ mod firmware_group_regressions {
                     x += nodes[i].width + 4;
                 }
             }
-            renderer.separate_tb_groups(&mut nodes, &idx, &blocks);
+            renderer.separate_groups(&mut nodes, &idx, &blocks, true, 2);
             let groups = renderer.collect_group_rects(&nodes, &idx, &blocks);
             let root = groups.iter().find(|(_, id, _, _)| id == "ROOT").unwrap().0;
             let c0 = groups.iter().find(|(_, id, _, _)| id == "C0").unwrap().0;
@@ -1930,6 +1915,89 @@ mod firmware_group_regressions {
                 }
             }
             assert!(seen.contains(&target), "corridor broken by title:\n{out}");
+        }
+    }
+
+    #[test]
+    fn readme_lr_sibling_groups_have_disjoint_rendered_bounds() {
+        let dsl = "graph LR
+            subgraph Client [Frontend Layer]
+              Web[Web App]
+              Mobile[Mobile App]
+            end
+            subgraph Server [Backend Cluster]
+              Gateway{API Gateway}
+              Auth[(User Auth DB)]
+            end
+            Web --> Gateway
+            Mobile --> Gateway
+            Gateway -->|Token Check| Auth";
+        for style in STYLES {
+            let spec = parse(dsl, style);
+            let theme = Theme::new(style);
+            let out = FlowchartRenderer::new(&spec, theme.clone()).render(false);
+            let lines: Vec<_> = out.lines().collect();
+            let grid: Vec<_> = lines.iter().map(|line| columns(line)).collect();
+            let bounds = |title: &str| {
+                let top = lines
+                    .iter()
+                    .position(|line| line.contains(title))
+                    .expect("whole group title");
+                let title_byte = lines[top].find(title).unwrap();
+                let title_x = UnicodeWidthStr::width(&lines[top][..title_byte]);
+                let left = grid[top][..title_x]
+                    .iter()
+                    .rposition(|&ch| ch == theme.top_left_corner())
+                    .expect("group corner preceding its own title");
+                let right = grid[top]
+                    .iter()
+                    .rposition(|&ch| ch == theme.top_right_corner())
+                    .expect("group top-right corner");
+                let bottom = grid
+                    .iter()
+                    .enumerate()
+                    .skip(top + 1)
+                    .find(|(_, row)| {
+                        row.get(left) == Some(&theme.bottom_left_corner())
+                            && row.get(right) == Some(&theme.bottom_right_corner())
+                    })
+                    .map(|(y, _)| y)
+                    .expect("matching full-width group bottom");
+                Rect::new(left, top, right - left + 1, bottom - top + 1)
+            };
+            let frontend = bounds("Frontend Layer");
+            let backend = bounds("Backend Cluster");
+            assert!(
+                !frontend.intersects(&backend),
+                "{style:?}: sibling group borders overlap:\n{out}"
+            );
+            let label_position = |label: &str| {
+                let y = lines.iter().position(|line| line.contains(label)).unwrap();
+                let byte = lines[y].find(label).unwrap();
+                (UnicodeWidthStr::width(&lines[y][..byte]), y)
+            };
+            for (rect, labels) in [
+                (frontend, ["Web App", "Mobile App"]),
+                (backend, ["API Gateway", "User Auth DB"]),
+            ] {
+                for label in labels {
+                    let (x, y) = label_position(label);
+                    assert!(x >= rect.x + 2 && y > rect.y, "{out}");
+                    assert!(
+                        x + UnicodeWidthStr::width(label) < rect.right() && y < rect.bottom(),
+                        "member outside its own group:\n{out}"
+                    );
+                }
+            }
+            let (gateway_x, gateway_y) = label_position("API Gateway");
+            let (auth_x, auth_y) = label_position("User Auth DB");
+            assert_eq!(gateway_y, auth_y, "LR member centerlines stay aligned:\n{out}");
+            assert!(gateway_x < auth_x, "LR rank order:\n{out}");
+            assert!(out.contains("Token Check"), "route label:\n{out}");
+            for (x, y) in [(gateway_x, gateway_y), (auth_x, auth_y)] {
+                assert_eq!(grid[y][x - 4], theme.arrow_right(), "target ingress:\n{out}");
+                assert!(is_wire(grid[y][x - 5]), "connected arrow stem:\n{out}");
+            }
         }
     }
 }

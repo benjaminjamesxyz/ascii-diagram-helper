@@ -8,7 +8,7 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -58,7 +58,7 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 		return "ascii-diagram";
 	}
 	function withAutoColor(dsl: string): string {
-		const isFlowchart = dsl.includes("graph") || dsl.includes("flowchart");
+		const isFlowchart = /^\s*(?:graph|flowchart)(?=\s|;|$)/.test(dsl);
 		if (isFlowchart && !dsl.includes("classDef")) {
 			return `${dsl}\nclassDef default stroke:cyan\nlinkStyle default stroke:blue`;
 		}
@@ -200,11 +200,13 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			if (params.style) {
 				args.push("--style", params.style);
 			}
-			// Colors on by default in the TUI (binary auto-detects TTY, but we are
-			// piping — force always unless the agent opted out or NO_COLOR is set)
+			// Colors on by default in the TUI; false explicitly suppresses even
+			// diagram-defined styles, rather than leaving the binary in auto.
 			if (params.color !== false) {
 				args.push("--color", "always");
 				inputContent = withAutoColor(inputContent);
+			} else {
+				args.push("--color", "never");
 			}
 
 			try {
@@ -255,21 +257,25 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 				return new Text(theme.fg("dim", "(no diagram)"), 0, 0);
 			}
 
-			// Render diagram in a clean subtle frame
-			const lines = [
-				theme.fg("accent", "╭── Diagram ──────────────────────────────────────"),
-				...diagram
-					.split("\n")
-					.map((line) =>
-						// ANSI-colored lines pass through raw — wrapping them in the
-						// theme text color would break at the diagram's internal
-						// resets and leave two-tone artifacts on themed terminals
-						/\x1b\[/.test(line)
-							? `${theme.fg("accent", "│")} ${line}`
-							: `${theme.fg("accent", "│")} ${theme.fg("text", line)}`,
-					),
-				theme.fg("accent", "╰─────────────────────────────────────────────────"),
-			];
+			// Render diagram in a clean subtle frame sized in terminal columns.
+			const lines = diagram.split("\n");
+			let frameWidth = visibleWidth("╭── Diagram ─");
+			for (const line of lines) {
+				frameWidth = Math.max(frameWidth, visibleWidth(line) + 2);
+			}
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i];
+				// ANSI-colored lines pass through raw — wrapping them in the
+				// theme text color would break at the diagram's internal
+				// resets and leave two-tone artifacts on themed terminals.
+				lines[i] = /\x1b\[/.test(line)
+					? `${theme.fg("accent", "│")} ${line}`
+					: `${theme.fg("accent", "│")} ${theme.fg("text", line)}`;
+			}
+			lines.unshift(
+				theme.fg("accent", `╭── Diagram ${"─".repeat(frameWidth - 12)}`),
+			);
+			lines.push(theme.fg("accent", `╰${"─".repeat(frameWidth - 1)}`));
 
 			return new Text(lines.join("\n"), 0, 0);
 		},
@@ -279,12 +285,13 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 	pi.registerCommand("diagram", {
 		description: "Render an ASCII/Unicode diagram directly in the terminal",
 		handler: async (args, ctx) => {
-			const binPath = findBinary(ctx.cwd);
 			const trimmedArgs = args?.trim() ?? "";
+			const usage =
+				"Usage: /diagram [--color] [--style rounded|sharp|double|heavy|ascii] [--example <type>] <mermaid-dsl>";
 
 			if (!trimmedArgs) {
 				ctx.ui.notify(
-					"Usage: /diagram [--color] [--style rounded|sharp|double|heavy|ascii] [--example <type>] <mermaid-dsl>",
+					usage,
 					"info",
 				);
 				return;
@@ -298,6 +305,11 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 			// binary (clap lists valid values on a typo) — pass-through keeps
 			// one source of truth.
 			for (;;) {
+				if (/^(?:--help|-h)(?=\s|$)/.test(input)) {
+					ctx.ui.notify(usage, "info");
+					return;
+				}
+
 				let m = input.match(/^--color(?=\s|$)/);
 				if (m) {
 					// Explicit --color flag: forces ANSI colors even if NO_COLOR is set (no-color.org precedence)
@@ -324,17 +336,18 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 				if (m) {
 					cmdArgs.push("example", m[1] ?? "flowchart");
 					input = input.slice(m[0].length).trim();
-					if (input) {
-						ctx.ui.notify(
-							`'--example <type>' takes no diagram text; unexpected: '${input}'`,
-							"error",
-						);
-						return;
-					}
 					continue;
 				}
 
 				break;
+			}
+
+			if (cmdArgs.includes("example") && input) {
+				ctx.ui.notify(
+					`'--example <type>' takes no diagram text; unexpected: '${input}'`,
+					"error",
+				);
+				return;
 			}
 
 			try {
@@ -342,7 +355,11 @@ export default function asciiDiagramExtension(pi: ExtensionAPI) {
 				if (cmdArgs.includes("--color")) {
 					dslToRender = withAutoColor(input);
 				}
-				const rendered = await runDiagramBinary(binPath, dslToRender, cmdArgs);
+				const rendered = await runDiagramBinary(
+					findBinary(ctx.cwd),
+					dslToRender,
+					cmdArgs,
+				);
 				ctx.ui.notify("Diagram rendered successfully", "info");
 				// Print diagram to session
 				pi.sendUserMessage(`\`\`\`text\n${rendered}\n\`\`\``);

@@ -1,4 +1,4 @@
-use crate::canvas::{Canvas, CellRole, Direction, Rect};
+use crate::canvas::{Canvas, CellRole, Direction, Rect, display_width};
 use crate::color::Color;
 use crate::schema::{EdgeSpec, FlowchartSpec, LayoutDirection, NodeShape, NodeSpec, SubgraphSpec};
 use crate::theme::{BoxStyle, Theme};
@@ -35,6 +35,45 @@ pub(super) struct LayoutNode {
 pub struct FlowchartRenderer<'a> {
     spec: &'a FlowchartSpec,
     theme: Theme,
+}
+
+/// Edge labels are painted only after every route, node, and group border.
+struct PendingLabel {
+    lines: Vec<String>,
+    x: usize,
+    y: usize,
+    centered: bool,
+    up: bool,
+}
+
+impl PendingLabel {
+    fn left(lines: Vec<String>, x: usize, y: usize) -> Self {
+        Self {
+            lines,
+            x,
+            y,
+            centered: false,
+            up: false,
+        }
+    }
+
+    fn centered(lines: Vec<String>, x: usize, y: usize, up: bool) -> Self {
+        Self {
+            lines,
+            x,
+            y,
+            centered: true,
+            up,
+        }
+    }
+
+    fn draw(self, renderer: &FlowchartRenderer<'_>, canvas: &mut Canvas) {
+        if self.centered {
+            renderer.draw_stacked_label(canvas, &self.lines, self.x, self.y, self.up);
+        } else {
+            FlowchartRenderer::draw_stacked_label_left(canvas, &self.lines, self.x, self.y, true);
+        }
+    }
 }
 
 /// A subgraph with its own `direction` that is edge-isolated from the rest of
@@ -1316,17 +1355,12 @@ impl<'a> FlowchartRenderer<'a> {
         base_y: usize,
         up: bool,
     ) {
-        let n = lines.len();
-        for (i, line) in lines.iter().enumerate() {
-            let y = if up {
-                base_y.saturating_sub(n - 1 - i)
-            } else {
-                base_y + i
-            };
-            let w = UnicodeWidthStr::width(line.as_str());
-            let x = cx.saturating_sub(w / 2);
-            canvas.draw_text_safe(x, y, line);
-        }
+        let y = if up {
+            base_y.saturating_sub(lines.len().saturating_sub(1))
+        } else {
+            base_y
+        };
+        Self::draw_label_block(canvas, lines, cx, y, true);
     }
 
     /// Draws stacked edge-label lines left-aligned at `x` (self-loops and
@@ -1338,20 +1372,101 @@ impl<'a> FlowchartRenderer<'a> {
         base_y: usize,
         down: bool,
     ) {
-        let n = lines.len();
-        for (i, line) in lines.iter().enumerate() {
-            let y = if down {
-                base_y + i
-            } else {
-                base_y.saturating_sub(n - 1 - i)
-            };
-            canvas.draw_text_safe(x, y, line);
+        let y = if down {
+            base_y
+        } else {
+            base_y.saturating_sub(lines.len().saturating_sub(1))
+        };
+        Self::draw_label_block(canvas, lines, x, y, false);
+    }
+
+    /// Move a complete label to the nearest clear position, never its individual
+    /// lines. Blank columns on either side protect both strokes and wide glyphs.
+    fn draw_label_block(
+        canvas: &mut Canvas,
+        lines: &[String],
+        preferred_x: usize,
+        preferred_y: usize,
+        centered: bool,
+    ) {
+        if lines.is_empty() {
+            return;
         }
+        let width = lines
+            .iter()
+            .map(|line| display_width(line))
+            .max()
+            .unwrap_or(0);
+        let preferred_x = if centered {
+            preferred_x.saturating_sub(width / 2)
+        } else {
+            preferred_x
+        };
+        let clear = |x: usize, y: usize| {
+            let left = x.saturating_sub(1);
+            let right = x + width;
+            let bottom = y + lines.len() - 1;
+            canvas.obstacles.iter().all(|obstacle| {
+                right < obstacle.x
+                    || left > obstacle.right()
+                    || bottom < obstacle.y
+                    || y > obstacle.bottom()
+            }) && (y..=bottom).all(|row| {
+                (left..=right).all(|column| {
+                    canvas.get_cell(column, row).is_none_or(|cell| {
+                        cell.ch == ' '
+                            && !cell.is_line
+                            && !cell.is_continuation
+                            && !matches!(cell.role, CellRole::Border | CellRole::Arrow)
+                    })
+                })
+            })
+        };
+        // Manhattan rings stay near the requested route anchor. Prefer
+        // horizontal movement on ties, keeping labels in their edge's band.
+        // A position beyond the finite canvas is always clear.
+        let mut distance = 0;
+        let (x, y) = 'search: loop {
+            for dy in 0..=distance {
+                let dx = distance - dy;
+                let xs = [
+                    Some(preferred_x + dx),
+                    preferred_x.checked_sub(dx).filter(|_| dx > 0),
+                ];
+                let ys = [
+                    preferred_y.checked_sub(dy),
+                    (dy > 0).then_some(preferred_y + dy),
+                ];
+                for y in ys.into_iter().flatten() {
+                    for x in xs.into_iter().flatten() {
+                        if clear(x, y) {
+                            break 'search (x, y);
+                        }
+                    }
+                }
+            }
+            distance += 1;
+        };
+        for (i, line) in lines.iter().enumerate() {
+            let offset = if centered {
+                width / 2 - display_width(line) / 2
+            } else {
+                0
+            };
+            canvas.draw_text(x + offset, y + i, line);
+        }
+        canvas.add_obstacle(Rect::new(x, y, width, lines.len()));
     }
 
     /// Draws a self-referencing edge (`A --> A`) as a rectangular arc off the
     /// right wall of the box, re-entering one row lower.
-    pub(super) fn draw_self_loop(&self, canvas: &mut Canvas, edge: &EdgeSpec, u: &LayoutNode) {
+    fn draw_self_loop(
+        &self,
+        canvas: &mut Canvas,
+        edge: &EdgeSpec,
+        u: &LayoutNode,
+        labels: &mut Vec<PendingLabel>,
+    ) {
         let y0 = u.y + u.height / 2;
         let y1 = u.y + u.height - 1;
         if y1 <= y0 {
@@ -1375,7 +1490,7 @@ impl<'a> FlowchartRenderer<'a> {
         // glyph so the label never abuts it (FC-EDGE-08)
         let lines = self.edge_label_lines(edge);
         if !lines.is_empty() {
-            Self::draw_stacked_label_left(canvas, &lines, x1 + 2, y0, true);
+            labels.push(PendingLabel::left(lines, x1 + 2, y0));
         }
     }
 

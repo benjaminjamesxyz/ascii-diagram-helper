@@ -1,7 +1,6 @@
-use super::FlowchartRenderer;
 use super::edges::{clear_route_y, edge_arrow_heads, edge_hline, edge_vline};
-use super::{BlockMode, Blocks};
-use crate::canvas::{Canvas, Direction};
+use super::{BlockMode, Blocks, FlowchartRenderer, PendingLabel};
+use crate::canvas::{Canvas, Direction, display_width};
 use crate::schema::SubgraphSpec;
 use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;
@@ -439,6 +438,7 @@ impl<'a> FlowchartRenderer<'a> {
             }
         }
 
+        let mut labels = Vec::new();
         // Draw edges FIRST so boxes can render over or cleanly merge with them
         // (edges between members of moved blocks are baked into those blocks)
         for edge in &self.spec.edges {
@@ -450,13 +450,19 @@ impl<'a> FlowchartRenderer<'a> {
                 let u = &nodes[ui];
                 let v = &nodes[vi];
                 if ui == vi {
-                    self.draw_self_loop(&mut canvas, edge, u);
+                    self.draw_self_loop(&mut canvas, edge, u, &mut labels);
                     continue;
                 }
                 let u_cx = u.x + u.width / 2;
                 let u_bottom = u.y + u.height - 1;
                 let v_cx = v.x + v.width / 2;
                 let v_top = v.y;
+                let lines = self.edge_label_lines(edge);
+                let label_width = lines
+                    .iter()
+                    .map(|line| display_width(line))
+                    .max()
+                    .unwrap_or(0);
 
                 if v.rank > u.rank {
                     // Forward edge
@@ -494,15 +500,15 @@ impl<'a> FlowchartRenderer<'a> {
                                 &self.theme,
                             );
 
-                            if let Some(ref lbl) = edge.label {
-                                let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                            if !lines.is_empty() {
+                                let lbl_w = label_width;
                                 let (label_x, label_y) = if is_branching {
                                     // Place on the left side of the vertical line so it doesn't collide with right branches
                                     (line_x.saturating_sub(lbl_w + 1), u_bottom + 1)
                                 } else {
                                     (line_x + 2, usize::midpoint(u_bottom, v_top))
                                 };
-                                canvas.draw_text_safe(label_x, label_y, lbl);
+                                labels.push(PendingLabel::left(lines, label_x, label_y));
                             }
                         } else {
                             // Orthogonal bend (Manhattan)
@@ -524,8 +530,8 @@ impl<'a> FlowchartRenderer<'a> {
                                 &self.theme,
                             );
 
-                            if let Some(ref lbl) = edge.label {
-                                let label_w = UnicodeWidthStr::width(lbl.as_str());
+                            if !lines.is_empty() {
+                                let label_w = label_width;
                                 let label_x = if v_cx > u_cx {
                                     u_cx + 2 + (v_cx - u_cx - 2).saturating_sub(label_w) / 2
                                 } else {
@@ -541,7 +547,7 @@ impl<'a> FlowchartRenderer<'a> {
                                     mid_y
                                 }
                                 .clamp(u_bottom + 1, v_top.saturating_sub(1));
-                                canvas.draw_text_safe(label_x, label_y, lbl);
+                                labels.push(PendingLabel::left(lines, label_x, label_y));
                             }
                         }
                     } else {
@@ -614,12 +620,16 @@ impl<'a> FlowchartRenderer<'a> {
                                 (drop_x, bottom_gap_y, Direction::Up),
                                 &self.theme,
                             );
-                            if let Some(ref lbl) = edge.label {
-                                let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                            if !lines.is_empty() {
+                                let lbl_w = label_width;
                                 let label_x = usize::midpoint(track_x, v_cx)
                                     .saturating_sub(lbl_w / 2)
                                     .max(v_cx.min(track_x) + 1);
-                                canvas.draw_text_safe(label_x, bottom_gap_y.saturating_sub(1), lbl);
+                                labels.push(PendingLabel::left(
+                                    lines,
+                                    label_x,
+                                    bottom_gap_y.saturating_sub(1),
+                                ));
                             }
                         } else {
                             let mut max_bound_x = u.x + u.width;
@@ -665,15 +675,19 @@ impl<'a> FlowchartRenderer<'a> {
                                 &self.theme,
                             );
 
-                            if let Some(ref lbl) = edge.label {
-                                let lbl_w = UnicodeWidthStr::width(lbl.as_str());
+                            if !lines.is_empty() {
+                                let lbl_w = label_width;
                                 let label_x = if route_x > u_cx {
                                     // Center along the horizontal segment between u_cx and route_x
                                     u_cx + 2 + (route_x - u_cx - 2).saturating_sub(lbl_w) / 2
                                 } else {
                                     route_x + 1 + (u_cx - route_x - 1).saturating_sub(lbl_w) / 2
                                 };
-                                canvas.draw_text_safe(label_x, top_gap_y.saturating_sub(1), lbl);
+                                labels.push(PendingLabel::left(
+                                    lines,
+                                    label_x,
+                                    top_gap_y.saturating_sub(1),
+                                ));
                             }
                         }
                     }
@@ -691,8 +705,8 @@ impl<'a> FlowchartRenderer<'a> {
                             (start_x, y, Direction::Left),
                             &self.theme,
                         );
-                        if let Some(ref lbl) = edge.label {
-                            canvas.draw_text_safe(start_x + 1, y.saturating_sub(1), lbl);
+                        if !lines.is_empty() {
+                            labels.push(PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)));
                         }
                     } else {
                         let y = u.y + u.height / 2;
@@ -706,8 +720,8 @@ impl<'a> FlowchartRenderer<'a> {
                             (end_x, y, Direction::Right),
                             &self.theme,
                         );
-                        if let Some(ref lbl) = edge.label {
-                            canvas.draw_text_safe(start_x + 1, y.saturating_sub(1), lbl);
+                        if !lines.is_empty() {
+                            labels.push(PendingLabel::left(lines, start_x + 1, y.saturating_sub(1)));
                         }
                     }
                 } else {
@@ -795,14 +809,13 @@ impl<'a> FlowchartRenderer<'a> {
                         &self.theme,
                     );
 
-                    if let Some(ref lbl) = edge.label {
-                        let lbl_w = UnicodeWidthStr::width(lbl.as_str());
-                        canvas.draw_text_safe(
+                    if !lines.is_empty() {
+                        labels.push(PendingLabel::left(
+                            lines,
                             loop_x + 1,
                             usize::midpoint(u_center_y, v_center_y),
-                            lbl,
-                        );
-                        loop_track_x += lbl_w + 3;
+                        ));
+                        loop_track_x += label_width + 3;
                     } else {
                         loop_track_x += 4;
                     }
@@ -821,6 +834,10 @@ impl<'a> FlowchartRenderer<'a> {
 
         // Draw subgraph grouping boxes on top of empty cells
         self.draw_subgraphs(&mut canvas, &nodes, &idx, blocks);
+
+        for label in labels {
+            label.draw(self, &mut canvas);
+        }
 
         canvas.render_impl(&self.theme, colored)
     }

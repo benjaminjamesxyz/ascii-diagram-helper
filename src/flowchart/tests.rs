@@ -2051,3 +2051,152 @@ mod firmware_group_regressions {
         }
     }
 }
+
+#[cfg(test)]
+mod deferred_edge_label_regressions {
+    use super::*;
+    use crate::schema::DiagramSpec;
+
+    const STYLES: [BoxStyle; 5] = [
+        BoxStyle::Rounded,
+        BoxStyle::Sharp,
+        BoxStyle::Double,
+        BoxStyle::Heavy,
+        BoxStyle::Ascii,
+    ];
+
+    fn label_position(output: &str, label: &str) -> (usize, usize) {
+        assert_eq!(output.matches(label).count(), 1, "{label}:\n{output}");
+        output
+            .lines()
+            .enumerate()
+            .find_map(|(y, row)| {
+                row.find(label).map(|byte| {
+                    assert!(
+                        row[..byte].chars().next_back().is_none_or(|ch| ch == ' '),
+                        "blank column before {label}:\n{output}"
+                    );
+                    assert!(
+                        row[byte + label.len()..].chars().next().is_none_or(|ch| ch == ' '),
+                        "blank column after {label}:\n{output}"
+                    );
+                    (display_width(&row[..byte]), y)
+                })
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn crowded_routes_keep_complete_separated_labels_in_both_directions() {
+        for style in STYLES {
+            for direction in ["TD", "LR"] {
+                let dsl = format!(
+                    "graph {direction}
+                     A[Navigation] -->|Target Angle| C[Guard]
+                     B[Decoder] -->|Stick Setpoints| C
+                     B -->|Flight Data| D[Recorder]
+                     E[Attitude] -.->|State Log| D
+                     C -->|TopLine<br/>末行| F[Controller]
+                     E -->|Quaternion| F
+                     F -->|Retry| F"
+                );
+                let DiagramSpec::Flowchart(spec) =
+                    crate::parser::parse_dsl_or_json(&dsl, style).unwrap()
+                else {
+                    panic!("expected flowchart");
+                };
+                let out = FlowchartRenderer::new(&spec, Theme::new(style)).render(false);
+                for label in [
+                    "Target Angle",
+                    "Stick Setpoints",
+                    "Flight Data",
+                    "State Log",
+                    "Quaternion",
+                    "Retry",
+                ] {
+                    label_position(&out, label);
+                }
+                let first = label_position(&out, "TopLine");
+                let last = label_position(&out, "末行");
+                assert_eq!(last.1, first.1 + 1, "one coherent label block:\n{out}");
+                if direction == "LR" {
+                    assert_eq!(
+                        first.0 + display_width("TopLine") / 2,
+                        last.0 + display_width("末行") / 2,
+                        "display-column centering:\n{out}"
+                    );
+                } else {
+                    assert_eq!(first.0, last.0, "left-aligned TB label:\n{out}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn labels_leave_existing_strokes_arrowheads_and_colors_untouched() {
+        for style in STYLES {
+            let theme = Theme::new(style);
+            let mut canvas = Canvas::new(32, 8);
+            canvas.set_pen(Some(Color::Red));
+            canvas.draw_hline(0, 28, 3);
+            canvas.draw_vline(12, 0, 6);
+            canvas.draw_arrow(25, 3, Direction::Right, &theme);
+            let mut strokes = Vec::new();
+            for y in 0..canvas.height {
+                for x in 0..canvas.width {
+                    let cell = *canvas.get_cell(x, y).unwrap();
+                    if cell.role != CellRole::Empty {
+                        strokes.push((x, y, cell));
+                    }
+                }
+            }
+            FlowchartRenderer::draw_stacked_label_left(
+                &mut canvas,
+                &["Signal".to_string()],
+                4,
+                3,
+                true,
+            );
+            for (x, y, original) in strokes {
+                assert_eq!(canvas.get_cell(x, y), Some(&original));
+            }
+            let out = canvas.render(&theme);
+            let (x, y) = label_position(&out, "Signal");
+            assert!(x.abs_diff(4) + y.abs_diff(3) <= 1, "route-adjacent label:\n{out}");
+            assert_eq!(canvas.get_cell(x, y).unwrap().color, None);
+        }
+    }
+
+    #[test]
+    fn multiline_labels_move_together_at_top_boundary_with_wide_text() {
+        let spec = FlowchartSpec::default();
+        let theme = Theme::new(BoxStyle::Rounded);
+        let renderer = FlowchartRenderer::new(&spec, theme.clone());
+        let lines = vec!["遥測値".to_string(), "Setpoints".to_string(), "終端".to_string()];
+        for centered in [false, true] {
+            let mut canvas = Canvas::new(32, 8);
+            canvas.draw_text(4, 1, "Occupied");
+            if centered {
+                renderer.draw_stacked_label(&mut canvas, &lines, 8, 0, true);
+            } else {
+                FlowchartRenderer::draw_stacked_label_left(&mut canvas, &lines, 4, 0, false);
+            }
+            let out = canvas.render(&theme);
+            label_position(&out, "Occupied");
+            let first = label_position(&out, &lines[0]);
+            for (i, line) in lines.iter().enumerate() {
+                let position = label_position(&out, line);
+                assert_eq!(position.1, first.1 + i, "ordered consecutive lines:\n{out}");
+                if centered {
+                    assert_eq!(
+                        position.0 + display_width(line) / 2,
+                        first.0 + display_width(&lines[0]) / 2,
+                        "CJK display-column centering:\n{out}"
+                    );
+                } else {
+                    assert_eq!(position.0, first.0, "coherent left alignment:\n{out}");
+                }
+            }
+        }
+    }
+}

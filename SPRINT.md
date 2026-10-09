@@ -68,6 +68,8 @@ The first render pass caught a locality regression despite green tests: `Target 
 - Crowded TB/LR, multiline, CJK/nested, self-loop, and four/eight-motor scenarios pass in all five styles. Twenty architecture column/nested/row/CJK renders retain components, properties, and complete labels.
 - All 35 built-in example/style outputs remain byte-identical to the color-fix baseline. Five independent runs per style produce identical original-firmware flowchart output.
 - README's LR showcase was regenerated from the release CLI. The complete firmware flowchart still needs 158 columns; no truncation, terminal-width cap, or automatic wrapping was introduced. No upstream push.
+- Installed repository/user/Pi binary/cache and omp copies share SHA-256 `4d87f284d5010b7688b1a48450ccbceb3f7f189e3b79da775017faf48151d5e9`; changed package sources and documentation are synchronized. Live colored `draw_diagram` renders for both original specs exactly match the corrected native renderer.
+- Session caveat: the live tool still emits ANSI for styled input with `color:false`, while a freshly loaded installed omp extension honors suppression with native binary discovery. Reported through automated tool QA. Reload the session to refresh its tool wrapper; that reload has not been verified. CLI `--color never` remains verified in all five styles.
 
 ---
 

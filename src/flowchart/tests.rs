@@ -1653,8 +1653,7 @@ mod firmware_group_regressions {
     ];
 
     fn parse(dsl: &str, style: BoxStyle) -> FlowchartSpec {
-        let DiagramSpec::Flowchart(spec) =
-            crate::parser::parse_dsl_or_json(dsl, style).unwrap()
+        let DiagramSpec::Flowchart(spec) = crate::parser::parse_dsl_or_json(dsl, style).unwrap()
         else {
             panic!("expected flowchart");
         };
@@ -1782,13 +1781,24 @@ mod firmware_group_regressions {
                 assert!(child.bottom() < root.bottom());
             }
             let out = renderer.render(false);
-            for title in ["Flight Controller", "实时飞控 CORE ZERO", "导航遥测 CORE ONE"] {
-                assert!(out.contains(title), "{style:?}: missing title {title}:\n{out}");
+            for title in [
+                "Flight Controller",
+                "实时飞控 CORE ZERO",
+                "导航遥测 CORE ONE",
+            ] {
+                assert!(
+                    out.contains(title),
+                    "{style:?}: missing title {title}:\n{out}"
+                );
             }
             // The shared title-placement code also serves horizontal layouts.
             let lr = parse(&dsl.replace("graph TD", "graph LR"), style);
             let out = FlowchartRenderer::new(&lr, Theme::new(style)).render(false);
-            for title in ["Flight Controller", "实时飞控 CORE ZERO", "导航遥测 CORE ONE"] {
+            for title in [
+                "Flight Controller",
+                "实时飞控 CORE ZERO",
+                "导航遥测 CORE ONE",
+            ] {
                 assert!(out.contains(title), "{style:?}: LR title {title}:\n{out}");
             }
         }
@@ -1851,7 +1861,10 @@ mod firmware_group_regressions {
             assert_eq!(grid[y - 1][x], theme.arrow_down(), "{out}");
             assert_eq!(grid[y][x - 1], ' ', "{out}");
             assert_eq!(grid[y][x + 1], ' ', "{out}");
-            assert!(out.contains("Failsafe") && out.contains("Link Guard"), "{out}");
+            assert!(
+                out.contains("Failsafe") && out.contains("Link Guard"),
+                "{out}"
+            );
             assert_eq!(
                 grid[y - 1]
                     .iter()
@@ -1890,8 +1903,7 @@ mod firmware_group_regressions {
             let mut seen = HashSet::from([source]);
             while let Some((x, y)) = queue.pop_front() {
                 for (dx, dy) in [(0isize, -1isize), (0, 1), (-1, 0), (1, 0)] {
-                    let (Some(nx), Some(ny)) =
-                        (x.checked_add_signed(dx), y.checked_add_signed(dy))
+                    let (Some(nx), Some(ny)) = (x.checked_add_signed(dx), y.checked_add_signed(dy))
                     else {
                         continue;
                     };

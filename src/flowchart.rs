@@ -993,7 +993,10 @@ impl<'a> FlowchartRenderer<'a> {
     /// group rects) expanded by padding, with the title embedded in the top
     /// border. Drawn after nodes so borders land on empty cells; edges crossing
     /// a border render as junctions.
-    #[allow(clippy::too_many_lines, reason = "group borders and title crossing detours")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "group borders and title crossing detours"
+    )]
     pub(super) fn draw_subgraphs(
         &self,
         canvas: &mut Canvas,
@@ -1028,9 +1031,9 @@ impl<'a> FlowchartRenderer<'a> {
                 // and the incoming/outgoing wire intact.
                 let bypass = title_x + label_w;
                 let horizontal_crossing = (title_x..bypass).any(|x| {
-                    canvas.get_cell(x, r.y).is_some_and(|c| {
-                        c.is_line && (c.conn.east || c.conn.west)
-                    })
+                    canvas
+                        .get_cell(x, r.y)
+                        .is_some_and(|c| c.is_line && (c.conn.east || c.conn.west))
                 });
                 if horizontal_crossing {
                     canvas.set_pen(color);

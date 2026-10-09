@@ -1095,14 +1095,14 @@ mod tests {
             if x0 == x1 {
                 let near_wall =
                     x0.abs_diff(unrelated.x) == 1 || x0.abs_diff(unrelated.right()) == 1;
-                let overlaps = (*y0).min(*y1) <= unrelated.bottom() + 1
-                    && (*y0).max(*y1) + 1 >= unrelated.y;
+                let overlaps =
+                    (*y0).min(*y1) <= unrelated.bottom() + 1 && (*y0).max(*y1) + 1 >= unrelated.y;
                 assert!(!near_wall || !overlaps, "vertical route abuts sibling");
             } else {
                 let near_wall =
                     y0.abs_diff(unrelated.y) == 1 || y0.abs_diff(unrelated.bottom()) == 1;
-                let overlaps = (*x0).min(*x1) <= unrelated.right() + 1
-                    && (*x0).max(*x1) + 1 >= unrelated.x;
+                let overlaps =
+                    (*x0).min(*x1) <= unrelated.right() + 1 && (*x0).max(*x1) + 1 >= unrelated.x;
                 assert!(!near_wall || !overlaps, "horizontal route abuts sibling");
             }
         }
@@ -1146,7 +1146,11 @@ mod tests {
                 }
             }
             for conn in &spec.connections {
-                assert_eq!(out.matches(conn.label.as_deref().unwrap()).count(), 1, "{out}");
+                assert_eq!(
+                    out.matches(conn.label.as_deref().unwrap()).count(),
+                    1,
+                    "{out}"
+                );
             }
             let (canvas, bounds, containers) = routing_layout(&renderer);
             let grid = RouteGrid::new(canvas.width, canvas.height, &containers, &bounds, &canvas);

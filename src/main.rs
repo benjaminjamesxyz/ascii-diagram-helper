@@ -733,7 +733,8 @@ mod tests {
                 assert_eq!(err.exit_code(), 2);
             }
             for (flag, next_flag) in [("--style", "--markdown"), ("--color", "-m")] {
-                let err = Cli::try_parse_from(["ascii-diagram", input, flag, next_flag]).unwrap_err();
+                let err =
+                    Cli::try_parse_from(["ascii-diagram", input, flag, next_flag]).unwrap_err();
                 assert_eq!(err.exit_code(), 2);
             }
         }
@@ -745,9 +746,16 @@ mod tests {
             "graph", "TD;", "A", "-->", "B", "-s", "ascii", "-m", "--color", "never",
         ];
         let cli = Cli::try_parse_from(
-            ["ascii-diagram", "--style", "heavy", "--color", "always", "--"]
-                .into_iter()
-                .chain(input),
+            [
+                "ascii-diagram",
+                "--style",
+                "heavy",
+                "--color",
+                "always",
+                "--",
+            ]
+            .into_iter()
+            .chain(input),
         )
         .unwrap();
         assert!(cli.command.is_none());

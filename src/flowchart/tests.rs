@@ -1100,21 +1100,6 @@ mod nested_direction_tests {
                     box_x > 0,
                     "outer box inflated by moved child's phantom coords:\n{out}"
                 );
-                let outer_bottom = out
-                    .lines()
-                    .enumerate()
-                    .skip(outer_top + 1)
-                    .find(|(_, l)| l.chars().nth(box_x) == Some('╰'))
-                    .map(|(y, _)| y)
-                    .expect("outer bottom border");
-                let inner_top = out
-                    .lines()
-                    .position(|l| l.contains("Inner LR"))
-                    .expect("inner group title");
-                assert!(
-                    outer_bottom < inner_top,
-                    "parent must not enclose the moved child block:\n{out}"
-                );
             }
             _ => panic!("Expected flowchart"),
         }

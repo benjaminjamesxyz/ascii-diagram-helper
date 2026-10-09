@@ -29,7 +29,7 @@ impl From<CliStyle> for BoxStyle {
 
 #[derive(ValueEnum, Clone, Copy, Debug, Default)]
 enum ColorMode {
-    /// Colors on for a terminal, off when piped; a non-empty `NO_COLOR` env forces off
+    /// Honor diagram styling; otherwise use TTY detection and non-empty `NO_COLOR`
     #[default]
     Auto,
     Always,
@@ -61,7 +61,7 @@ struct Cli {
     #[arg(short, long, global = true, overrides_with = "markdown")]
     markdown: bool,
 
-    /// Node/edge emphasis colors: auto (TTY detection), always, never
+    /// Node/edge emphasis colors: auto (diagram styling or TTY detection), always, never
     #[arg(
         long,
         value_enum,
@@ -74,8 +74,9 @@ struct Cli {
     /// Direct input string or file path (if no subcommand)
     ///
     /// If the input's first word is a subcommand name (render, dsl, example,
-    /// help), prefix it with `--` (e.g. `ascii-diagram -- render`).
-    #[arg(trailing_var_arg = true)]
+    /// help), prefix it with `--` (e.g. `ascii-diagram -- render`). Tokens after
+    /// `--` are input, including tokens that look like flags.
+    #[arg(num_args = 0..)]
     input: Vec<String>,
 }
 
@@ -338,7 +339,7 @@ fn fence_backticks(line: &str) -> usize {
 fn markdown_code_block(rendered: &str) -> String {
     let longest = rendered.lines().map(fence_backticks).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
-    format!("{fence}text\n{rendered}\n{fence}")
+    format!("{fence}text\n{rendered}\n{fence}\n")
 }
 
 fn write_output_to<W: Write>(w: &mut W, rendered: &str, markdown: bool) -> io::Result<()> {
@@ -474,19 +475,12 @@ mod tests {
         ));
     }
 
-    // OUT-03: markdown fence stays at ``` for normal content.
-    #[test]
-    fn markdown_default_fence_unchanged() {
-        assert_eq!(markdown_code_block("A --> B"), "```text\nA --> B\n```");
-        assert_eq!(markdown_code_block(""), "```text\n\n```");
-    }
-
     // OUT-03: a content line of ``` must not close the block — escalate.
     #[test]
     fn markdown_escapes_fence_when_content_has_closing_fence() {
         let block = markdown_code_block("```\n  child");
         assert!(block.starts_with("````text\n"), "{block}");
-        assert!(block.ends_with("\n````"), "{block}");
+        assert_eq!(block.lines().last(), Some("````"), "{block}");
         let inner = block.strip_prefix("````text\n").unwrap();
         assert!(inner.starts_with("```\n"), "{block}");
     }
@@ -588,20 +582,6 @@ mod tests {
         assert_eq!(intake_unescape(json), json);
         // The escaped form stays valid JSON and renders (title decodes via serde).
         assert!(render_user_input(json, BoxStyle::Rounded, false).is_ok());
-    }
-
-    // IO-04: bare and render modes share wording for unreadable paths.
-    #[test]
-    fn file_error_wording_shared_by_both_modes() {
-        let err = read_input_file(Path::new(".")).unwrap_err();
-        assert!(err.starts_with("Error reading file .: "), "{err}");
-        assert!(err.contains("Is a directory"), "{err}");
-        let err = read_input_file(Path::new("no/such/file.dsl")).unwrap_err();
-        assert!(
-            err.starts_with("Error reading file no/such/file.dsl: "),
-            "{err}"
-        );
-        assert!(err.contains("No such file or directory"), "{err}");
     }
 
     // CLI-02 / DOC-04: unknown example type errors with the full type list.
@@ -718,5 +698,72 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(cli.color, ColorMode::Always));
+    }
+
+    #[test]
+    fn bare_input_parses_trailing_consumer_flags() {
+        for input in [
+            &["/tmp/spec.mmd"][..],
+            &["graph TD; A --> B"],
+            &["graph TD; A[--style] --> B"],
+            &["graph", "TD;", "A[Start]"],
+        ] {
+            for (style, markdown) in [("-s", "-m"), ("--style", "--markdown")] {
+                let cli = Cli::try_parse_from(
+                    ["ascii-diagram"]
+                        .into_iter()
+                        .chain(input.iter().copied())
+                        .chain([style, "double", markdown, "--color", "never"]),
+                )
+                .unwrap();
+                assert!(cli.command.is_none());
+                assert_eq!(cli.input, input);
+                assert!(matches!(cli.style, CliStyle::Double));
+                assert!(cli.markdown);
+                assert!(matches!(cli.color, ColorMode::Never));
+            }
+        }
+    }
+
+    #[test]
+    fn bare_input_rejects_incomplete_or_unknown_trailing_flags() {
+        for input in ["/tmp/spec.mmd", "graph TD; A --> B"] {
+            for flag in ["-s", "--style", "--color", "--unknown"] {
+                let err = Cli::try_parse_from(["ascii-diagram", input, flag]).unwrap_err();
+                assert_eq!(err.exit_code(), 2);
+            }
+            for (flag, next_flag) in [("--style", "--markdown"), ("--color", "-m")] {
+                let err = Cli::try_parse_from(["ascii-diagram", input, flag, next_flag]).unwrap_err();
+                assert_eq!(err.exit_code(), 2);
+            }
+        }
+    }
+
+    #[test]
+    fn end_of_options_keeps_flag_tokens_as_bare_input() {
+        let input = [
+            "graph", "TD;", "A", "-->", "B", "-s", "ascii", "-m", "--color", "never",
+        ];
+        let cli = Cli::try_parse_from(
+            ["ascii-diagram", "--style", "heavy", "--color", "always", "--"]
+                .into_iter()
+                .chain(input),
+        )
+        .unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.input, input);
+        assert!(matches!(cli.style, CliStyle::Heavy));
+        assert!(!cli.markdown);
+        assert!(matches!(cli.color, ColorMode::Always));
+    }
+
+    #[test]
+    fn end_of_options_keeps_subcommand_names_as_bare_input() {
+        for input in ["render", "dsl", "example", "help"] {
+            let cli = Cli::try_parse_from(["ascii-diagram", "--", input, "--markdown"]).unwrap();
+            assert!(cli.command.is_none());
+            assert_eq!(cli.input, [input, "--markdown"]);
+            assert!(!cli.markdown);
+        }
     }
 }

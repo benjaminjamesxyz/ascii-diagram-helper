@@ -35,6 +35,8 @@ Runtime verification caught two follow-ups beyond the initially green suite: ove
 
 README flowchart/architecture examples were regenerated from the release CLI; CLI/color/width contracts and bundled skills updated. Wide firmware views may still wrap in narrow terminals; split them into focused diagrams. No automatic fit-to-terminal feature was added.
 
+**Release synchronization:** repository, `~/.local/bin`, Pi binary/cache and omp plugin binary copies share SHA-256 `bfdaf3d3bf650694ae55bbe01bbb248044a1f6f8c3fba97d005d858cf710efbc`. Repository/user/Pi/omp engines report v0.12.1 and render actual firmware Spec B identically. Installed omp extension also passes the real-component smoke using native binary discovery with no `ASCII_DIAGRAM_BIN` override. Reload the active session to load the updated extension; no upstream push was performed.
+
 ---
 
 # Sprint v0.12.0 — Post-QA Hardening: 88-Defect Fix Campaign

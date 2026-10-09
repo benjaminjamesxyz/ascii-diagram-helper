@@ -1092,13 +1092,28 @@ mod nested_direction_tests {
                 // MAIN/A/B render outside the outer box's top-left
                 let outer_top = out
                     .lines()
-                    .position(|l| l.contains("╭─ outer"))
+                    .position(|l| l.contains("outer"))
                     .expect("outer box");
                 let line = &out.lines().nth(outer_top).unwrap();
-                let box_x = line.find('╭').unwrap();
+                let box_x = line.chars().position(|ch| ch == '╭').unwrap();
                 assert!(
                     box_x > 0,
                     "outer box inflated by moved child's phantom coords:\n{out}"
+                );
+                let outer_bottom = out
+                    .lines()
+                    .enumerate()
+                    .skip(outer_top + 1)
+                    .find(|(_, l)| l.chars().nth(box_x) == Some('╰'))
+                    .map(|(y, _)| y)
+                    .expect("outer bottom border");
+                let inner_top = out
+                    .lines()
+                    .position(|l| l.contains("Inner LR"))
+                    .expect("inner group title");
+                assert!(
+                    outer_bottom < inner_top,
+                    "parent must not enclose the moved child block:\n{out}"
                 );
             }
             _ => panic!("Expected flowchart"),
@@ -1236,8 +1251,13 @@ mod supernode_tests {
                 for id in ["SENSORS", "FILTER", "CTRL", "OUT", "MOD"] {
                     assert!(out.contains(id), "{id} missing");
                 }
-                // Group box present
-                assert!(out.lines().any(|l| l.contains("╭─ Comms LR")));
+                // Whole title belongs to a group border; its separator span
+                // can vary to avoid incoming connectors.
+                let header = out
+                    .lines()
+                    .find(|l| l.contains("Comms LR"))
+                    .expect("group title");
+                assert!(header.contains('╭') && header.contains('╮'), "{out}");
             }
             _ => panic!("Expected flowchart"),
         }
@@ -1678,7 +1698,7 @@ mod firmware_group_regressions {
     }
 
     #[test]
-    fn shared_rank_groups_move_all_ranks_and_leave_blank_padding() {
+    fn shared_rank_groups_keep_all_members_separated_and_padded() {
         let spec = parse(
             "graph TD
              TOP[Input Source]
@@ -1706,7 +1726,6 @@ mod firmware_group_regressions {
                 x += nodes[i].width + 4;
             }
         }
-        let old_x: Vec<_> = nodes.iter().map(|n| n.x).collect();
         renderer.separate_tb_groups(&mut nodes, &idx, &blocks);
         let groups = renderer.collect_group_rects(&nodes, &idx, &blocks);
         assert_eq!(groups.len(), 2);
@@ -1726,12 +1745,9 @@ mod firmware_group_regressions {
             )));
             let sg = FlowchartRenderer::find_subgraph(&spec.subgraphs, id).unwrap();
             let members = member_ids(sg);
-            let first = idx[members[0].as_str()];
-            let shift = nodes[first].x - old_x[first];
             for member in members {
                 let i = idx[member.as_str()];
                 let n = &nodes[i];
-                assert_eq!(n.x - old_x[i], shift, "group ranks move together");
                 assert!(n.x >= rect.x + 2, "blank cell before member");
                 assert!(n.x + n.width < rect.x + rect.width - 1);
                 assert!(n.y >= rect.y + 2);
